@@ -123,7 +123,7 @@ const util = (id: number, name: string, flavor: string): UtilitySpace => ({
 
 export const BOARD: Space[] = [
   // 0 GO
-  { id: 0, kind: "go", name: "Closing Day", sub: "Collect $200 wire" },
+  { id: 0, kind: "go", name: "LEVEL UP", sub: "Collect $200 Salary" },
   // bottom row right to left (1..9)
   prop(1, "Clemson Rentals", "Coach Chad Carson", "@CoachChadCarson", "Small-multi / SFR portfolio in Clemson, SC", "brown", 60, 2, [10, 30, 90, 160, 250], 50),
   { id: 2, kind: "gala", name: "RE Gala", sub: "Draw a card" },
@@ -135,7 +135,7 @@ export const BOARD: Space[] = [
   prop(8, "Subto Sub-2 House", "Pace Morby", "@PaceJordanMorby", "Phoenix subject-to creative finance deal", "lblue", 100, 6, [30, 90, 270, 400, 550], 50),
   prop(9, "Triple Net Strip Pad", "Triple Net Investor", "@TripleNetInvest", "Standalone NNN pad site", "lblue", 120, 8, [40, 100, 300, 450, 600], 50),
   // 10 Jail / OFAC Hold
-  { id: 10, kind: "jail", name: "OFAC Hold", sub: "Just Visiting / In Hold" },
+  { id: 10, kind: "jail", name: "JUST VISITING", sub: "OFAC Hold" },
   // left column bottom to top (11..19)
   prop(11, "Dirt Dog: Lake Elsinore", "Aaron Harris", "Dirt Dog Pod", "Dutch Bros, 32250 Mission Trail CA", "pink", 140, 10, [50, 150, 450, 625, 750], 100),
   util(12, "Title Company", "Closing-day chokepoint, rent on dice roll"),
@@ -147,7 +147,7 @@ export const BOARD: Space[] = [
   prop(18, "LiveFree KC Value-Add", "Logan Freeman", "@livefreeinvestments", "Kansas City multifamily value-add", "orange", 180, 14, [70, 200, 550, 750, 950], 100),
   prop(19, "Bolt Storage Mega-Facility", "Nick Huber", "@sweatystartup", "Flagship Bolt Storage portfolio", "orange", 200, 16, [80, 220, 600, 800, 1000], 100),
   // 20 Free Parking
-  { id: 20, kind: "parking", name: "1031 Identification Window", sub: "Free Parking" },
+  { id: 20, kind: "parking", name: "FREE PITCH", sub: "1031 ID Window" },
   // top row left to right (21..29)
   prop(21, "Smoky Mtn Cabin Cluster", "Avery Carl", "@AveryCarl", "Gatlinburg / Pigeon Forge STR portfolio", "yellow", 220, 18, [90, 250, 700, 875, 1050], 150),
   { id: 22, kind: "crei", name: "CREi Summit", sub: "Draw a card" },
@@ -159,7 +159,7 @@ export const BOARD: Space[] = [
   util(28, "1031 Exchange Co", "Move money in 45 days or pay tax"),
   prop(29, "Fort Capital Industrial", "Chris Powers", "@FortWorthChris", "Class B industrial flex park, Texas", "red", 280, 24, [120, 360, 850, 1025, 1200], 150),
   // 30 Go to Jail
-  { id: 30, kind: "gotojail", name: "DSCR Failed", sub: "Go directly to OFAC Hold" },
+  { id: 30, kind: "gotojail", name: "HAPPY HOUR", sub: "Go to Networking" },
   // right column top to bottom (31..39)
   prop(31, "StripMallGuy Bay Center", "Don Tepman", "@StripMallGuy", "Bay Area strip center, $11M Blackstone deal", "red", 300, 26, [130, 390, 900, 1100, 1275], 150),
   prop(32, "The Aladdin", "Zach Molzer", "@KCmolzer", "$38.5M Aladdin Hotel adaptive reuse, KC", "green", 320, 28, [150, 450, 1000, 1200, 1400], 200),

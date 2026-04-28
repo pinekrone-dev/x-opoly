@@ -1,4 +1,5 @@
 import React from "react";
+import { TokenIcon, tokenIconForPlayer } from "./tokens";
 import { GameState, netWorth, ownsFullGroup } from "./game";
 import { BOARD, COLOR_GROUPS, ColorGroup, PropertySpace } from "./boardData";
 
@@ -41,7 +42,7 @@ export default function Sidebar({ state }: Props) {
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span className="token-pip" style={{ background: p.color }} />
+                <span className="token-icon" style={{ background: `linear-gradient(135deg, #ece4d0 0%, ${p.color} 220%)` }}><TokenIcon idx={tokenIconForPlayer(p.id)} /></span>
                 <span style={{ fontWeight: 800, fontSize: 13 }}>{p.name}</span>
                 {p.isAI && (
                   <span style={{ fontSize: 9, color: "#d4af37", border: "1px solid #d4af37", padding: "0 4px", borderRadius: 4 }}>AI</span>
