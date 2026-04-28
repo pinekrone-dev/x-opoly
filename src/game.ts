@@ -18,6 +18,7 @@ export interface Player {
   jailTurns: number;
   getOutFreeCards: number;
   bankrupt: boolean;
+  tokenIdx: number;
 }
 
 export interface PropertyState {
@@ -61,7 +62,7 @@ export function rollDice(): [number, number] {
   return [rollDie(), rollDie()];
 }
 
-export function initState(numAI: number, playerName = "You"): GameState {
+export function initState(numAI: number, playerName = "You", playerToken = 0): GameState {
   const total = Math.min(4, Math.max(2, 1 + numAI));
   const players: Player[] = [];
   players.push({
@@ -74,9 +75,13 @@ export function initState(numAI: number, playerName = "You"): GameState {
     inJail: false,
     jailTurns: 0,
     getOutFreeCards: 0,
-    bankrupt: false
+    bankrupt: false,
+    tokenIdx: playerToken
   });
   const aiNames = ["StripMallGuy", "BeardyBrandon", "MosesKagan"];
+  // assign distinct tokens for AI: pick from the pool excluding the human's chosen token
+  const allTokens = [0, 1, 2, 3, 4, 5, 6, 7];
+  const remaining = allTokens.filter((t) => t !== playerToken);
   for (let i = 1; i < total; i++) {
     players.push({
       id: i,
@@ -88,7 +93,8 @@ export function initState(numAI: number, playerName = "You"): GameState {
       inJail: false,
       jailTurns: 0,
       getOutFreeCards: 0,
-      bankrupt: false
+      bankrupt: false,
+      tokenIdx: remaining[i - 1] ?? i
     });
   }
   const properties: Record<number, PropertyState> = {};

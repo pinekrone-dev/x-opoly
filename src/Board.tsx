@@ -1,7 +1,7 @@
 import React from "react";
 import { BOARD, gridPos, PropertySpace, AirSpace, UtilitySpace, ColorGroup } from "./boardData";
 import { GameState } from "./game";
-import { TokenIcon, tokenIconForPlayer } from "./tokens";
+import { TokenIcon } from "./tokens";
 
 interface Props {
   state: GameState;
@@ -45,7 +45,7 @@ function PlayerPips({ state, spaceId }: { state: GameState; spaceId: number }) {
   return (
     <div style={{ position: "absolute", bottom: 3, right: 3, display: "flex", gap: 2, zIndex: 10 }}>
       {here.map((p) => (
-        <Pip key={p.id} player={{ color: p.color, tokenIdx: tokenIconForPlayer(p.id) }} />
+        <Pip key={p.id} player={{ color: p.color, tokenIdx: p.tokenIdx }} />
       ))}
     </div>
   );

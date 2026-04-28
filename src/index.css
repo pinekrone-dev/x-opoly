@@ -47,8 +47,9 @@ body {
   background: linear-gradient(135deg, #ece4d0 0%, #ddd2b4 100%);
   color: #1a1410;
   font-size: 9px;
-  line-height: 1.2;
-  padding: 5px;
+  line-height: 1.15;
+  padding: 4px;
+  box-sizing: border-box;
   overflow: hidden;
   position: relative;
   transition: transform 0.18s ease, box-shadow 0.18s ease;
@@ -69,33 +70,51 @@ body {
 .tile-base .name {
   font-family: 'Playfair Display', Georgia, serif;
   font-weight: 700;
-  font-size: 9px;
+  font-size: 8.5px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
   color: #6b4f1a;
   margin-bottom: 2px;
+  line-height: 1.05;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: 22px;
 }
 
 .tile-base .owner-text {
-  font-size: 7.5px;
+  font-size: 7px;
   color: #6b5a3a;
   font-style: italic;
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .tile-base .handle {
-  font-size: 7px;
+  font-size: 6.5px;
   color: #b5912e;
   font-weight: 700;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
+  line-height: 1.05;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .tile-base .price {
   font-family: 'Playfair Display', Georgia, serif;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   margin-top: auto;
   color: #1a1410;
   text-align: right;
+  line-height: 1;
 }
 
 /* Color band runs along the inner edge of each tile (toward board center).
@@ -116,10 +135,12 @@ body {
 .tile-right .color-band { top: 0; left: 0; bottom: 0; width: 18px; }
 
 /* Padding so content doesn't overlap the band */
-.tile-bottom { padding-top: 22px; }
-.tile-top { padding-bottom: 22px; }
-.tile-left { padding-right: 22px; }
-.tile-right { padding-left: 22px; }
+.tile-bottom { padding-top: 20px; }
+.tile-top { padding-bottom: 20px; }
+.tile-left { padding-right: 20px; }
+.tile-right { padding-left: 20px; }
+.tile-bottom .color-band, .tile-top .color-band { height: 16px; }
+.tile-left .color-band, .tile-right .color-band { width: 16px; }
 
 /* Color group bg vars */
 .brown-band { --band-color: #5a3a1a; }
@@ -346,24 +367,16 @@ body {
 
 .log-entry:last-child { border-bottom: none; }
 
-/* Isometric board container */
+/* Top-down board container */
 .iso-stage {
-  perspective: 1800px;
-  perspective-origin: 50% 30%;
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 40px 20px 80px;
+  padding: 24px 20px 40px;
 }
 
 .board-iso {
-  transform: rotateX(38deg) rotateZ(-2deg);
-  transform-style: preserve-3d;
-  transition: transform 0.4s ease;
-}
-
-.board-iso .iso-tile-shadow {
-  filter: drop-shadow(0 4px 6px rgba(0, 0, 0, 0.55));
+  transform: none;
 }
 
 /* Center: opportunity / connections cards */
@@ -392,15 +405,7 @@ body {
   pointer-events: none;
 }
 
-@media (max-width: 1280px) {
-  .board-iso { transform: rotateX(34deg) rotateZ(-2deg) scale(0.85); }
-}
-
-@media (max-width: 1024px) {
-  .board-iso { transform: rotateX(30deg) rotateZ(-2deg) scale(0.7); }
-}
-
-@media (max-width: 768px) {
-  .board-iso { transform: rotateX(0deg) rotateZ(0deg) scale(0.55); }
-  .iso-stage { perspective: none; padding: 12px; }
-}
+@media (max-width: 1280px) { .board-iso { transform: scale(0.92); } }
+@media (max-width: 1100px) { .board-iso { transform: scale(0.8); transform-origin: top center; } }
+@media (max-width: 900px) { .board-iso { transform: scale(0.65); transform-origin: top center; } }
+@media (max-width: 700px) { .board-iso { transform: scale(0.5); transform-origin: top center; } }

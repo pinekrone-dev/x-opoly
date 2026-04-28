@@ -1,90 +1,148 @@
 import React from "react";
 
-// Classic Monopoly tokens. Inline SVG, simple silhouettes.
-export const TOKENS = ["TopHat", "RaceCar", "Dog", "Boot", "Thimble", "Battleship", "Wheelbarrow", "Iron"];
+export const TOKEN_NAMES = [
+  "Top Hat",
+  "Race Car",
+  "Scotty Dog",
+  "Boot",
+  "Thimble",
+  "Battleship",
+  "Wheelbarrow",
+  "Iron"
+];
 
-export function tokenIconForPlayer(playerId: number): number {
-  return playerId % TOKENS.length;
-}
+export const TOKEN_COUNT = TOKEN_NAMES.length;
 
-export function TokenIcon({ idx }: { idx: number }) {
-  const i = ((idx % TOKENS.length) + TOKENS.length) % TOKENS.length;
+// 3D-shaded SVGs for each token: linearGradient + radial highlight + cast shadow
+export function TokenIcon({ idx, size = 24 }: { idx: number; size?: number }) {
+  const i = ((idx % TOKEN_COUNT) + TOKEN_COUNT) % TOKEN_COUNT;
+  const gradId = `tk-grad-${i}`;
+  const shadowId = `tk-shadow-${i}`;
+  const common = (
+    <defs>
+      <linearGradient id={gradId} x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stopColor="#f5e3a0" />
+        <stop offset="45%" stopColor="#d4af37" />
+        <stop offset="100%" stopColor="#7a5e16" />
+      </linearGradient>
+      <filter id={shadowId} x="-30%" y="-30%" width="160%" height="160%">
+        <feDropShadow dx="0.6" dy="1.2" stdDeviation="0.8" floodColor="#000" floodOpacity="0.55" />
+      </filter>
+      <radialGradient id={`hl-${i}`} cx="35%" cy="25%" r="60%">
+        <stop offset="0%" stopColor="#ffffff" stopOpacity="0.55" />
+        <stop offset="60%" stopColor="#ffffff" stopOpacity="0" />
+      </radialGradient>
+    </defs>
+  );
+  const fill = `url(#${gradId})`;
+  const filter = `url(#${shadowId})`;
+  const props = { fill, stroke: "#3b2a08", strokeWidth: 0.6, filter };
+
   switch (i) {
     case 0:
+      // Top hat
       return (
-        // Top hat
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 19h14" />
-          <rect x="7" y="5" width="10" height="13" rx="0.6" />
-          <line x1="7" y1="9" x2="17" y2="9" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="12" ry="2.2" fill="#000" opacity="0.35" />
+          <path d="M9 24h14v2H9z" {...props} />
+          <path d="M11 7h10v18H11z" {...props} />
+          <path d="M11 13h10" stroke="#3b2a08" strokeWidth="0.7" fill="none" />
+          <ellipse cx="13.5" cy="10" rx="1.5" ry="3.2" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 1:
+      // Race car
       return (
-        // Race car
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 14l2-4h14l2 4v3H3z" />
-          <circle cx="7" cy="17" r="1.6" />
-          <circle cx="17" cy="17" r="1.6" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="12" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M3 19l3-5h6l3-3h6l4 3 4 5v3H3z" {...props} />
+          <circle cx="9" cy="23" r="2.8" fill="#1a1410" stroke="#3b2a08" strokeWidth="0.5" />
+          <circle cx="23" cy="23" r="2.8" fill="#1a1410" stroke="#3b2a08" strokeWidth="0.5" />
+          <circle cx="9" cy="23" r="1.1" fill="#888" />
+          <circle cx="23" cy="23" r="1.1" fill="#888" />
+          <path d="M14 13h5" stroke="#3b2a08" strokeWidth="0.5" fill="none" />
+          <ellipse cx="11" cy="16" rx="3" ry="0.8" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 2:
+      // Scotty Dog
       return (
-        // Dog (scotty)
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M5 17V11l3-3h6l3 3v6" />
-          <path d="M14 8V5h2v3" />
-          <line x1="9" y1="14" x2="9" y2="14.01" />
-          <line x1="5" y1="17" x2="5" y2="20" />
-          <line x1="17" y1="17" x2="17" y2="20" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="28" rx="11" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M5 22V14l3-3h6V8h3v3l4 1 5 4v6z" {...props} />
+          <circle cx="20" cy="14" r="0.8" fill="#1a1410" />
+          <path d="M22 13l3-1" stroke="#3b2a08" strokeWidth="0.6" />
+          <path d="M7 22v3M11 22v3M19 22v3M23 22v3" stroke="#3b2a08" strokeWidth="0.7" />
+          <ellipse cx="9" cy="16" rx="2.6" ry="1" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 3:
+      // Boot
       return (
-        // Boot
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M9 4v9H5v6h14v-3a4 4 0 00-4-4h-2V4z" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="11" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M11 4v15H6v6h21v-3a5 5 0 00-5-5h-4V4z" {...props} />
+          <path d="M11 12h7" stroke="#3b2a08" strokeWidth="0.6" />
+          <ellipse cx="13" cy="10" rx="1.4" ry="3.5" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 4:
+      // Thimble
       return (
-        // Thimble
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M7 19V9a5 5 0 0110 0v10z" />
-          <line x1="9" y1="11" x2="15" y2="11" />
-          <line x1="9" y1="13" x2="15" y2="13" />
-          <line x1="9" y1="15" x2="15" y2="15" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="9" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M9 25V12a7 7 0 0114 0v13z" {...props} />
+          <path d="M11 14h10M11 17h10M11 20h10" stroke="#3b2a08" strokeWidth="0.6" />
+          <ellipse cx="13" cy="11" rx="2" ry="3" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 5:
+      // Battleship
       return (
-        // Battleship
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 16h18l-2 4H5z" />
-          <line x1="12" y1="6" x2="12" y2="14" />
-          <path d="M9 10h6" />
-          <path d="M10 14V8h4v6" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="12" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M3 22h26l-3 4H6z" {...props} />
+          <path d="M14 12h6v9h-6z" {...props} />
+          <line x1="16" y1="6" x2="16" y2="12" stroke="#3b2a08" strokeWidth="0.8" />
+          <line x1="13" y1="9" x2="19" y2="9" stroke="#3b2a08" strokeWidth="0.6" />
+          <ellipse cx="8" cy="24" rx="3" ry="0.7" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 6:
+      // Wheelbarrow
       return (
-        // Wheelbarrow
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 14l3-6h9l3 6z" />
-          <circle cx="9" cy="18" r="1.6" />
-          <line x1="19" y1="14" x2="22" y2="17" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="11" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M5 17l4-7h13l4 7z" {...props} />
+          <circle cx="11" cy="22" r="3" fill="#1a1410" stroke="#3b2a08" strokeWidth="0.5" />
+          <circle cx="11" cy="22" r="1.2" fill="#888" />
+          <path d="M22 17l5 4" stroke="#3b2a08" strokeWidth="0.8" />
+          <ellipse cx="11" cy="13" rx="3" ry="0.7" fill={`url(#hl-${i})`} />
         </svg>
       );
     case 7:
+      // Iron
       return (
-        // Iron
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M4 17l3-7h10l2 7z" />
-          <line x1="6" y1="17" x2="20" y2="17" />
-          <path d="M11 6h2v2" />
+        <svg viewBox="0 0 32 32" width={size} height={size} xmlns="http://www.w3.org/2000/svg">
+          {common}
+          <ellipse cx="16" cy="27" rx="11" ry="1.6" fill="#000" opacity="0.35" />
+          <path d="M4 22l5-10h14l3 10z" {...props} />
+          <path d="M14 8h4v3" stroke="#3b2a08" strokeWidth="0.7" fill="none" />
+          <ellipse cx="11" cy="15" rx="3" ry="0.8" fill={`url(#hl-${i})`} />
         </svg>
       );
     default:
-      return <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="currentColor" /></svg>;
+      return null;
   }
+}
+
+export function tokenIconForPlayer(playerId: number): number {
+  return playerId % TOKEN_COUNT;
 }
