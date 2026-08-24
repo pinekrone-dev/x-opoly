@@ -34,6 +34,17 @@ export const TILE_PRESETS = {
     maxZoom: 20,
     keyRequired: false,
   },
+  satellite: {
+    label: 'Satellite',
+    // Esri publishes World Imagery without a key. Note the {z}/{y}/{x} order:
+    // ArcGIS puts row before column, the reverse of the usual slippy-map
+    // template, and getting it backwards silently serves the wrong tiles.
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: Esri, Maxar, Earthstar Geographics',
+    maxZoom: 19,
+    keyRequired: false,
+    darkNative: true,
+  },
   'carto-light': {
     label: 'Muted',
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',

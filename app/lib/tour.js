@@ -153,3 +153,109 @@ export function legs(stops) {
     miles: Math.round(haversineMiles(stops[index], stop) * 10) / 10,
   }))
 }
+
+/* -------------------------------------------------------------------------- */
+/* Itinerary                                                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Turns an ordered list of stops and their drive times into a clock schedule.
+ *
+ * Pure and synchronous: the drive times come from `routing.js`, which may or
+ * may not have reached a routing service, and the arithmetic that turns them
+ * into "Arrive 10:19 AM" should not depend on the network.
+ */
+
+/** Accepts "10:00", "10:00 AM" or "9:30 pm"; returns minutes past midnight. */
+export function parseClock(value, fallback = 600) {
+  const match = String(value ?? '').trim().match(/^(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?$/i)
+  if (!match) return fallback
+
+  let hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (minutes > 59) return fallback
+
+  const meridiem = match[3]?.toLowerCase().replace(/\./g, '')
+  if (meridiem === 'pm' && hours < 12) hours += 12
+  if (meridiem === 'am' && hours === 12) hours = 0
+  if (hours > 23) return fallback
+
+  return hours * 60 + minutes
+}
+
+/** Minutes past midnight to "10:19 AM". Rolls past midnight rather than wrapping. */
+export function formatClock(totalMinutes) {
+  const minutes = Math.max(0, Math.round(totalMinutes))
+  const hours24 = Math.floor(minutes / 60) % 24
+  const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12
+  const meridiem = hours24 < 12 ? 'AM' : 'PM'
+  return `${hours12}:${String(minutes % 60).padStart(2, '0')} ${meridiem}`
+}
+
+/** "1 hr 35 min", "55 min" — the form the summary bar reads in. */
+export function formatDuration(totalMinutes) {
+  const minutes = Math.max(0, Math.round(totalMinutes))
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest === 0 ? `${hours} hr` : `${hours} hr ${rest} min`
+}
+
+/**
+ * @param {object} input
+ * @param {Array} input.stops          ordered stops; `tourMinutes` overrides dwell
+ * @param {number[]} input.driveMinutes minutes to reach each stop, index-aligned
+ * @param {string} input.startTime      when the broker leaves
+ * @param {number} input.stopMinutes    default dwell at each stop
+ * @param {number|null} input.endDriveMinutes drive home after the last stop
+ */
+export function buildItinerary({
+  stops = [],
+  driveMinutes = [],
+  startTime = '10:00',
+  stopMinutes = 20,
+  endDriveMinutes = null,
+} = {}) {
+  const startsAt = parseClock(startTime)
+  let clock = startsAt
+  let driving = 0
+
+  const items = stops.map((stop, index) => {
+    const leg = Math.max(0, Math.round(Number(driveMinutes[index] ?? 0)))
+    driving += leg
+    clock += leg
+    const arriveAt = clock
+
+    // A stop can override the default — a 90-minute walkthrough among 20s.
+    const dwell = Number.isFinite(stop?.tourMinutes) && stop.tourMinutes != null
+      ? Math.max(0, Math.round(stop.tourMinutes))
+      : Math.max(0, Math.round(stopMinutes))
+    clock += dwell
+
+    return {
+      id: stop.id,
+      driveMinutes: leg,
+      stopMinutes: dwell,
+      arriveMinutes: arriveAt,
+      arrive: formatClock(arriveAt),
+      depart: formatClock(clock),
+    }
+  })
+
+  // The drive home counts toward the day, but there is no stop at the end of it.
+  if (endDriveMinutes != null) {
+    const leg = Math.max(0, Math.round(endDriveMinutes))
+    driving += leg
+    clock += leg
+  }
+
+  return {
+    items,
+    startTime: formatClock(startsAt),
+    endTime: formatClock(clock),
+    driveMinutes: driving,
+    totalMinutes: clock - startsAt,
+    driveLabel: formatDuration(driving),
+    totalLabel: formatDuration(clock - startsAt),
+  }
+}

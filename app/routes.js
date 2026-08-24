@@ -38,11 +38,21 @@ import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
-import { legs, planTour } from './lib/tour.js'
+import { buildItinerary, legs, planTour } from './lib/tour.js'
+import { routeLegs } from './lib/routing.js'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+
+/** A tour start/end point: a real coordinate, or nothing at all. */
+function anchor(value) {
+  const lat = Number(value?.lat)
+  const lng = Number(value?.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { address: value?.address ? String(value.address).slice(0, 300) : null, lat, lng }
+}
 
 /**
  * Turns the unhelpful error a missing Worker binding produces into something
@@ -240,8 +250,53 @@ export function createApp({ db, storage, env = {} }) {
     const { survey, error } = await requireSurvey(c)
     if (error) return error
     const body = await c.req.json().catch(() => ({}))
-    const plan = planTour(await listProperties(db, survey.id), { startId: body?.startId || null })
-    return c.json({ ...plan, legs: legs(plan.stops) })
+
+    const all = await listProperties(db, survey.id)
+    // The broker can tour a subset — the "select sites" checkboxes.
+    const chosen = Array.isArray(body?.propertyIds) && body.propertyIds.length > 0
+      ? all.filter((property) => body.propertyIds.includes(property.id))
+      : all
+
+    const optimize = body?.optimize !== false
+    const located = chosen.filter((p) => p.lat != null && p.lng != null)
+    const plan = optimize
+      ? planTour(chosen, { startId: body?.startId || null })
+      : { stops: located, unlocated: chosen.filter((p) => p.lat == null || p.lng == null), miles: 0, minutes: 0 }
+
+    // Anchors are addresses, not sites, so they bracket the routed path.
+    const start = anchor(body?.start ?? survey.tour?.start)
+    const end = anchor(body?.end ?? survey.tour?.end)
+    const points = [...(start ? [start] : []), ...plan.stops, ...(end ? [end] : [])]
+
+    const routed = await routeLegs(points, { fetchImpl: fetch })
+
+    // Align drive times with stops: with a start anchor every stop has an
+    // inbound leg; without one the first stop is where the day begins.
+    const driveMinutes = start
+      ? routed.legs.slice(0, plan.stops.length).map((leg) => leg.minutes)
+      : [0, ...routed.legs.slice(0, Math.max(0, plan.stops.length - 1)).map((leg) => leg.minutes)]
+    const endDriveMinutes = end && routed.legs.length > 0 ? routed.legs[routed.legs.length - 1].minutes : null
+
+    const itinerary = buildItinerary({
+      stops: plan.stops,
+      driveMinutes,
+      startTime: body?.startTime || survey.tour?.startTime || '10:00',
+      stopMinutes: Number.isFinite(Number(body?.stopMinutes))
+        ? Number(body.stopMinutes)
+        : survey.tour?.stopMinutes ?? 20,
+      endDriveMinutes,
+    })
+
+    return c.json({
+      ...plan,
+      legs: legs(plan.stops),
+      itinerary,
+      geometry: routed.geometry,
+      routeSource: routed.source,
+      driveMiles: Math.round(routed.legs.reduce((total, leg) => total + leg.miles, 0) * 10) / 10,
+      start,
+      end,
+    })
   })
 
   app.put('/api/surveys/:id/tour', async (c) => {

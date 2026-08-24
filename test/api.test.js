@@ -73,6 +73,25 @@ describe('http api on node', () => {
     assert.equal(tour.body.legs.length, 2)
     assert.ok(tour.body.miles > 0)
 
+    // A schedule comes back whether or not the routing service was reachable.
+    assert.equal(tour.body.itinerary.items.length, 3)
+    assert.match(tour.body.itinerary.startTime, /^\d{1,2}:\d{2} (AM|PM)$/)
+    assert.match(tour.body.itinerary.items[0].arrive, /^\d{1,2}:\d{2} (AM|PM)$/)
+    assert.ok(['osrm', 'estimate'].includes(tour.body.routeSource))
+    assert.ok(Array.isArray(tour.body.geometry))
+
+    const chosen = await call(
+      `/api/surveys/${surveyId}/tour`,
+      asJson({
+        propertyIds: tour.body.stops.slice(0, 2).map((stop) => stop.id),
+        startTime: '9:00 AM',
+        stopMinutes: 30,
+      }),
+    )
+    assert.equal(chosen.body.stops.length, 2, 'tours only the sites that were selected')
+    assert.equal(chosen.body.itinerary.startTime, '9:00 AM')
+    assert.equal(chosen.body.itinerary.items[0].stopMinutes, 30)
+
     const token = created.body.survey.share.token
     assert.equal((await call(`/api/share/${token}`)).status, 410, 'sharing is off by default')
 
