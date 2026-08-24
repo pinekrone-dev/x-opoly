@@ -21,6 +21,7 @@ import {
   buildHtmlSitemap,
   buildSitemapFiles,
   buildTxt,
+  gzipFile,
   robotsLine,
   selectablePages,
 } from './lib/exporters.js'
@@ -182,6 +183,10 @@ export function createServer({ store = new JobStore() } = {}) {
       default:
         response.status(400).json({ error: `Unknown export format "${format}".` })
         return
+    }
+
+    if (settings.gzip && (format === 'xml' || format === 'txt')) {
+      files = files.map((file) => gzipFile(file))
     }
 
     response.json({ format, count: pages.length, robotsLine: robotsLine(job.rootUrl), files })

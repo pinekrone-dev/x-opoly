@@ -4,6 +4,7 @@ import test, { after, before, describe } from 'node:test'
 import { CrawlJob, sanitizeOptions } from '../server/lib/crawler.js'
 import { auditCrawl } from '../server/lib/audit.js'
 import { buildSitemapFiles, selectablePages } from '../server/lib/exporters.js'
+import { closeRenderer, getRenderer } from '../server/lib/renderer.js'
 import { startFixtureSite } from './fixture-site.js'
 
 let fixture
@@ -12,8 +13,9 @@ before(async () => {
   fixture = await startFixtureSite()
 })
 
-after(() => {
+after(async () => {
   fixture.server.close()
+  await closeRenderer()
 })
 
 async function crawl(options = {}) {
@@ -133,5 +135,65 @@ describe('audit and export', () => {
     assert.match(files[0].content, /<sitemapindex/)
     assert.equal(files[1].name, 'sitemap-1.xml')
     assert.equal(files[2].name, 'sitemap-2.xml')
+  })
+})
+
+describe('javascript rendering', () => {
+  test('a link injected by script is invisible to a plain HTTP crawl', async () => {
+    const result = await crawl({ seedFromSitemap: false })
+    assert.ok(result.pages.some((page) => page.url.endsWith('/spa')), 'the app shell itself is crawled')
+    assert.ok(!result.pages.some((page) => page.url.endsWith('/spa-child')), 'its script-injected link is not followed')
+  })
+
+  test('rendering the page in a browser finds it', async (t) => {
+    const { renderer, reason } = await getRenderer()
+    if (!renderer) {
+      t.skip(`no browser available: ${reason}`)
+      return
+    }
+
+    const result = await crawl({ renderJs: true, seedFromSitemap: false })
+    const child = result.pages.find((page) => page.url.endsWith('/spa-child'))
+
+    assert.ok(child, 'the script-injected link was followed')
+    assert.equal(child.title, 'Page Behind The App Shell')
+    assert.ok(result.pages.find((page) => page.url.endsWith('/spa'))?.rendered, 'pages are marked as rendered')
+    assert.equal(result.warnings.length, 0)
+  })
+
+  test('a crawl still succeeds when rendering is unavailable', async () => {
+    const job = new CrawlJob(`${fixture.origin}/`, sanitizeOptions({ renderJs: true }))
+    // Simulate a deployment with no browser installed.
+    job.renderer = null
+    const original = job.run.bind(job)
+    const result = await original()
+    assert.ok(result.pages.length > 0)
+  })
+})
+
+describe('image sitemaps', () => {
+  test('collects images, including og:image and the first srcset candidate', async () => {
+    const result = await crawl({ seedFromSitemap: false })
+    const home = result.pages.find((page) => page.url === `${fixture.origin}/`)
+    const locations = home.images.map((image) => image.loc)
+
+    assert.ok(locations.includes(`${fixture.origin}/hero.png`), 'plain img src collected')
+    assert.ok(locations.includes(`${fixture.origin}/social-card.png`), 'og:image collected')
+    assert.ok(locations.includes(`${fixture.origin}/wide.png`), 'first srcset candidate collected')
+    assert.equal(home.images.find((image) => image.loc.endsWith('/hero.png')).caption, 'The hero image')
+    assert.ok(!result.pages.some((page) => page.url.endsWith('.png')), 'images are listed but never crawled')
+  })
+
+  test('image entries appear in the XML only when asked for', async () => {
+    const result = await crawl({ seedFromSitemap: false })
+    const pages = selectablePages(result.pages)
+
+    const without = buildSitemapFiles(pages, { includeImages: false })[0].content
+    assert.ok(!without.includes('sitemap-image/1.1'))
+
+    const withImages = buildSitemapFiles(pages, { includeImages: true })[0].content
+    assert.match(withImages, /xmlns:image="http:\/\/www\.google\.com\/schemas\/sitemap-image\/1\.1"/)
+    assert.match(withImages, /<image:loc>.*hero\.png<\/image:loc>/)
+    assert.match(withImages, /<image:caption>The hero image<\/image:caption>/)
   })
 })

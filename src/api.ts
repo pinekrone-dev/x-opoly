@@ -72,8 +72,16 @@ export function subscribeToCrawl(
   return () => source.close()
 }
 
-export function downloadFile(name: string, content: string, mime: string): void {
-  const blob = new Blob([content], { type: mime })
+export function downloadFile(name: string, content: string, mime: string, encoding?: 'base64'): void {
+  let blob: Blob
+  if (encoding === 'base64') {
+    const binary = atob(content)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+    blob = new Blob([bytes], { type: 'application/gzip' })
+  } else {
+    blob = new Blob([content], { type: mime })
+  }
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

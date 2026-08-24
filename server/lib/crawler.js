@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events'
 import { load } from 'cheerio'
 import { fetchRobots } from './robots.js'
 import { parseSitemap } from './sitemap-parser.js'
+import { getRenderer } from './renderer.js'
 import {
   compilePatterns,
   depthOf,
@@ -30,6 +31,8 @@ export const LIMITS = {
   timeoutMs: 60000,
   maxBodyBytes: 5_000_000,
   maxLinksPerPage: 5000,
+  maxImagesPerPage: 25,
+  renderConcurrency: 4,
 }
 
 export const DEFAULT_OPTIONS = {
@@ -44,6 +47,7 @@ export const DEFAULT_OPTIONS = {
   stripQuery: false,
   seedFromSitemap: true,
   checkExternalLinks: false,
+  renderJs: false,
   includePatterns: '',
   excludePatterns: '',
 }
@@ -68,6 +72,7 @@ export function sanitizeOptions(raw = {}) {
     stripQuery: raw.stripQuery === true,
     seedFromSitemap: raw.seedFromSitemap !== false,
     checkExternalLinks: raw.checkExternalLinks === true,
+    renderJs: raw.renderJs === true,
     includePatterns: typeof raw.includePatterns === 'string' ? raw.includePatterns.slice(0, 2000) : '',
     excludePatterns: typeof raw.excludePatterns === 'string' ? raw.excludePatterns.slice(0, 2000) : '',
   }
@@ -104,6 +109,8 @@ export class CrawlJob extends EventEmitter {
     this.externalLinks = new Map()
     this.redirects = []
     this.robotsInfo = { available: false, blocked: 0, crawlDelay: null, sitemaps: [] }
+    this.warnings = []
+    this.renderer = null
 
     this.queue = []
     this.seen = new Set()
@@ -145,6 +152,8 @@ export class CrawlJob extends EventEmitter {
       maxPages: this.options.maxPages,
       current: [...this.currentUrls].slice(0, 5),
       robots: this.robotsInfo,
+      warnings: this.warnings,
+      rendering: Boolean(this.renderer),
     }
   }
 
@@ -203,6 +212,18 @@ export class CrawlJob extends EventEmitter {
         }
         if (this.robots.crawlDelay && this.robots.crawlDelay * 1000 > this.options.delayMs) {
           this.options.delayMs = Math.min(LIMITS.delayMs, this.robots.crawlDelay * 1000)
+        }
+      }
+
+      if (this.options.renderJs) {
+        const { renderer, reason } = await getRenderer()
+        if (renderer) {
+          this.renderer = renderer
+          // Browser pages cost far more than a socket, so keep fewer in flight.
+          this.options.concurrency = Math.min(this.options.concurrency, LIMITS.renderConcurrency)
+        } else {
+          this.options.renderJs = false
+          this.warnings.push(`JavaScript rendering is unavailable, so pages were fetched as plain HTML. ${reason}`)
         }
       }
 
@@ -313,6 +334,7 @@ export class CrawlJob extends EventEmitter {
       alternates: [],
       internalLinks: 0,
       externalLinks: 0,
+      images: [],
       isDocument: isDocumentUrl(item.url),
       redirectTo: null,
     }
@@ -342,20 +364,53 @@ export class CrawlJob extends EventEmitter {
     }
   }
 
-  async visit(item) {
-    const { response, responseMs } = await this.fetchOnce(item.url)
+  /**
+   * Loads a URL either through the browser or over plain HTTP, and normalizes
+   * the two into one shape so a single parser handles both.
+   */
+  async load(item) {
+    if (this.renderer && !isDocumentUrl(item.url)) {
+      const rendered = await this.renderer.render(item.url, {
+        timeout: this.options.timeoutMs,
+        userAgent: this.userAgent,
+      })
+      return {
+        rendered: true,
+        status: rendered.initialStatus || rendered.status,
+        finalUrl: rendered.finalUrl,
+        html: rendered.html,
+        responseMs: rendered.responseMs,
+        header: (name) => rendered.headers[name] ?? null,
+        response: null,
+      }
+    }
 
-    const contentType = (response.headers.get('content-type') || '').toLowerCase()
-    const xRobots = (response.headers.get('x-robots-tag') || '').toLowerCase()
-    const contentLength = Number(response.headers.get('content-length') || 0)
+    const { response, responseMs } = await this.fetchOnce(item.url)
+    return {
+      rendered: false,
+      status: response.status,
+      finalUrl: item.url,
+      html: null,
+      responseMs,
+      header: (name) => response.headers.get(name),
+      response,
+    }
+  }
+
+  async visit(item) {
+    const loaded = await this.load(item)
+
+    const contentType = (loaded.header('content-type') || '').toLowerCase()
+    const xRobots = (loaded.header('x-robots-tag') || '').toLowerCase()
+    const contentLength = Number(loaded.header('content-length') || 0)
 
     const record = {
       url: item.url,
       depth: item.depth,
       parent: item.parent,
       discoveredVia: item.via,
-      status: response.status,
-      ok: response.ok,
+      status: loaded.status,
+      ok: loaded.status >= 200 && loaded.status < 300,
       error: null,
       redirectTo: null,
       title: null,
@@ -364,48 +419,56 @@ export class CrawlJob extends EventEmitter {
       noindex: xRobots.includes('noindex'),
       nofollow: xRobots.includes('nofollow'),
       contentType: contentType.split(';')[0] || null,
-      lastModified: toIsoDate(response.headers.get('last-modified')),
+      lastModified: toIsoDate(loaded.header('last-modified')),
       bytes: contentLength || 0,
-      responseMs,
+      responseMs: loaded.responseMs,
       wordCount: 0,
       h1: null,
       lang: null,
       alternates: [],
       internalLinks: 0,
       externalLinks: 0,
+      images: [],
       isDocument: isDocumentUrl(item.url),
+      rendered: loaded.rendered,
     }
 
-    const location = response.headers.get('location')
-    if (response.status >= 300 && response.status < 400 && location) {
+    // A redirect: recorded as its own row, with the destination queued behind it.
+    const location = loaded.rendered ? loaded.finalUrl : loaded.header('location')
+    const isRedirect = loaded.rendered
+      ? loaded.finalUrl !== item.url
+      : loaded.status >= 300 && loaded.status < 400 && Boolean(location)
+
+    if (isRedirect) {
       const target = normalizeUrl(location, item.url, { stripQuery: this.options.stripQuery })
       record.redirectTo = target
       record.ok = false
-      await this.discardBody(response)
+      if (loaded.rendered && (record.status < 300 || record.status >= 400)) record.status = 302
+      await this.discardBody(loaded.response)
       this.pages.set(item.url, record)
 
       if (target && target !== item.url) {
-        this.redirects.push({ from: item.url, to: target, status: response.status })
-        // The destination is a page of its own, reached at the same depth.
+        this.redirects.push({ from: item.url, to: target, status: record.status })
         this.enqueue(target, item.depth, item.url, 'redirect')
       }
       return
     }
 
     const isHtml = contentType.includes('html') || (contentType === '' && !record.isDocument)
-    if (!response.ok || !isHtml || contentLength > LIMITS.maxBodyBytes) {
-      await this.discardBody(response)
+    if (!record.ok || !isHtml || contentLength > LIMITS.maxBodyBytes) {
+      await this.discardBody(loaded.response)
       this.pages.set(item.url, record)
       return
     }
 
-    const html = await response.text()
+    const html = loaded.html ?? (await loaded.response.text())
     record.bytes = record.bytes || Buffer.byteLength(html)
     this.parseHtml(html, item.url, record, item)
     this.pages.set(item.url, record)
   }
 
   async discardBody(response) {
+    if (!response) return
     try {
       await response.body?.cancel()
     } catch {
@@ -437,6 +500,8 @@ export class CrawlJob extends EventEmitter {
         record.alternates.push({ hreflang, href })
       }
     })
+
+    this.collectImages($, pageUrl, record)
 
     const body = $('body').clone()
     body.find('script, style, noscript, template').remove()
@@ -472,6 +537,40 @@ export class CrawlJob extends EventEmitter {
           this.externalLinks.set(normalized, { count: 1, from: new Set([pageUrl]), status: null })
         }
       }
+    })
+  }
+
+  /**
+   * Collects the images a page displays, for the optional <image:image> entries
+   * in the sitemap. The first candidate in a srcset is good enough — sitemaps
+   * want the canonical image, not every resolution of it.
+   */
+  collectImages($, pageUrl, record) {
+    const seen = new Set()
+
+    const add = (rawSource, caption) => {
+      if (!rawSource || record.images.length >= LIMITS.maxImagesPerPage) return
+      const first = rawSource.split(',')[0].trim().split(/\s+/)[0]
+      const loc = normalizeUrl(first, pageUrl, { stripTrackingParams: false })
+      if (!loc || seen.has(loc)) return
+      seen.add(loc)
+      record.images.push({ loc, caption: caption ? caption.replace(/\s+/g, ' ').trim().slice(0, 300) : null })
+    }
+
+    const ogImage = $('meta[property="og:image"]').attr('content')
+    if (ogImage) add(ogImage, textOrNull($('meta[property="og:image:alt"]').attr('content')))
+
+    $('img').each((_, element) => {
+      const image = $(element)
+      if ((image.attr('loading') || '').toLowerCase() === 'lazy' && !image.attr('src')) {
+        add(image.attr('data-src') || image.attr('data-srcset'), image.attr('alt'))
+        return
+      }
+      add(image.attr('src') || image.attr('srcset') || image.attr('data-src'), image.attr('alt'))
+    })
+
+    $('picture source[srcset]').each((_, element) => {
+      add($(element).attr('srcset'), null)
     })
   }
 

@@ -6,6 +6,7 @@ import Header from './components/Header'
 import IssuesPanel from './components/IssuesPanel'
 import PageTable from './components/PageTable'
 import ProgressPanel from './components/ProgressPanel'
+import SitemapDiagram from './components/SitemapDiagram'
 import StatsBar from './components/StatsBar'
 import TreeView from './components/TreeView'
 import { fetchResult, startCrawl, stopCrawl, subscribeToCrawl } from './api'
@@ -24,6 +25,7 @@ const DEFAULT_OPTIONS: CrawlOptions = {
   stripQuery: false,
   seedFromSitemap: true,
   checkExternalLinks: false,
+  renderJs: false,
   includePatterns: '',
   excludePatterns: '',
 }
@@ -35,6 +37,8 @@ const DEFAULT_EXPORT: ExportSettings = {
   fixedChangefreq: 'weekly',
   includeLastmod: true,
   includeAlternates: false,
+  includeImages: false,
+  gzip: false,
 }
 
 type Tab = 'tree' | 'pages' | 'issues' | 'export'
@@ -71,6 +75,7 @@ export default function App() {
   const [result, setResult] = useState<CrawlResult | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [tab, setTab] = useState<Tab>('tree')
+  const [structureView, setStructureView] = useState<'diagram' | 'list'>('diagram')
   const [error, setError] = useState<string | null>(null)
 
   const unsubscribe = useRef<(() => void) | null>(null)
@@ -121,6 +126,8 @@ export default function App() {
         maxPages: options.maxPages,
         current: [],
         robots: { available: false, blocked: 0, crawlDelay: null, sitemaps: [] },
+        warnings: [],
+        rendering: false,
       })
 
       unsubscribe.current = subscribeToCrawl(id, {
@@ -212,6 +219,14 @@ export default function App() {
 
         {!summary && !result && <EmptyState onPick={(example) => setUrl(example)} />}
 
+        {result && result.warnings?.length > 0 && (
+          <ul className="panel space-y-1 border-amber-500/25 bg-amber-500/10 p-4 text-xs text-amber-200">
+            {result.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
+        )}
+
         {result && (
           <>
             <StatsBar stats={result.audit.stats} selected={selected.size} />
@@ -247,7 +262,29 @@ export default function App() {
             </div>
 
             {tab === 'tree' && (
-              <TreeView pages={result.pages} rootUrl={result.rootUrl} selected={selected} onToggle={toggleUrl} />
+              <>
+                <div className="flex justify-end">
+                  <div className="inline-flex rounded-lg border border-white/10 bg-ink-900/60 p-0.5">
+                    {(['diagram', 'list'] as const).map((view) => (
+                      <button
+                        key={view}
+                        type="button"
+                        className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition ${
+                          structureView === view ? 'bg-white/10 text-white' : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                        onClick={() => setStructureView(view)}
+                      >
+                        {view}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {structureView === 'diagram' ? (
+                  <SitemapDiagram pages={result.pages} rootUrl={result.rootUrl} selected={selected} onToggle={toggleUrl} />
+                ) : (
+                  <TreeView pages={result.pages} rootUrl={result.rootUrl} selected={selected} onToggle={toggleUrl} />
+                )}
+              </>
             )}
             {tab === 'pages' && (
               <PageTable pages={result.pages} selected={selected} onToggle={toggleUrl} onToggleMany={toggleMany} />

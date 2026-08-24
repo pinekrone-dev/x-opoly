@@ -4,9 +4,13 @@ Crawl a website, see the structure it actually has, and export the sitemap you n
 
 Point it at a domain and it walks the site breadth-first from the home page, obeying
 `robots.txt`, following internal links, and reading any sitemap the site already
-publishes. What comes back is a visual tree of the URL hierarchy, a filterable table of
-every URL with its response and on-page metadata, a list of what needs fixing, and
-downloadable `sitemap.xml`, `sitemap.txt`, `sitemap.html` and `crawl-report.csv` files.
+publishes. What comes back is a pan-and-zoom diagram of the site structure (exportable as
+SVG or PNG), a filterable table of every URL with its response and on-page metadata, a
+list of what needs fixing, and downloadable `sitemap.xml`, `sitemap.txt`, `sitemap.html`
+and `crawl-report.csv` files.
+
+Pages that build themselves in the browser can be crawled with JavaScript rendering
+switched on, so single-page apps map correctly instead of coming back as one empty shell.
 
 ## Running it
 
@@ -38,6 +42,8 @@ so they run with `ALLOW_PRIVATE_HOSTS=1` set for you by the test script.
 | Redirects | A redirecting URL is recorded as its own `301`/`302` row; the destination is crawled separately. |
 | Existing sitemaps | `/sitemap.xml` and any sitemap named in robots.txt are read and used as extra seeds, including sitemap indexes. URLs found only there are flagged as unlinked. |
 | Per page | Status, title, meta description, H1, canonical, `noindex`/`nofollow` (meta and `X-Robots-Tag`), `hreflang` alternates, word count, link counts, `Last-Modified`, response time and size. |
+| Images | `img` (including `srcset` and lazy `data-src`), `picture > source` and `og:image`, for optional `<image:image>` sitemap entries. |
+| JavaScript | Off by default. When on, pages load in headless Chromium and the DOM is read after scripts run, so client-rendered links are followed. |
 | Limits | Page count, depth, parallel requests, per-request delay and timeout, plus include/exclude URL patterns. |
 
 ## What lands in the sitemap
@@ -48,8 +54,48 @@ or unticked by hand in the tree or the table, and the XML preview is generated b
 same endpoint that produces the download, so what you see is what you ship.
 
 `<priority>` and `<changefreq>` can be derived from page depth, pinned to one value, or
-left out entirely. `<lastmod>` comes from each page's `Last-Modified` header. Past 50,000
-URLs the export becomes a sitemap index plus numbered parts.
+left out entirely. `<lastmod>` comes from each page's `Last-Modified` header. Image
+entries and `hreflang` alternates are opt-in, and the download can be gzipped to
+`sitemap.xml.gz`, which search engines accept as-is. Past 50,000 URLs the export becomes a
+sitemap index plus numbered parts.
+
+## JavaScript rendering
+
+Rendering is an optional extra, not a hard requirement. `playwright-core` is an
+`optionalDependency` and no browser is downloaded during install, so the tool runs fine
+without either. When the "Render JavaScript" option is on, the crawler looks for Chromium
+in this order:
+
+1. `CHROMIUM_PATH` — a full path to a browser binary
+2. `PLAYWRIGHT_BROWSERS_PATH` — a Playwright browser directory, full Chromium preferred
+   over the headless shell
+
+If neither turns up a usable browser the crawl still runs over plain HTTP and the result
+carries a warning explaining what was missing — it never fails outright. Rendering caps
+parallel requests lower than the HTTP path, because a browser page costs far more than a
+socket.
+
+## Google APIs — the last mile
+
+Nothing here talks to Google yet, deliberately: everything above works with no account,
+no key and no quota. These are the places where a Google integration slots in when you
+want one, roughly in order of value for effort.
+
+| Integration | What it adds | What it needs |
+| --- | --- | --- |
+| PageSpeed Insights API | Core Web Vitals and a performance score per URL, shown beside the crawl data | An API key (`GOOGLE_PSI_API_KEY`); works keyless but is rate-limited hard |
+| Search Console API | Real impressions, clicks and index coverage per crawled URL, and sitemap submission | OAuth, plus a verified property |
+| Indexing API | Direct "this URL changed" pings | A service account; officially scoped to job posting and livestream pages |
+| IndexNow (Bing, Yandex, Seznam) | The same ping idea, and not a Google product | A key file hosted at the site root — no OAuth at all |
+
+The seam is the same in every case: a crawl produces a list of URLs, and each integration
+decorates those URLs with extra fields or submits them somewhere. That means it belongs in
+`server/lib/` next to `audit.js`, reading its credentials from the environment and staying
+inert when they are absent — the same shape `renderer.js` already uses for the browser.
+
+Note that Google retired its sitemap ping endpoint, so "submit the sitemap" today means
+Search Console (Google) or IndexNow (everyone else) rather than a simple unauthenticated
+GET.
 
 ## Layout
 
@@ -61,10 +107,12 @@ server/
   lib/sitemap-parser.js reads existing sitemaps and sitemap indexes
   lib/exporters.js      XML / TXT / CSV / HTML output
   lib/audit.js          the findings shown in the Findings tab
+  lib/renderer.js       optional headless-Chromium rendering for client-side apps
   lib/safety.js         refuses private and loopback targets (SSRF guard)
   lib/urls.js           URL normalization and scope rules
   lib/store.js          in-memory job registry with a TTL
 src/                    React + Tailwind UI
+  components/SitemapDiagram.tsx   pan/zoom node diagram, SVG and PNG export
 test/                   node:test suites and the fixture site they crawl
 ```
 
@@ -90,3 +138,8 @@ cap) are deliberately modest — raise them only against your own infrastructure
 By default the server refuses to crawl loopback, link-local and private addresses so a
 public deployment cannot be used to reach its own network. Set `ALLOW_PRIVATE_HOSTS=1`
 to crawl a site on your own machine.
+
+The diagram layout uses [`d3-hierarchy`](https://github.com/d3/d3-hierarchy) (ISC) and the
+optional renderer uses [`playwright-core`](https://playwright.dev) (Apache-2.0); the
+crawler, robots parser, sitemap parser and exporters are implemented here rather than
+pulled in, so their behaviour stays under this project's own tests.

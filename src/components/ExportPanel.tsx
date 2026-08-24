@@ -38,7 +38,7 @@ export default function ExportPanel({ jobId, urls, settings, onSettingsChange }:
     setBusy(true)
     const timer = setTimeout(async () => {
       try {
-        const response = await requestExport(jobId, 'xml', urls, settings)
+        const response = await requestExport(jobId, 'xml', urls, { ...settings, gzip: false })
         if (cancelled) return
         setPreview(response.files[0]?.content ?? '')
         setRobots(response.robotsLine)
@@ -73,7 +73,7 @@ export default function ExportPanel({ jobId, urls, settings, onSettingsChange }:
   const download = async (format: ExportFormat) => {
     try {
       const response = await requestExport(jobId, format, urls, settings)
-      for (const file of response.files) downloadFile(file.name, file.content, MIME[format])
+      for (const file of response.files) downloadFile(file.name, file.content, MIME[format], file.encoding)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'The export failed.')
     }
@@ -171,6 +171,32 @@ export default function ExportPanel({ jobId, urls, settings, onSettingsChange }:
               <span>
                 <span className="text-slate-200">Include hreflang alternates</span>
                 <span className="block text-xs text-slate-500">Adds xhtml:link entries for translated pages.</span>
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                className="checkbox mt-0.5"
+                type="checkbox"
+                checked={settings.includeImages}
+                onChange={(event) => set('includeImages', event.target.checked)}
+              />
+              <span>
+                <span className="text-slate-200">Include images</span>
+                <span className="block text-xs text-slate-500">Adds image:image entries so pictures can be indexed too.</span>
+              </span>
+            </label>
+
+            <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+              <input
+                className="checkbox mt-0.5"
+                type="checkbox"
+                checked={settings.gzip}
+                onChange={(event) => set('gzip', event.target.checked)}
+              />
+              <span>
+                <span className="text-slate-200">Download gzipped</span>
+                <span className="block text-xs text-slate-500">Saves sitemap.xml.gz, which search engines accept as-is.</span>
               </span>
             </label>
           </div>

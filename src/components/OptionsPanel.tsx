@@ -13,6 +13,7 @@ const TOGGLES: { key: keyof CrawlOptions; label: string; hint: string }[] = [
   { key: 'includeDocuments', label: 'Include documents', hint: 'List PDFs and other documents alongside pages.' },
   { key: 'stripQuery', label: 'Ignore query strings', hint: 'Treat /page?a=1 and /page as the same URL.' },
   { key: 'checkExternalLinks', label: 'Check outbound links', hint: 'Verify links to other sites. Slower, but finds dead links.' },
+  { key: 'renderJs', label: 'Render JavaScript', hint: 'Load pages in a real browser. Needed for single-page apps. Much slower.' },
 ]
 
 const NUMBERS: { key: keyof CrawlOptions; label: string; min: number; max: number; step: number; suffix?: string }[] = [

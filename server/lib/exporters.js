@@ -4,6 +4,8 @@
  * audit export, and a human-readable HTML sitemap page.
  */
 
+import { gzipSync } from 'node:zlib'
+
 const URLS_PER_SITEMAP = 50000
 
 export const CHANGEFREQ_VALUES = ['always', 'hourly', 'daily', 'weekly', 'monthly', 'yearly', 'never']
@@ -15,6 +17,8 @@ export const DEFAULT_EXPORT_SETTINGS = {
   fixedChangefreq: 'weekly',
   includeLastmod: true,
   includeAlternates: false,
+  includeImages: false,
+  gzip: false,
   excludeNoindex: true,
   excludeNonCanonical: true,
   excludeErrors: true,
@@ -91,6 +95,14 @@ function urlEntry(page, settings) {
     }
   }
 
+  if (settings.includeImages && Array.isArray(page.images)) {
+    for (const image of page.images) {
+      lines.push('    <image:image>', `      <image:loc>${escapeXml(image.loc)}</image:loc>`)
+      if (image.caption) lines.push(`      <image:caption>${escapeXml(image.caption)}</image:caption>`)
+      lines.push('    </image:image>')
+    }
+  }
+
   if (settings.includeAlternates && Array.isArray(page.alternates)) {
     for (const alternate of page.alternates) {
       lines.push(
@@ -104,12 +116,16 @@ function urlEntry(page, settings) {
 }
 
 function urlsetDocument(pages, settings) {
-  const needsXhtml =
-    settings.includeAlternates && pages.some((page) => Array.isArray(page.alternates) && page.alternates.length > 0)
+  const namespaces = ['xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"']
 
-  const openTag = needsXhtml
-    ? '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">'
-    : '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+  if (settings.includeAlternates && pages.some((page) => page.alternates?.length > 0)) {
+    namespaces.push('xmlns:xhtml="http://www.w3.org/1999/xhtml"')
+  }
+  if (settings.includeImages && pages.some((page) => page.images?.length > 0)) {
+    namespaces.push('xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"')
+  }
+
+  const openTag = `<urlset ${namespaces.join(' ')}>`
 
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
@@ -167,6 +183,19 @@ export function buildSitemapFiles(pages, settings = DEFAULT_EXPORT_SETTINGS, roo
   ].join('\n')
 
   return [{ name: 'sitemap.xml', content: index }, ...files]
+}
+
+/**
+ * Gzips a file for upload. Search engines accept gzipped sitemaps, and the
+ * saving matters once a sitemap runs to tens of thousands of URLs.
+ * The content is returned base64-encoded so it survives the JSON response.
+ */
+export function gzipFile(file) {
+  return {
+    name: `${file.name}.gz`,
+    content: gzipSync(Buffer.from(file.content, 'utf8')).toString('base64'),
+    encoding: 'base64',
+  }
 }
 
 export function buildTxt(pages) {

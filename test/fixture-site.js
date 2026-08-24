@@ -4,10 +4,11 @@ import http from 'node:http'
 const PAGES = {
   '/': `<!doctype html><html lang="en"><head><title>Fixture Home Page For Tests</title>
     <meta name="description" content="The home page of the fixture site used by the crawler tests, long enough to pass the length check.">
-    <link rel="canonical" href="/"></head>
-    <body><h1>Home</h1><p>${'word '.repeat(200)}</p>
+    <link rel="canonical" href="/">
+    <meta property="og:image" content="/social-card.png"></head>
+    <body><h1>Home</h1><img src="/hero.png" alt="The hero image"><img srcset="/wide.png 2x, /narrow.png 1x"><p>${'word '.repeat(200)}</p>
     <a href="/about">About</a><a href="/blog/">Blog</a><a href="/old">Old</a>
-    <a href="/missing">Missing</a><a href="/private/secret">Secret</a>
+    <a href="/missing">Missing</a><a href="/private/secret">Secret</a><a href="/spa">App</a>
     <a href="https://example.org/external">External</a>
     <a href="mailto:hi@example.com">Mail</a><a href="/style.css">CSS</a></body></html>`,
   '/about': `<!doctype html><html lang="en"><head><title>About This Fixture Website</title></head>
@@ -16,6 +17,12 @@ const PAGES = {
   '/blog': `<!doctype html><html lang="en"><head><title>Blog Index Of The Fixture Site</title>
     <meta name="robots" content="noindex"></head><body><h1>Blog</h1><a href="/">Home</a></body></html>`,
   '/orphan': `<!doctype html><html><head><title>Orphan Page Only In Sitemap</title></head><body><h1>Orphan</h1></body></html>`,
+  '/spa': `<!doctype html><html lang="en"><head><title>Client Rendered Application Shell</title></head>
+    <body><div id="app"></div>
+    <script>document.getElementById('app').innerHTML =
+      '<h1>App</h1><p>${'word '.repeat(60)}</p><a href="/spa-child">Deep link</a>';</script></body></html>`,
+  '/spa-child': `<!doctype html><html lang="en"><head><title>Page Behind The App Shell</title></head>
+    <body><h1>Child</h1><p>${'word '.repeat(60)}</p><a href="/">Home</a></body></html>`,
   '/private/secret': `<!doctype html><html><head><title>Secret</title></head><body>secret</body></html>`,
 }
 

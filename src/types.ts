@@ -22,7 +22,9 @@ export interface Page {
   alternates: { hreflang: string; href: string }[]
   internalLinks: number
   externalLinks: number
+  images: { loc: string; caption: string | null }[]
   isDocument: boolean
+  rendered?: boolean
 }
 
 export interface CrawlOptions {
@@ -37,6 +39,7 @@ export interface CrawlOptions {
   stripQuery: boolean
   seedFromSitemap: boolean
   checkExternalLinks: boolean
+  renderJs: boolean
   includePatterns: string
   excludePatterns: string
 }
@@ -56,6 +59,8 @@ export interface CrawlSummary {
   maxPages: number
   current: string[]
   robots: { available: boolean; blocked: number; crawlDelay: number | null; sitemaps: string[] }
+  warnings: string[]
+  rendering: boolean
 }
 
 export interface IssueUrl {
@@ -109,6 +114,8 @@ export interface ExportSettings {
   fixedChangefreq: string
   includeLastmod: boolean
   includeAlternates: boolean
+  includeImages: boolean
+  gzip: boolean
 }
 
 export type ExportFormat = 'xml' | 'txt' | 'csv' | 'html'
@@ -117,5 +124,5 @@ export interface ExportResponse {
   format: ExportFormat
   count: number
   robotsLine: string
-  files: { name: string; content: string }[]
+  files: { name: string; content: string; encoding?: 'base64' }[]
 }
