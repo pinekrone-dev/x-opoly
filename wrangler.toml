@@ -9,6 +9,11 @@ compatibility_date = "2026-06-01"
 # so the rest of the app never depends on it, but reading a flyer does.
 compatibility_flags = ["nodejs_compat"]
 
+# Serve on the *.workers.dev subdomain. Explicit because a Worker created
+# through the dashboard can have this route switched off, which returns
+# Cloudflare's "nothing here yet" page even though the deploy succeeded.
+workers_dev = true
+
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.
 [assets]
