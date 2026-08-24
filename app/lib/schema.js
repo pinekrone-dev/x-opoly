@@ -67,10 +67,20 @@ export const SCHEMA_STATEMENTS = [
     value       TEXT,
     position    INTEGER NOT NULL DEFAULT 0
   )`,
+  `CREATE TABLE IF NOT EXISTS property_images (
+    id          TEXT PRIMARY KEY,
+    property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+    path        TEXT NOT NULL,
+    caption     TEXT,
+    position    INTEGER NOT NULL DEFAULT 0,
+    source      TEXT,
+    created_at  TEXT NOT NULL
+  )`,
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
   'CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_fields_property ON property_fields(property_id)',
+  'CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id)',
 ]
 
 /**
@@ -90,6 +100,8 @@ export const COLUMN_ADDITIONS = [
   ['properties', 'broker_phone', 'TEXT'],
   // Minutes to spend at this stop, overriding the tour default.
   ['properties', 'tour_minutes', 'INTEGER'],
+  // Which stored image is the hero shot in the tour book.
+  ['properties', 'cover_image_id', 'TEXT'],
 
   // Tour configuration lives on the survey: one planned tour per survey.
   ['surveys', 'tour_start_time', 'TEXT'],

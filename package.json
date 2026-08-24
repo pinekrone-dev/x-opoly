@@ -26,6 +26,7 @@
     "d3-hierarchy": "^3.1.2",
     "hono": "^4.13.4",
     "leaflet": "^1.9.4",
+    "pdfjs-dist": "^6.2.108",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
 import { fieldsBySurvey, listPropertyFields, seedStages } from './stages.js'
+import { imagesBySurvey, listImages } from './images.js'
 
 export const STAGES = ['prospect', 'touring', 'loi', 'under_contract', 'passed']
 
@@ -42,6 +43,7 @@ const PROPERTY_FIELDS = {
   broker_email: (v) => text(v, 200),
   broker_phone: (v) => text(v, 60),
   stage_id: (v) => text(v, 40),
+  cover_image_id: (v) => text(v, 40),
   tour_minutes: (v) => integer(v, 0, 600),
   notes: (v) => text(v, 5000),
   flyer_path: (v) => text(v, 500),
@@ -114,6 +116,7 @@ function mapProperty(row) {
     brokerEmail: row.broker_email,
     brokerPhone: row.broker_phone,
     stageId: row.stage_id,
+    coverImageId: row.cover_image_id,
     tourMinutes: row.tour_minutes,
     notes: row.notes,
     flyerUrl: row.flyer_path ? `/api/files/${row.flyer_path}` : null,
@@ -121,6 +124,7 @@ function mapProperty(row) {
     photoUrl: row.photo_path ? `/api/files/${row.photo_path}` : null,
     tourOrder: row.tour_order,
     fields: [],
+    images: [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -235,14 +239,22 @@ export async function listProperties(db, surveyId) {
      ORDER BY CASE WHEN tour_order IS NULL THEN 1 ELSE 0 END, tour_order, created_at`,
     [surveyId],
   )
-  const fields = await fieldsBySurvey(db, surveyId)
-  return rows.map((row) => ({ ...mapProperty(row), fields: fields.get(row.id) ?? [] }))
+  const [fields, images] = await Promise.all([
+    fieldsBySurvey(db, surveyId),
+    imagesBySurvey(db, surveyId),
+  ])
+  return rows.map((row) => ({
+    ...mapProperty(row),
+    fields: fields.get(row.id) ?? [],
+    images: images.get(row.id) ?? [],
+  }))
 }
 
 export async function getProperty(db, id) {
   const property = mapProperty(await db.get('SELECT * FROM properties WHERE id = ?', [id]))
   if (!property) return null
-  return { ...property, fields: await listPropertyFields(db, id) }
+  const [fields, images] = await Promise.all([listPropertyFields(db, id), listImages(db, id)])
+  return { ...property, fields, images }
 }
 
 export async function createProperty(db, surveyId, input = {}) {

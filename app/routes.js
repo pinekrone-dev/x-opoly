@@ -34,6 +34,13 @@ import {
   setPropertyFields,
   updateStage,
 } from './lib/stages.js'
+import {
+  addImage,
+  deleteImage,
+  listImages,
+  reorderImages,
+  updateImage,
+} from './lib/images.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
@@ -416,6 +423,85 @@ export function createApp({ db, storage, env = {} }) {
       }
       throw cause
     }
+  })
+
+  // --- images ---------------------------------------------------------------
+
+  app.get('/api/properties/:id/images', async (c) => {
+    if (!(await getProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
+    return c.json({ images: await listImages(db, c.req.param('id')) })
+  })
+
+  /**
+   * Stores an image for a property.
+   *
+   * Used both for a plain upload and for a region cropped out of a rendered
+   * flyer page, which arrives as a PNG the browser produced from the canvas.
+   */
+  app.post('/api/properties/:id/images', async (c) => {
+    const id = c.req.param('id')
+    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+
+    const upload = await readUpload(c)
+    if (upload.error) return upload.error
+    if (!upload.mimeType.startsWith('image/')) {
+      return c.json({ error: 'That needs to be an image file.' }, 400)
+    }
+
+    const stored = `${crypto.randomUUID()}${EXTENSIONS[upload.mimeType] || '.png'}`
+    await storage.put(stored, upload.bytes, upload.mimeType)
+
+    const caption = c.req.header('x-caption')
+      ? decodeURIComponent(c.req.header('x-caption'))
+      : null
+    const source = c.req.header('x-source') === 'flyer-crop' ? 'flyer-crop' : 'upload'
+
+    const result = await addImage(db, id, { path: stored, caption, source })
+    if (result.error) {
+      // Do not leave the object behind if the row was refused.
+      await storage.delete(stored).catch(() => undefined)
+      return c.json({ error: result.error }, 400)
+    }
+    return c.json({ image: result.image, property: await getProperty(db, id) }, 201)
+  })
+
+  app.patch('/api/images/:id', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const result = await updateImage(db, c.req.param('id'), body)
+    if (result.error) return notFound(c, result.error)
+    return c.json({ image: result.image })
+  })
+
+  app.delete('/api/images/:id', async (c) => {
+    if (!(await deleteImage(db, c.req.param('id'), storage))) {
+      return notFound(c, 'That image does not exist.')
+    }
+    return c.body(null, 204)
+  })
+
+  app.put('/api/properties/:id/images', async (c) => {
+    const id = c.req.param('id')
+    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+    const body = await c.req.json().catch(() => ({}))
+    const order = Array.isArray(body?.order) ? body.order.map(String) : []
+    return c.json({ images: await reorderImages(db, id, order) })
+  })
+
+  /** Attaches a flyer to a property that already exists. */
+  app.post('/api/properties/:id/flyer', async (c) => {
+    const id = c.req.param('id')
+    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+
+    const upload = await readUpload(c)
+    if (upload.error) return upload.error
+
+    const filename = decodeURIComponent(c.req.header('x-filename') || 'flyer')
+    const stored = `${crypto.randomUUID()}${EXTENSIONS[upload.mimeType] || ''}`
+    await storage.put(stored, upload.bytes, upload.mimeType || 'application/octet-stream')
+
+    return c.json({
+      property: await updateProperty(db, id, { flyer_path: stored, flyer_name: filename }),
+    })
   })
 
   app.post('/api/properties/:id/photo', async (c) => {
