@@ -38,6 +38,50 @@ function appFor(env) {
   return app
 }
 
+/**
+ * Shown when the Worker is running but the built frontend is not there.
+ *
+ * A deploy whose build step never ran uploads an empty asset directory, and
+ * the site then answers every page with a bare 404 that says nothing about
+ * why. This turns that dead end into the actual diagnosis.
+ */
+function missingAssetsPage(reason) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontend not deployed</title>
+<style>
+  body { font: 15px/1.65 system-ui, -apple-system, "Segoe UI", sans-serif; background: #0d1117; color: #e6edf3;
+         margin: 0; display: grid; place-items: center; min-height: 100vh; padding: 2rem; }
+  main { max-width: 34rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .5rem; }
+  p { color: #9aa7b5; margin: .6rem 0; }
+  code { background: #161b22; padding: .15rem .4rem; border-radius: 4px; color: #e6edf3; }
+  ol { color: #9aa7b5; padding-left: 1.2rem; }
+  li { margin: .4rem 0; }
+  a { color: #14b8a6; }
+</style>
+</head>
+<body>
+<main>
+  <h1>The API is running, but the frontend was not uploaded.</h1>
+  <p>The Worker deployed and is serving requests — <a href="/api/health">/api/health</a> should return JSON.
+     What is missing is the built site, so there is nothing to show at this address.</p>
+  <p>Almost always this means the deploy ran without a build step, so <code>dist/</code> was empty:</p>
+  <ol>
+    <li>Workers &amp; Pages → this Worker → Settings → Build</li>
+    <li>Set <strong>Build command</strong> to <code>npm run build</code></li>
+    <li>Check <strong>Production branch</strong> matches the branch holding the app</li>
+    <li>Retry the deployment</li>
+  </ol>
+  <p style="color:#6b7684;font-size:13px">Diagnostic: ${reason}</p>
+</main>
+</body>
+</html>`
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -49,6 +93,33 @@ export default {
     // Everything else is the single-page app. `not_found_handling` in
     // wrangler.toml makes the asset binding serve index.html for deep links
     // such as /survey/:id and /s/:token.
-    return env.ASSETS.fetch(request)
+    if (!env.ASSETS) {
+      return new Response(missingAssetsPage('the ASSETS binding is not present on this deployment'), {
+        status: 503,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    }
+
+    let response
+    try {
+      response = await env.ASSETS.fetch(request)
+    } catch (error) {
+      return new Response(missingAssetsPage(`the asset store could not be read (${error.message})`), {
+        status: 503,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    }
+
+    // A 404 on a navigation means index.html itself is absent — an empty
+    // upload. Asset files (/assets/*.js) keep their real 404.
+    const wantsHtml = (request.headers.get('accept') || '').includes('text/html')
+    if (response.status === 404 && wantsHtml) {
+      return new Response(missingAssetsPage('the asset store returned 404 for index.html'), {
+        status: 503,
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      })
+    }
+
+    return response
   },
 }
