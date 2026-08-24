@@ -5,6 +5,7 @@ import type {
   Demographics,
   GeocodeResult,
   PlaceCategory,
+  FlyerExtraction,
   Property,
   PropertyImage,
   SharePayload,
@@ -90,6 +91,16 @@ export const api = {
       ...json({ order }),
       method: 'PUT',
     }),
+  /**
+   * Reads the flyer already on a property and fills the site profile in.
+   * Only empty fields are filled unless `overwrite` is asked for.
+   */
+  extractFlyer: (propertyId: string, options: { overwrite?: boolean } = {}) =>
+    request<{ property: Property; extraction: FlyerExtraction }>(
+      `/api/properties/${propertyId}/extract`,
+      json(options),
+    ),
+
   /** Attaches a flyer to a property that already exists, with no extraction. */
   attachFlyer: (propertyId: string, file: File) =>
     request<{ property: Property }>(`/api/properties/${propertyId}/flyer`, {

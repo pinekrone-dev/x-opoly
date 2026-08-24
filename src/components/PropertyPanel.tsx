@@ -1,6 +1,13 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { CompetitionResult, CustomField, Demographics, Property, Stage } from '../types'
+import type {
+  CompetitionResult,
+  CustomField,
+  Demographics,
+  FlyerExtraction,
+  Property,
+  Stage,
+} from '../types'
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 import CompetitionPanel from './CompetitionPanel'
 import CustomFields from './CustomFields'
@@ -67,11 +74,40 @@ export default function PropertyPanel({
   const [radius, setRadius] = useState(3)
   const photoInput = useRef<HTMLInputElement>(null)
   const flyerInput = useRef<HTMLInputElement>(null)
+  const [extracting, setExtracting] = useState(false)
+  const [extraction, setExtraction] = useState<FlyerExtraction | null>(null)
+  const [extractError, setExtractError] = useState<string | null>(null)
+
+  /**
+   * Reads the attached flyer and fills this site in.
+   *
+   * Defaults to filling only what is empty; `overwrite` is offered afterwards
+   * rather than up front, so a hand-corrected number is never lost to a
+   * re-run the broker did not think of as destructive.
+   */
+  const readFlyer = async (overwrite: boolean) => {
+    setExtracting(true)
+    setExtractError(null)
+    try {
+      const { property: updated, extraction: result } = await api.extractFlyer(property.id, {
+        overwrite,
+      })
+      onChange?.(updated)
+      setFields(updated.fields ?? [])
+      setExtraction(result)
+    } catch (cause) {
+      setExtractError(cause instanceof Error ? cause.message : 'That flyer could not be read.')
+    } finally {
+      setExtracting(false)
+    }
+  }
 
   useEffect(() => {
     setEditing(false)
     setDraft({})
     setFields(property.fields ?? [])
+    setExtraction(null)
+    setExtractError(null)
     setDemographics(null)
     setDemoError(null)
     onDemographics?.(null)
@@ -341,15 +377,58 @@ export default function PropertyPanel({
                     {property.flyerName || 'Listing flyer'}
                   </a>
                   {!readOnly ? (
-                    <button
-                      type="button"
-                      className="btn-secondary ml-auto px-2 py-1 text-xs"
-                      onClick={() => flyerInput.current?.click()}
-                    >
-                      Replace
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="btn-primary ml-auto px-2 py-1 text-xs"
+                        disabled={extracting}
+                        onClick={() => void readFlyer(false)}
+                      >
+                        {extracting ? 'Reading…' : 'Fill in from flyer'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary px-2 py-1 text-xs"
+                        onClick={() => flyerInput.current?.click()}
+                      >
+                        Replace
+                      </button>
+                    </>
                   ) : null}
                 </div>
+
+                {extraction ? (
+                  <div className="border-b border-white/5 bg-ink-850 px-3 py-2 text-xs">
+                    <p className="text-slate-300">
+                      Filled {extraction.filled.length} field
+                      {extraction.filled.length === 1 ? '' : 's'}
+                      {extraction.confidence ? ` · ${extraction.confidence} confidence` : ''}
+                    </p>
+                    {extraction.uncertainFields?.length ? (
+                      <p className="mt-1 text-amber-400/90">
+                        Worth checking: {extraction.uncertainFields.join(', ')}
+                      </p>
+                    ) : null}
+                    {extraction.skipped.length ? (
+                      <p className="mt-1 text-slate-500">
+                        Left alone because they already had a value: {extraction.skipped.join(', ')}.{' '}
+                        <button
+                          type="button"
+                          className="underline hover:text-slate-300"
+                          onClick={() => void readFlyer(true)}
+                        >
+                          Overwrite them
+                        </button>
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {extractError ? (
+                  <p className="border-b border-white/5 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                    {extractError}
+                  </p>
+                ) : null}
                 <div className="min-h-0 flex-1">
                   <Suspense
                     fallback={<p className="p-4 text-xs text-slate-500">Loading the PDF viewer…</p>}

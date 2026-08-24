@@ -167,6 +167,30 @@ try {
   check('the flyer is served back for rendering',
     Boolean(flyerAttached.body?.property?.flyerUrl), String(flyerAttached.body?.property?.flyerUrl))
 
+  // The extract button's endpoint. Without ANTHROPIC_API_KEY this must answer
+  // with a clear "not configured" rather than a 500 — the button has to fail
+  // in a way that tells the broker what to do.
+  const extracted = await api(`/api/properties/${createdIds[0]}/extract`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+  check(
+    'the flyer extract endpoint answers sensibly',
+    extracted.status === 200 || extracted.status === 422,
+    `status ${extracted.status}: ${JSON.stringify(extracted.body).slice(0, 160)}`,
+  )
+  if (extracted.status === 200) {
+    check('extraction filled fields', Array.isArray(extracted.body?.extraction?.filled),
+      JSON.stringify(extracted.body?.extraction?.filled))
+  }
+
+  const extractNoFlyer = await api(`/api/properties/${createdIds[1]}/extract`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+  check('extracting with no flyer attached is refused clearly', extractNoFlyer.status === 400,
+    `status ${extractNoFlyer.status}`)
+
   const imageAdded = await upload(
     `/api/properties/${createdIds[0]}/images`,
     TINY_PNG,
@@ -295,6 +319,8 @@ try {
   }
   const viewerText = await page.textContent('body')
   check('the crop prompt is shown', viewerText?.includes('Drag a box') ?? false)
+  const fillButton = await page.$('text=Fill in from flyer')
+  check('the fill-from-flyer button is on the flyer tab', Boolean(fillButton))
 
   await page.screenshot({ path: 'smoke-map.png', fullPage: false })
   console.log('\nScreenshot written to smoke-map.png')

@@ -43,7 +43,13 @@ import {
 } from './lib/images.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
-import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
+import {
+  FlyerExtractionError,
+  extractFromFlyer,
+  isConfigured,
+  mergeExtraction,
+  toPropertyInput,
+} from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
@@ -485,6 +491,61 @@ export function createApp({ db, storage, env = {} }) {
     const body = await c.req.json().catch(() => ({}))
     const order = Array.isArray(body?.order) ? body.order.map(String) : []
     return c.json({ images: await reorderImages(db, id, order) })
+  })
+
+  /**
+   * Reads the flyer already attached to a property and fills that property in.
+   *
+   * Separate from the upload route, which creates a new property: this one
+   * targets a site that already exists, so it can be re-run after a better
+   * copy of the flyer is attached, or after a field was cleared.
+   *
+   * By default only empty fields are filled. A broker who has corrected a
+   * number by hand should not lose it to a re-run, so overwriting is something
+   * they ask for rather than something that happens to them.
+   */
+  app.post('/api/properties/:id/extract', async (c) => {
+    const id = c.req.param('id')
+    const property = await getProperty(db, id)
+    if (!property) return notFound(c, 'That property does not exist.')
+    if (!property.flyerUrl) {
+      return c.json({ error: 'There is no flyer on this site to read. Attach one first.' }, 400)
+    }
+
+    const body = await c.req.json().catch(() => ({}))
+    const overwrite = body?.overwrite === true
+
+    // flyerUrl is /api/files/<stored>; the stored name is what storage knows.
+    const stored = property.flyerUrl.split('/').pop()
+    const file = await storage.get(stored)
+    if (!file) {
+      return c.json({ error: 'That flyer is no longer in storage. Attach it again.' }, 410)
+    }
+
+    try {
+      const { fields, model } = await extractFromFlyer(file.body, file.contentType, { env })
+
+      const { patch, filled, skipped, fields: rows } = mergeExtraction(property, fields, { overwrite })
+
+      if (Object.keys(patch).length > 0) await updateProperty(db, id, patch)
+      if (rows.length > 0) await setPropertyFields(db, id, rows)
+
+      return c.json({
+        property: await getProperty(db, id),
+        extraction: {
+          model,
+          confidence: fields.confidence,
+          uncertainFields: fields.uncertainFields,
+          filled,
+          skipped,
+        },
+      })
+    } catch (cause) {
+      if (cause instanceof FlyerExtractionError) {
+        return c.json({ error: cause.message, configured: cause.configured }, 422)
+      }
+      throw cause
+    }
   })
 
   /** Attaches a flyer to a property that already exists. */

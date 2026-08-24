@@ -10,6 +10,18 @@ export interface DealStage {
   hidden: boolean
 }
 
+/** What reading a flyer produced, and what it did with it. */
+export interface FlyerExtraction {
+  model?: string
+  confidence: 'high' | 'medium' | 'low'
+  /** Fields the model was unsure of, for the broker to confirm. */
+  uncertainFields: string[]
+  /** Fields this run wrote. */
+  filled: string[]
+  /** Fields left alone because they already had a value. */
+  skipped: string[]
+}
+
 /** A stored photo. Either uploaded whole or cut out of a rendered flyer page. */
 export interface PropertyImage {
   id: string

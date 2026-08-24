@@ -190,3 +190,79 @@ export function toPropertyInput(fields) {
     notes: fields.notes,
   }
 }
+
+/**
+ * Extraction turned into the labelled rows a site card shows.
+ *
+ * The flyer's numbers are what a broker reads off a card — "Available SF",
+ * "Lease Rate", "NNN" — so they are written as custom fields rather than only
+ * into typed columns. Anything the flyer did not state is left out entirely:
+ * an empty row is noise, and a zero would be a claim the document never made.
+ */
+export function toCustomFields(fields) {
+  const rows = []
+  const add = (label, value) => {
+    if (value == null || value === '') return
+    rows.push({ label, value: String(value) })
+  }
+
+  if (Number.isFinite(fields.sizeSqft)) add('Available SF', `${fields.sizeSqft.toLocaleString()} SF`)
+  if (Number.isFinite(fields.rentRate)) {
+    add('Lease Rate', fields.rentUnit ? `${fields.rentRate}/${unitSuffix(fields.rentUnit)}` : String(fields.rentRate))
+  }
+  if (Number.isFinite(fields.nnn)) add('NNN', `${fields.nnn}/SF`)
+  if (Number.isFinite(fields.yearBuilt)) add('Year Built', String(fields.yearBuilt))
+  add('Zoning', fields.zoning)
+  if (Number.isFinite(fields.acreage)) add('Acreage', `${fields.acreage} ac`)
+  if (Number.isFinite(fields.parkingSpaces)) add('Parking', `${fields.parkingSpaces} spaces`)
+  add('Available', fields.availability)
+
+  return rows
+}
+
+/** "psf/yr" reads as "SF" on a card; anything else is kept as written. */
+function unitSuffix(unit) {
+  const normalised = String(unit).toLowerCase()
+  if (normalised.startsWith('psf')) return 'SF'
+  return unit
+}
+
+/**
+ * Works out what a re-read should actually change on an existing site.
+ *
+ * Pure, so the rule that matters — a value the broker already has is not
+ * overwritten unless they ask — is testable without calling the model.
+ *
+ * @param {object} property  the site as it stands
+ * @param {object} fields    what the flyer said
+ * @param {{overwrite?: boolean}} options
+ */
+export function mergeExtraction(property, fields, { overwrite = false } = {}) {
+  const extracted = toPropertyInput(fields)
+  const patch = {}
+  const filled = []
+  const skipped = []
+
+  for (const [key, value] of Object.entries(extracted)) {
+    if (value == null || value === '') continue
+    const current = property?.[key]
+    const isEmpty = current == null || current === ''
+    if (overwrite || isEmpty) {
+      patch[key] = value
+      filled.push(key)
+    } else {
+      skipped.push(key)
+    }
+  }
+
+  // Custom rows merge by label, so rows the broker added themselves survive a
+  // re-read and a row they left blank still gets filled.
+  const byLabel = new Map((property?.fields ?? []).map((field) => [field.label.toLowerCase(), field]))
+  for (const row of toCustomFields(fields)) {
+    const key = row.label.toLowerCase()
+    const current = byLabel.get(key)
+    if (!current || overwrite || !current.value) byLabel.set(key, row)
+  }
+
+  return { patch, filled, skipped, fields: [...byLabel.values()] }
+}
