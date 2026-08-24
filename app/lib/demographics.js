@@ -1,23 +1,80 @@
 /**
  * Trade-area demographics.
  *
- * Uses the US Census ACS 5-year API, which is free and needs no key for light
- * use (`CENSUS_API_KEY` raises the limit). When the API cannot be reached the
- * result says so — this never estimates or interpolates, because a broker will
- * put these numbers in front of a client.
+ * A broker puts these numbers in front of a client, so this never estimates,
+ * interpolates, or fills a gap with a plausible-looking figure. When the data
+ * cannot be retrieved the result says so.
+ *
+ * Both sources are free and keyless for light use:
+ *   - TIGERweb, for the block-group polygons around a point
+ *   - the ACS 5-year API, for the numbers attached to them (`CENSUS_API_KEY`
+ *     raises the rate limit but is not required)
+ *
+ * Rings are computed from the same block-group pull: one geometry request at
+ * the widest radius, one ACS request, then filtered by distance for each ring.
+ * Two round trips answer all three rings rather than six.
  */
 
-const ACS_BASE = 'https://api.census.gov/data/2022/acs/acs5'
+import { haversineMiles } from './tour.js'
 
-// ACS variable codes → the fields we show.
+const ACS_BASE = 'https://api.census.gov/data/2022/acs/acs5'
+const ACS_VINTAGE = 'US Census ACS 5-year (2022)'
+
+const TIGERWEB =
+  'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/10/query'
+
+/** Rings the panel offers, in miles. */
+export const RADII = [1, 3, 5]
+
+/**
+ * ACS variables to pull, and what each is for.
+ *
+ * Medians are deliberately limited to what the ACS publishes directly. There
+ * is no correct way to sum a median across block groups; where a ring covers
+ * several, the value is a population-weighted mean and is labelled as an
+ * approximation rather than presented as a census figure.
+ */
 const VARIABLES = {
   B01003_001E: 'population',
+  B11001_001E: 'households',
   B19013_001E: 'medianHouseholdIncome',
   B25077_001E: 'medianHomeValue',
   B01002_001E: 'medianAge',
-  B23025_005E: 'unemployed',
-  B15003_022E: 'bachelorsDegrees',
+  B25003_001E: 'occupiedUnits',
+  B25003_003E: 'renterOccupied',
+  B15003_001E: 'educationUniverse',
+  B15003_022E: 'bachelors',
+  B15003_023E: 'masters',
+  B15003_024E: 'professional',
+  B15003_025E: 'doctorate',
 }
+
+/** Metrics that are counts, and so can legitimately be summed across a ring. */
+const SUMMABLE = [
+  'population',
+  'households',
+  'occupiedUnits',
+  'renterOccupied',
+  'educationUniverse',
+  'bachelors',
+  'masters',
+  'professional',
+  'doctorate',
+]
+
+/** Medians, which can only be weighted — never added. */
+const WEIGHTED = ['medianHouseholdIncome', 'medianHomeValue', 'medianAge']
+
+/** What the panel shows, in the order it shows it. */
+export const METRICS = [
+  { key: 'population', label: 'Population', format: 'count' },
+  { key: 'medianHouseholdIncome', label: 'Med. Income', format: 'money', approximate: true },
+  { key: 'households', label: 'Households', format: 'count' },
+  { key: 'renterShare', label: 'Renters', format: 'percent' },
+  { key: 'medianAge', label: 'Med. Age', format: 'decimal', approximate: true },
+  { key: 'educationShare', label: 'Bachelor’s+', format: 'percent' },
+  { key: 'medianHomeValue', label: 'Home Value', format: 'money', approximate: true },
+]
 
 export class DemographicsUnavailable extends Error {
   constructor(message) {
@@ -26,68 +83,220 @@ export class DemographicsUnavailable extends Error {
   }
 }
 
-/** Finds the census tract containing a point, via the Census geocoder. */
-async function locateTract(lat, lng, fetchImpl, timeout) {
-  const url = new URL('https://geocoding.geo.census.gov/geocoder/geographies/coordinates')
-  url.searchParams.set('x', String(lng))
-  url.searchParams.set('y', String(lat))
-  url.searchParams.set('benchmark', 'Public_AR_Current')
-  url.searchParams.set('vintage', 'Current_Current')
-  url.searchParams.set('layers', 'Census Tracts')
-  url.searchParams.set('format', 'json')
+/** Degrees of latitude per mile. Longitude is scaled by cos(latitude). */
+const MILES_PER_DEGREE = 69
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeout)
+async function withTimeout(fetchImpl, url, timeout, label) {
+  const controller = typeof AbortController === 'function' ? new AbortController() : null
+  const timer = controller ? setTimeout(() => controller.abort(), timeout) : null
   try {
-    const response = await fetchImpl(url.toString(), { signal: controller.signal })
-    if (!response.ok) throw new Error(`geocoder HTTP ${response.status}`)
-    const body = await response.json()
-    const tract = body?.result?.geographies?.['Census Tracts']?.[0]
-    if (!tract) throw new Error('no census tract covers that point')
-    return { state: tract.STATE, county: tract.COUNTY, tract: tract.TRACT, name: tract.NAME }
+    const response = await fetchImpl(url, {
+      signal: controller?.signal,
+      headers: { accept: 'application/json' },
+    })
+    if (!response.ok) throw new Error(`${label} HTTP ${response.status}`)
+    return await response.json()
   } finally {
-    clearTimeout(timer)
+    if (timer) clearTimeout(timer)
   }
 }
 
 /**
- * @returns {Promise<{ source: string, area: string, metrics: object }>}
- * @throws {DemographicsUnavailable} when the upstream API cannot be reached
+ * Block groups whose centre falls within `miles` of the point.
+ *
+ * Queried by bounding envelope — cheap for the service and easy to reason
+ * about — then narrowed to a true circle by distance below.
  */
-export async function demographicsFor(lat, lng, { env = {}, fetchImpl = fetch, timeout = 12000 } = {}) {
-  if (lat == null || lng == null) throw new DemographicsUnavailable('This property has no location yet.')
+export async function fetchBlockGroups(lat, lng, miles, { fetchImpl = fetch, timeout = 12000 } = {}) {
+  const latSpan = miles / MILES_PER_DEGREE
+  const lngSpan = miles / (MILES_PER_DEGREE * Math.max(0.01, Math.cos((lat * Math.PI) / 180)))
 
-  try {
-    const tract = await locateTract(lat, lng, fetchImpl, timeout)
+  const url = new URL(TIGERWEB)
+  url.searchParams.set('geometry', `${lng - lngSpan},${lat - latSpan},${lng + lngSpan},${lat + latSpan}`)
+  url.searchParams.set('geometryType', 'esriGeometryEnvelope')
+  url.searchParams.set('inSR', '4326')
+  url.searchParams.set('outSR', '4326')
+  url.searchParams.set('spatialRel', 'esriSpatialRelIntersects')
+  url.searchParams.set('outFields', 'GEOID,STATE,COUNTY,TRACT,BLKGRP,CENTLAT,CENTLON')
+  url.searchParams.set('returnGeometry', 'true')
+  url.searchParams.set('f', 'geojson')
 
+  const body = await withTimeout(fetchImpl, url.toString(), timeout, 'TIGERweb')
+  const features = Array.isArray(body?.features) ? body.features : []
+
+  return features
+    .map((feature) => {
+      const props = feature?.properties ?? {}
+      // Number('') is 0, not NaN, so a blank centroid would otherwise pass the
+      // finite check and place a block group at null island — filtered out of
+      // the rings by distance, but drawn on the map.
+      const centroidLat = coordinate(props.CENTLAT)
+      const centroidLng = coordinate(props.CENTLON)
+      if (centroidLat == null || centroidLng == null) return null
+      return {
+        geoid: String(props.GEOID ?? ''),
+        state: String(props.STATE ?? ''),
+        county: String(props.COUNTY ?? ''),
+        tract: String(props.TRACT ?? ''),
+        blockGroup: String(props.BLKGRP ?? ''),
+        lat: centroidLat,
+        lng: centroidLng,
+        miles: haversineMiles({ lat, lng }, { lat: centroidLat, lng: centroidLng }),
+        geometry: feature.geometry ?? null,
+      }
+    })
+    .filter(Boolean)
+}
+
+/** ACS rows for the given block groups, one request per state/county pair. */
+export async function fetchAcs(groups, { fetchImpl = fetch, timeout = 12000, env = {} } = {}) {
+  const counties = new Map()
+  for (const group of groups) {
+    const key = `${group.state}:${group.county}:${group.tract}`
+    if (!counties.has(key)) counties.set(key, group)
+  }
+
+  // One request per county covers every tract in it, so collapse to counties.
+  const byCounty = new Map()
+  for (const group of counties.values()) {
+    const key = `${group.state}:${group.county}`
+    if (!byCounty.has(key)) byCounty.set(key, group)
+  }
+
+  const rows = new Map()
+  for (const group of byCounty.values()) {
     const url = new URL(ACS_BASE)
     url.searchParams.set('get', `NAME,${Object.keys(VARIABLES).join(',')}`)
-    url.searchParams.set('for', `tract:${tract.tract}`)
-    url.searchParams.set('in', `state:${tract.state} county:${tract.county}`)
+    url.searchParams.set('for', 'block group:*')
+    url.searchParams.set('in', `state:${group.state} county:${group.county} tract:*`)
     if (env.CENSUS_API_KEY) url.searchParams.set('key', env.CENSUS_API_KEY)
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeout)
-    let rows
-    try {
-      const response = await fetchImpl(url.toString(), { signal: controller.signal })
-      if (!response.ok) throw new Error(`ACS HTTP ${response.status}`)
-      rows = await response.json()
-    } finally {
-      clearTimeout(timer)
+    const table = await withTimeout(fetchImpl, url.toString(), timeout, 'ACS')
+    if (!Array.isArray(table) || table.length < 2) continue
+
+    const [header, ...body] = table
+    for (const values of body) {
+      const record = {}
+      header.forEach((column, index) => {
+        const field = VARIABLES[column]
+        if (field) record[field] = toNumber(values[index])
+      })
+      const state = values[header.indexOf('state')]
+      const county = values[header.indexOf('county')]
+      const tract = values[header.indexOf('tract')]
+      const blockGroup = values[header.indexOf('block group')]
+      rows.set(`${state}${county}${tract}${blockGroup}`, { ...record, name: values[0] })
+    }
+  }
+  return rows
+}
+
+/** A coordinate from TIGERweb, rejecting blanks rather than reading them as 0. */
+function coordinate(value) {
+  if (value == null) return null
+  const text = String(value).trim()
+  if (text === '') return null
+  const parsed = Number(text)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+/** The ACS marks suppressed values with large negative sentinels. */
+function toNumber(value) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed) || parsed <= -1e6) return null
+  return parsed
+}
+
+/**
+ * Combines block-group records into one set of ring figures.
+ *
+ * Counts add. Medians cannot, so they are weighted by population and reported
+ * as approximate. Shares are computed from the summed counts rather than by
+ * averaging percentages, which would over-weight small block groups.
+ */
+export function aggregate(records) {
+  const totals = Object.fromEntries(SUMMABLE.map((key) => [key, 0]))
+  const weighted = Object.fromEntries(WEIGHTED.map((key) => [key, { sum: 0, weight: 0 }]))
+  let counted = 0
+
+  for (const record of records) {
+    if (!record) continue
+    counted += 1
+    for (const key of SUMMABLE) {
+      if (Number.isFinite(record[key])) totals[key] += record[key]
+    }
+    const weight = Number.isFinite(record.population) ? record.population : 0
+    for (const key of WEIGHTED) {
+      if (Number.isFinite(record[key]) && weight > 0) {
+        weighted[key].sum += record[key] * weight
+        weighted[key].weight += weight
+      }
+    }
+  }
+
+  const metrics = {
+    population: totals.population,
+    households: totals.households,
+  }
+
+  for (const key of WEIGHTED) {
+    const { sum, weight } = weighted[key]
+    metrics[key] = weight > 0 ? Math.round((sum / weight) * 10) / 10 : null
+  }
+
+  metrics.renterShare = share(totals.renterOccupied, totals.occupiedUnits)
+  metrics.educationShare = share(
+    totals.bachelors + totals.masters + totals.professional + totals.doctorate,
+    totals.educationUniverse,
+  )
+
+  return { metrics, blockGroups: counted }
+}
+
+function share(part, whole) {
+  if (!Number.isFinite(part) || !Number.isFinite(whole) || whole <= 0) return null
+  return Math.round((part / whole) * 1000) / 10
+}
+
+/**
+ * Ring figures for a point, plus the block groups behind them.
+ *
+ * @returns {Promise<{source: string, radii: Array, areas: Array}>}
+ * @throws {DemographicsUnavailable} when the upstream services cannot be reached
+ */
+export async function demographicsFor(
+  lat,
+  lng,
+  { env = {}, fetchImpl = fetch, timeout = 12000, radii = RADII, includeGeometry = true } = {},
+) {
+  if (lat == null || lng == null) throw new DemographicsUnavailable('This property has no location yet.')
+
+  const widest = Math.max(...radii)
+
+  try {
+    const groups = await fetchBlockGroups(lat, lng, widest, { fetchImpl, timeout })
+    if (groups.length === 0) {
+      throw new Error('no census block groups cover that point')
     }
 
-    const [header, values] = rows
-    const metrics = {}
-    header.forEach((column, index) => {
-      const field = VARIABLES[column]
-      if (!field) return
-      const parsed = Number(values[index])
-      // The ACS uses large negative sentinels for suppressed values.
-      metrics[field] = Number.isFinite(parsed) && parsed > -1e6 ? parsed : null
+    const acs = await fetchAcs(groups, { fetchImpl, timeout, env })
+
+    const areas = groups.map((group) => ({
+      geoid: group.geoid,
+      lat: group.lat,
+      lng: group.lng,
+      miles: Math.round(group.miles * 100) / 100,
+      metrics: acs.get(group.geoid) ?? null,
+      geometry: includeGeometry ? group.geometry : null,
+    }))
+
+    const rings = radii.map((miles) => {
+      const inside = areas.filter((area) => area.miles <= miles && area.metrics)
+      const { metrics, blockGroups } = aggregate(inside.map((area) => area.metrics))
+      return { miles, metrics, blockGroups }
     })
 
-    return { source: 'US Census ACS 5-year (2022)', area: values[0], metrics }
+    return { source: ACS_VINTAGE, radii: rings, areas }
   } catch (error) {
     throw new DemographicsUnavailable(
       `Census data could not be retrieved (${error.message}). Set CENSUS_API_KEY or check this server's outbound network access.`,

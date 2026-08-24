@@ -7,7 +7,8 @@ import ShareSettings from '../components/ShareSettings'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
-import type { AppFeatures, CompetitionResult, DealStage, Property, Survey, TourPlan } from '../types'
+import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property, Survey, TourPlan } from '../types'
+import { colorFor } from '../components/DemographicsPanel'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 
@@ -33,6 +34,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
   const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
+  const [demoView, setDemoView] = useState<{
+    data: Demographics | null
+    colorBy: string
+    radius: number
+  } | null>(null)
   const [competition, setCompetition] = useState<(CompetitionResult & { center: { lat: number; lng: number } }) | null>(null)
 
   useEffect(() => {
@@ -63,6 +69,31 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     if (hidden.size === 0) return properties
     return properties.filter((property) => !property.stageId || !hidden.has(property.stageId))
   }, [properties, stages])
+
+  /**
+   * Block groups paired with the colour they should be drawn in.
+   *
+   * The scale spans only the groups inside the selected ring — scaling against
+   * the whole five-mile pull would flatten a one-mile view into a single band.
+   */
+  const choropleth = useMemo(() => {
+    const view = demoView
+    if (!view?.data) return null
+
+    const inside = view.data.areas.filter((area) => area.miles <= view.radius && area.geometry)
+    const values = inside
+      .map((area) => area.metrics?.[view.colorBy])
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (values.length === 0) return null
+
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    return inside.map((area) => ({
+      geoid: area.geoid,
+      geometry: area.geometry,
+      color: colorFor(area.metrics?.[view.colorBy], min, max),
+    }))
+  }, [demoView])
 
   const upsert = useCallback((property: Property) => {
     setProperties((current) => {
@@ -156,6 +187,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       onDelete={(propertyId) => void remove(propertyId)}
       onClose={() => setSelectedId(null)}
       onCompetition={setCompetition}
+      onDemographics={setDemoView}
     />
   ) : (
     <StageSidebar
@@ -267,6 +299,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                   onDelete={(propertyId) => void remove(propertyId)}
                   onClose={() => setSelectedId(null)}
                   onCompetition={setCompetition}
+      onDemographics={setDemoView}
                 />
               </div>
             )}
@@ -293,6 +326,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 basemaps={features.basemaps}
                 routeIds={tourOrder}
                 routeGeometry={tourPlan?.geometry ?? null}
+                choropleth={choropleth}
                 routeColor={survey.brandColor}
                 fitKey={`tour-${properties.length}`}
               />

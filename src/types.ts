@@ -133,10 +133,33 @@ export interface GeocodeResult {
   zip: string | null
 }
 
+export interface RingMetrics {
+  miles: number
+  metrics: Record<string, number | null>
+  blockGroups: number
+}
+
+/** One census block group: the unit the choropleth colours. */
+export interface DemographicArea {
+  geoid: string
+  lat: number
+  lng: number
+  miles: number
+  metrics: Record<string, number | null> | null
+  geometry: unknown | null
+}
+
 export interface Demographics {
   source: string
-  area: string
-  metrics: Record<string, number | null>
+  radii: RingMetrics[]
+  areas: DemographicArea[]
+}
+
+export interface MetricDefinition {
+  key: string
+  label: string
+  format: 'count' | 'money' | 'percent' | 'decimal'
+  approximate?: boolean
 }
 
 export interface TileConfig {

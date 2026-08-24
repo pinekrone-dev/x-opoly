@@ -4,6 +4,7 @@ import type { CompetitionResult, CustomField, Demographics, Property, Stage } fr
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 import CompetitionPanel from './CompetitionPanel'
 import CustomFields from './CustomFields'
+import DemographicsPanel from './DemographicsPanel'
 import { StageSelect } from './StageBadge'
 
 interface Props {
@@ -13,6 +14,8 @@ interface Props {
   onDelete?: (id: string) => void
   onClose?: () => void
   onCompetition?: (result: (CompetitionResult & { center: { lat: number; lng: number } }) | null) => void
+  /** Fires when there are figures to shade the map with, or the view changes. */
+  onDemographics?: (view: { data: Demographics | null; colorBy: string; radius: number } | null) => void
 }
 
 type Tab = 'details' | 'flyer' | 'demographics' | 'competition'
@@ -37,7 +40,15 @@ const EDITABLE: { key: keyof Property; label: string; type?: string; suffix?: st
   { key: 'brokerPhone', label: 'Broker phone' },
 ]
 
-export default function PropertyPanel({ property, readOnly = false, onChange, onDelete, onClose, onCompetition }: Props) {
+export default function PropertyPanel({
+  property,
+  readOnly = false,
+  onChange,
+  onDelete,
+  onClose,
+  onCompetition,
+  onDemographics,
+}: Props) {
   const [tab, setTab] = useState<Tab>('details')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Partial<Property>>({})
@@ -45,6 +56,8 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
   const [demographics, setDemographics] = useState<Demographics | null>(null)
   const [demoError, setDemoError] = useState<string | null>(null)
   const [demoLoading, setDemoLoading] = useState(false)
+  const [colorBy, setColorBy] = useState('population')
+  const [radius, setRadius] = useState(3)
   const photoInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -53,6 +66,7 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
     setFields(property.fields ?? [])
     setDemographics(null)
     setDemoError(null)
+    onDemographics?.(null)
     setTab('details')
   }, [property.id])
 
@@ -84,7 +98,9 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
     setDemoLoading(true)
     setDemoError(null)
     try {
-      setDemographics(await api.demographics(property.lat, property.lng))
+      const data = await api.demographics(property.lat, property.lng)
+      setDemographics(data)
+      onDemographics?.({ data, colorBy, radius })
     } catch (error) {
       setDemoError(error instanceof Error ? error.message : 'Could not load demographics.')
     } finally {
@@ -343,24 +359,20 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
             )}
 
             {demographics && (
-              <>
-                <dl className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: 'Population', value: count(demographics.metrics.population) },
-                    { label: 'Median income', value: demographics.metrics.medianHouseholdIncome == null ? '—' : money(demographics.metrics.medianHouseholdIncome, 0) },
-                    { label: 'Median age', value: demographics.metrics.medianAge?.toFixed(1) ?? '—' },
-                    { label: 'Median home value', value: demographics.metrics.medianHomeValue == null ? '—' : money(demographics.metrics.medianHomeValue, 0) },
-                  ].map((metric) => (
-                    <div key={metric.label} className="stat">
-                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{metric.label}</dt>
-                      <dd className="mt-0.5 text-sm font-semibold text-slate-100">{metric.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-                <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-                  {demographics.area} — {demographics.source}
-                </p>
-              </>
+              <DemographicsPanel
+                property={property}
+                data={demographics}
+                colorBy={colorBy}
+                onColorBy={(key) => {
+                  setColorBy(key)
+                  onDemographics?.({ data: demographics, colorBy: key, radius })
+                }}
+                activeRadius={radius}
+                onRadius={(miles) => {
+                  setRadius(miles)
+                  onDemographics?.({ data: demographics, colorBy, radius: miles })
+                }}
+              />
             )}
           </div>
         )}

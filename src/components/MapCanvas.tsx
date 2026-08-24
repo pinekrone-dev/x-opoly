@@ -20,6 +20,11 @@ interface Props {
    */
   routeGeometry?: [number, number][] | null
   routeColor?: string
+  /**
+   * Census block groups shaded by a metric. Each entry carries its own colour,
+   * already resolved, so the map does not need to know what is being shown.
+   */
+  choropleth?: { geoid: string; geometry: unknown; color: string | null }[] | null
   /** Rings drawn around a point, in miles. */
   rings?: { lat: number; lng: number; miles: number[] } | null
   /** Nearby businesses plotted as small secondary markers. */
@@ -64,6 +69,7 @@ export default function MapCanvas({
   routeIds,
   routeGeometry,
   routeColor = '#14b8a6',
+  choropleth = null,
   rings = null,
   competitors,
   fitKey,
@@ -79,6 +85,7 @@ export default function MapCanvas({
   const active = options?.find((entry) => entry.provider === activeId) || tiles
   const markers = useRef<Map<string, L.Marker>>(new Map())
   const route = useRef<L.Polyline | null>(null)
+  const shading = useRef<L.LayerGroup | null>(null)
   const ringLayer = useRef<L.LayerGroup | null>(null)
   const competitorLayer = useRef<L.LayerGroup | null>(null)
   const clickHandler = useRef(onMapClick)
@@ -193,6 +200,39 @@ export default function MapCanvas({
       }).addTo(instance)
     }
   }, [routeIds, routeGeometry, properties, routeColor])
+
+  // Shade census block groups by whichever metric is selected.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    shading.current?.remove()
+    shading.current = null
+    if (!choropleth || choropleth.length === 0) return
+
+    const group = L.layerGroup()
+    for (const area of choropleth) {
+      if (!area.geometry || !area.color) continue
+      L.geoJSON(area.geometry as never, {
+        style: {
+          color: area.color,
+          weight: 1,
+          opacity: 0.6,
+          fillColor: area.color,
+          // Kept translucent so the streets underneath stay legible — the
+          // shading is context for the map, not a replacement for it.
+          fillOpacity: 0.45,
+        },
+        interactive: false,
+      }).addTo(group)
+    }
+    group.addTo(instance)
+    // Behind the pins and the route, which must stay readable on top of it.
+    group.eachLayer((layer) => {
+      if ('bringToBack' in layer) (layer as L.Polygon).bringToBack()
+    })
+    shading.current = group
+  }, [choropleth])
 
   // Radius rings around the site being scoped.
   useEffect(() => {
