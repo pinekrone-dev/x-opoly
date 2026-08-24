@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict'
-import test, { after, before, describe } from 'node:test'
+import test, { before, describe } from 'node:test'
 
-import { useTempData } from './helpers.js'
+import { DatabaseSync } from 'node:sqlite'
 
-const temp = useTempData()
-const { resetDb } = await import('../server/lib/db.js')
-const {
+import { nodeAdapter } from '../app/lib/sql.js'
+import {
   createProperty,
   createSurvey,
   deleteSurvey,
@@ -15,21 +14,19 @@ const {
   setTourOrder,
   updateProperty,
   updateShare,
-} = await import('../server/lib/surveys.js')
+} from '../app/lib/surveys.js'
 
+let db
 let survey
 
-before(() => {
-  survey = createSurvey({ name: 'Dental offices — north Austin', clientName: 'Dr. Reyes', brokerName: 'Sam Ortiz' })
-})
-
-after(() => {
-  resetDb()
-  temp.cleanup()
+before(async () => {
+  db = nodeAdapter(new DatabaseSync(':memory:'))
+  await db.migrate()
+  survey = await createSurvey(db, { name: 'Dental offices — north Austin', clientName: 'Dr. Reyes', brokerName: 'Sam Ortiz' })
 })
 
 describe('surveys', () => {
-  test('creates a survey with a share token that starts switched off', () => {
+  test('creates a survey with a share token that starts switched off', async () => {
     assert.equal(survey.name, 'Dental offices — north Austin')
     assert.equal(survey.clientName, 'Dr. Reyes')
     assert.equal(survey.share.token.length, 32)
@@ -37,16 +34,16 @@ describe('surveys', () => {
     assert.equal(survey.brandColor, '#14b8a6')
   })
 
-  test('lists surveys with a live pin count', () => {
-    createProperty(survey.id, { name: 'Parmer Business Park', lat: 30.45, lng: -97.7 })
-    const found = listSurveys().find((entry) => entry.id === survey.id)
+  test('lists surveys with a live pin count', async () => {
+    await createProperty(db, survey.id, { name: 'Parmer Business Park', lat: 30.45, lng: -97.7 })
+    const found = (await listSurveys(db)).find((entry) => entry.id === survey.id)
     assert.equal(found.pinCount, 1)
   })
 })
 
 describe('properties', () => {
-  test('stores the fields a broker records', () => {
-    const property = createProperty(survey.id, {
+  test('stores the fields a broker records', async () => {
+    const property = await createProperty(db, survey.id, {
       name: 'Round Rock Retail',
       address: '2100 N Mays St',
       city: 'Round Rock',
@@ -69,78 +66,78 @@ describe('properties', () => {
     assert.equal(property.yearBuilt, 1981)
   })
 
-  test('rejects an unknown stage instead of storing it', () => {
-    const property = createProperty(survey.id, { name: 'Bad stage', stage: 'closed-won' })
+  test('rejects an unknown stage instead of storing it', async () => {
+    const property = await createProperty(db, survey.id, { name: 'Bad stage', stage: 'closed-won' })
     assert.equal(property.stage, 'prospect')
   })
 
-  test('discards out-of-range coordinates rather than placing a wrong pin', () => {
-    const property = createProperty(survey.id, { name: 'Bad geo', lat: 999, lng: -97.7 })
+  test('discards out-of-range coordinates rather than placing a wrong pin', async () => {
+    const property = await createProperty(db, survey.id, { name: 'Bad geo', lat: 999, lng: -97.7 })
     assert.equal(property.lat, null)
   })
 
-  test('updates only the fields supplied', () => {
-    const property = createProperty(survey.id, { name: 'Keep me', notes: 'Original note', sizeSqft: 1000 })
-    const updated = updateProperty(property.id, { stage: 'loi' })
+  test('updates only the fields supplied', async () => {
+    const property = await createProperty(db, survey.id, { name: 'Keep me', notes: 'Original note', sizeSqft: 1000 })
+    const updated = await updateProperty(db, property.id, { stage: 'loi' })
     assert.equal(updated.stage, 'loi')
     assert.equal(updated.notes, 'Original note')
     assert.equal(updated.sizeSqft, 1000)
   })
 
-  test('tour order survives a reorder and sorts the list', () => {
-    const own = createSurvey({ name: 'Ordering' })
-    const a = createProperty(own.id, { name: 'A', lat: 30.1, lng: -97.1 })
-    const b = createProperty(own.id, { name: 'B', lat: 30.2, lng: -97.2 })
-    const c = createProperty(own.id, { name: 'C', lat: 30.3, lng: -97.3 })
+  test('tour order survives a reorder and sorts the list', async () => {
+    const own = await createSurvey(db, { name: 'Ordering' })
+    const a = await createProperty(db, own.id, { name: 'A', lat: 30.1, lng: -97.1 })
+    const b = await createProperty(db, own.id, { name: 'B', lat: 30.2, lng: -97.2 })
+    const c = await createProperty(db, own.id, { name: 'C', lat: 30.3, lng: -97.3 })
 
-    setTourOrder(own.id, [c.id, a.id, b.id])
-    assert.deepEqual(listProperties(own.id).map((property) => property.name), ['C', 'A', 'B'])
+    await setTourOrder(db, own.id, [c.id, a.id, b.id])
+    assert.deepEqual((await listProperties(db, own.id)).map((property) => property.name), ['C', 'A', 'B'])
   })
 
-  test('deleting a survey takes its properties with it', () => {
-    const doomed = createSurvey({ name: 'Doomed' })
-    createProperty(doomed.id, { name: 'Child' })
-    deleteSurvey(doomed.id)
-    assert.equal(listProperties(doomed.id).length, 0)
+  test('deleting a survey takes its properties with it', async () => {
+    const doomed = await createSurvey(db, { name: 'Doomed' })
+    await createProperty(db, doomed.id, { name: 'Child' })
+    await deleteSurvey(db, doomed.id)
+    assert.equal((await listProperties(db, doomed.id)).length, 0)
   })
 })
 
 describe('client sharing', () => {
-  test('a link does not open until sharing is switched on', () => {
-    assert.equal(resolveShare(survey.share.token).ok, false)
-    assert.equal(resolveShare(survey.share.token).reason, 'disabled')
+  test('a link does not open until sharing is switched on', async () => {
+    assert.equal((await resolveShare(db, survey.share.token)).ok, false)
+    assert.equal((await resolveShare(db, survey.share.token)).reason, 'disabled')
 
-    updateShare(survey.id, { enabled: true })
-    assert.equal(resolveShare(survey.share.token).ok, true)
+    await updateShare(db, survey.id, { enabled: true })
+    assert.equal((await resolveShare(db, survey.share.token)).ok, true)
   })
 
-  test('an unknown token is reported as not found', () => {
-    assert.equal(resolveShare('nope').reason, 'not_found')
+  test('an unknown token is reported as not found', async () => {
+    assert.equal((await resolveShare(db, 'nope')).reason, 'not_found')
   })
 
-  test('an expired link stops opening', () => {
-    const expiring = createSurvey({ name: 'Expiring' })
-    updateShare(expiring.id, { enabled: true, expiresAt: '2020-01-01' })
-    assert.equal(resolveShare(expiring.share.token).reason, 'expired')
+  test('an expired link stops opening', async () => {
+    const expiring = await createSurvey(db, { name: 'Expiring' })
+    await updateShare(db, expiring.id, { enabled: true, expiresAt: '2020-01-01' })
+    assert.equal((await resolveShare(db, expiring.share.token)).reason, 'expired')
   })
 
-  test('regenerating the link breaks the old one', () => {
-    const rotating = createSurvey({ name: 'Rotating' })
-    updateShare(rotating.id, { enabled: true })
+  test('regenerating the link breaks the old one', async () => {
+    const rotating = await createSurvey(db, { name: 'Rotating' })
+    await updateShare(db, rotating.id, { enabled: true })
     const oldToken = rotating.share.token
 
-    const rotated = updateShare(rotating.id, { regenerate: true })
+    const rotated = await updateShare(db, rotating.id, { regenerate: true })
     assert.notEqual(rotated.share.token, oldToken)
-    assert.equal(resolveShare(oldToken).reason, 'not_found')
-    assert.equal(resolveShare(rotated.share.token).ok, true)
+    assert.equal((await resolveShare(db, oldToken)).reason, 'not_found')
+    assert.equal((await resolveShare(db, rotated.share.token)).ok, true)
   })
 
-  test('the client payload carries no private notes and no internal ids', () => {
-    const shared = createSurvey({ name: 'Shared', clientName: 'Client' })
-    createProperty(shared.id, { name: 'Site', lat: 30.1, lng: -97.1, notes: 'Landlord is desperate — push on TI' })
-    updateShare(shared.id, { enabled: true })
+  test('the client payload carries no private notes and no internal ids', async () => {
+    const shared = await createSurvey(db, { name: 'Shared', clientName: 'Client' })
+    await createProperty(db, shared.id, { name: 'Site', lat: 30.1, lng: -97.1, notes: 'Landlord is desperate — push on TI' })
+    await updateShare(db, shared.id, { enabled: true })
 
-    const result = resolveShare(shared.share.token)
+    const result = await resolveShare(db, shared.share.token)
     assert.equal(result.ok, true)
     assert.equal(result.properties.length, 1)
     assert.ok(!('notes' in result.properties[0]), 'private notes are withheld')

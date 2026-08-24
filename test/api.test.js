@@ -1,31 +1,34 @@
 import assert from 'node:assert/strict'
 import test, { after, before, describe } from 'node:test'
 
+import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
 
+/**
+ * The Node runtime, exercised through the same routes the Worker runs.
+ * `worker.test.js` runs this same API over D1 and R2 instead.
+ */
 const temp = useTempData()
-const { resetDb } = await import('../server/lib/db.js')
-const { createServer } = await import('../server/index.js')
+let app
 
-let server
-let base
+const BASE = 'http://localhost'
 
 before(async () => {
-  server = createServer().listen(0, '127.0.0.1')
-  await new Promise((resolve) => server.once('listening', resolve))
-  base = `http://127.0.0.1:${server.address().port}`
+  app = await createServer({ DATA_DIR: temp.directory, DB_FILE: `${temp.directory}/test.db` })
 })
 
-after(() => {
-  server.close()
-  resetDb()
-  temp.cleanup()
-})
+after(() => temp.cleanup())
 
-async function call(path, options) {
-  const response = await fetch(base + path, options)
-  const body = response.status === 204 ? null : await response.json().catch(() => null)
-  return { status: response.status, body }
+async function call(path, init) {
+  const response = await app.fetch(new Request(BASE + path, init))
+  const text = await response.text()
+  let body = null
+  try {
+    body = text ? JSON.parse(text) : null
+  } catch {
+    body = text
+  }
+  return { status: response.status, body, response }
 }
 
 const asJson = (payload, method = 'POST') => ({
@@ -34,17 +37,17 @@ const asJson = (payload, method = 'POST') => ({
   body: JSON.stringify(payload),
 })
 
-describe('http api', () => {
-  test('reports which optional features are configured', async () => {
+describe('http api on node', () => {
+  test('reports the runtime and which optional features are configured', async () => {
     const { body } = await call('/api/health')
     assert.equal(body.ok, true)
+    assert.equal(body.runtime, 'node')
     assert.equal(typeof body.features.flyerExtraction, 'boolean')
     assert.ok(body.stages.some((stage) => stage.id === 'under_contract'))
   })
 
   test('refuses a survey with no name', async () => {
-    const { status } = await call('/api/surveys', asJson({ name: '  ' }))
-    assert.equal(status, 400)
+    assert.equal((await call('/api/surveys', asJson({ name: '  ' }))).status, 400)
   })
 
   test('runs a full survey through to a client link', async () => {
@@ -57,12 +60,10 @@ describe('http api', () => {
       { name: 'Riverside', lat: 30.24, lng: -97.72 },
       { name: 'Burnet Rd', lat: 30.35, lng: -97.74, stage: 'loi' },
     ]) {
-      const added = await call(`/api/surveys/${surveyId}/properties`, asJson(property))
-      assert.equal(added.status, 201)
+      assert.equal((await call(`/api/surveys/${surveyId}/properties`, asJson(property))).status, 201)
     }
 
-    const loaded = await call(`/api/surveys/${surveyId}`)
-    assert.equal(loaded.body.properties.length, 3)
+    assert.equal((await call(`/api/surveys/${surveyId}`)).body.properties.length, 3)
 
     const tour = await call(`/api/surveys/${surveyId}/tour`, asJson({}))
     assert.equal(tour.body.stops.length, 3)
@@ -92,33 +93,34 @@ describe('http api', () => {
     const created = await call('/api/surveys', asJson({ name: 'Flyer intake' }))
     const surveyId = created.body.survey.id
 
-    const response = await fetch(`${base}/api/surveys/${surveyId}/flyer`, {
+    const upload = await call(`/api/surveys/${surveyId}/flyer`, {
       method: 'POST',
       headers: { 'content-type': 'application/pdf', 'x-filename': 'parmer-flyer.pdf' },
-      body: Buffer.from('%PDF-1.4 not a real flyer'),
+      body: new Uint8Array([37, 80, 68, 70]),
     })
-    const body = await response.json()
 
-    // No API key in the test environment, so extraction declines — but the
-    // upload must not be lost.
-    assert.equal(response.status, 422)
-    assert.match(body.error, /API key|by hand/)
-    assert.ok(body.property, 'a stub record is still created')
-    assert.equal(body.property.flyerName, 'parmer-flyer.pdf')
-    assert.ok(body.property.flyerUrl, 'the file stays downloadable')
+    assert.equal(upload.status, 422)
+    assert.match(upload.body.error, /API key|by hand/)
+    assert.ok(upload.body.property, 'a stub record is still created')
+    assert.equal(upload.body.property.flyerName, 'parmer-flyer.pdf')
 
-    const file = await fetch(base + body.property.flyerUrl)
-    assert.equal(file.status, 200)
+    const file = await call(upload.body.property.flyerUrl)
+    assert.equal(file.status, 200, 'the file is served back off disk')
   })
 
   test('rejects a file path that tries to climb out of the uploads directory', async () => {
     assert.equal((await call('/api/files/..%2F..%2Fetc%2Fpasswd')).status, 400)
   })
 
+  test('serves placeholder tiles and rejects nonsense coordinates', async () => {
+    const tile = await call('/api/tiles/11/472/838.svg')
+    assert.equal(tile.status, 200)
+    assert.match(tile.response.headers.get('content-type'), /svg/)
+    assert.equal((await call('/api/tiles/99/1/1.svg')).status, 400)
+  })
+
   test('reports an unreachable geocoder as a service error, not a crash', async () => {
     const { status, body } = await call('/api/geocode?q=austin+texas')
-    // This environment blocks the geocoder; either outcome is valid, but it
-    // must always be a clean answer.
     assert.ok(status === 200 || status === 503, `unexpected status ${status}`)
     if (status === 503) assert.match(body.error, /not allowed to reach|unreachable|timed out|rate limiting/)
   })

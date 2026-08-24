@@ -13,11 +13,52 @@ npm run dev      # API on :8080, UI on :5173 with /api proxied
 
 ```bash
 npm run build && npm start   # one process serving the API and the built UI on $PORT
-npm test                     # 68 tests, no network required
+npm test                     # 83 tests, no network required
 ```
 
-Data lives in `./data` — a SQLite file plus the uploaded flyers and photos. Point
-`DATA_DIR` somewhere persistent before deploying.
+Locally, data lives in `./data` — a SQLite file plus the uploaded flyers and photos.
+
+## Deploying to Cloudflare
+
+The API is written once with Hono and runs unchanged in both places. Only the plumbing
+differs: `node:sqlite` and a directory locally, D1 and R2 on Cloudflare.
+
+```
+app/routes.js         the API — one definition, both runtimes
+app/lib/sql.js        node:sqlite adapter | D1 adapter
+app/lib/storage.js    disk adapter        | R2 adapter
+server/index.js       Node entry point
+worker/index.js       Cloudflare entry point
+```
+
+D1 is SQLite, so the schema is identical — `migrations/0001_init.sql` is generated from
+`app/lib/schema.js` by `npm run migrations`, so the two cannot drift.
+
+```bash
+# 1. Create the database and the bucket
+npx wrangler d1 create sitesurvey-cre
+npx wrangler r2 bucket create sitesurvey-cre-uploads
+
+# 2. Paste the returned database_id into wrangler.toml
+
+# 3. Create the tables
+npm run cf:migrate
+
+# 4. Secrets — never in wrangler.toml, which is in git
+npx wrangler secret put ANTHROPIC_API_KEY     # for reading flyers
+npx wrangler secret put TILE_KEY              # only for a keyed basemap
+
+# 5. Ship
+npm run deploy
+```
+
+`npm run deploy` builds the UI and uploads it as static assets alongside the Worker, with
+`not_found_handling = "single-page-application"` so deep links like `/survey/:id` and
+`/s/:token` resolve instead of 404ing.
+
+**GitHub Pages cannot host this.** It serves static files only, and this needs a database,
+file storage, and a server-side API key. GitHub is the right home for the code and CI; the
+running app needs Cloudflare or another host that runs code.
 
 ## What it does
 
@@ -68,7 +109,10 @@ parts that need an outside service.
 | `GEOCODER_URL`, `GEOCODER_KEY` | Address search. Defaults to Nominatim, which needs no key. |
 | `OVERPASS_URL` | Business directory for competition scoping. Defaults to the public Overpass API. |
 | `CENSUS_API_KEY` | Raises the rate limit on trade-area demographics (US Census ACS, free and keyless for light use). |
-| `DATA_DIR`, `DB_FILE`, `PORT` | Where data lives and which port to serve. |
+| `DATA_DIR`, `DB_FILE`, `PORT` | Node only: where data lives and which port to serve. |
+
+On Cloudflare these come from bindings and secrets rather than the environment — `DB`
+(D1), `BUCKET` (R2) and `ASSETS` in `wrangler.toml`, and `wrangler secret put` for keys.
 
 ### Basemaps
 
@@ -132,7 +176,7 @@ server/
 src/
   views/                survey list, broker workspace, client share view
   components/           map canvas, property panel, table, tour planner, share settings
-test/                   68 tests over storage, sharing, routing, providers and the API
+test/                   83 tests, including the Worker exercised over D1 and R2 shims
 ```
 
 ## Notes on the API

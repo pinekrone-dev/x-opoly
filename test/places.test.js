@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 
-import { CATEGORIES, PlacesUnavailable, buildQuery, nearbyBusinesses, parseElements, summarize } from '../server/lib/places.js'
+import { CATEGORIES, PlacesUnavailable, buildQuery, nearbyBusinesses, parseElements, summarize } from '../app/lib/places.js'
 
 const ORIGIN = { lat: 30.4014, lng: -97.7128 }
 

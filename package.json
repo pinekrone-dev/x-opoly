@@ -14,13 +14,17 @@
     "build": "tsc -b && vite build",
     "preview": "npm run build && npm start",
     "start": "node server/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "migrations": "node --input-type=module -e \"import('./app/lib/schema.js').then(async (m)=>{const fs=await import('node:fs');fs.writeFileSync('migrations/0001_init.sql','-- Generated from app/lib/schema.js — edit that file, then re-run: npm run migrations\\n\\n'+m.SCHEMA_STATEMENTS.map(s=>s.trim()+';').join('\\n\\n')+'\\n')})\"",
+    "deploy": "npm run build && wrangler deploy",
+    "cf:migrate": "wrangler d1 migrations apply sitesurvey-cre --remote"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.120.0",
+    "@hono/node-server": "^2.1.1",
     "cheerio": "^1.0.0",
     "d3-hierarchy": "^3.1.2",
-    "express": "^4.21.2",
+    "hono": "^4.13.4",
     "leaflet": "^1.9.4",
     "zod": "^4.4.3"
   },

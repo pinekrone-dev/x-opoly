@@ -15,8 +15,9 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
+import { toBase64 } from './storage.js'
 
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-5'
+const DEFAULT_MODEL = 'claude-opus-5'
 const MAX_BYTES = 10 * 1024 * 1024
 
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -60,13 +61,14 @@ Rules:
 - Put the street address in address, and keep city, state and zip in their own fields.
 - List any field you were unsure about in uncertainFields so the broker can check it.`
 
-/** True when the server has credentials to call the API. */
-export function isConfigured() {
-  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)
+/** True when this deployment has credentials to call the API. */
+export function isConfigured(env = {}) {
+  return Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN)
 }
 
-function contentBlockFor(buffer, mimeType) {
-  const data = buffer.toString('base64')
+function contentBlockFor(bytes, mimeType) {
+  // Base64 without Buffer, so this runs unchanged on Workers.
+  const data = toBase64(bytes)
 
   if (mimeType === 'application/pdf') {
     return { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
@@ -85,13 +87,14 @@ function contentBlockFor(buffer, mimeType) {
  * @param {object} [deps]     `client` is injectable for tests
  * @returns {Promise<{ fields: object, model: string }>}
  */
-export async function extractFromFlyer(buffer, mimeType, { client } = {}) {
-  if (!buffer?.length) throw new FlyerExtractionError('The uploaded file was empty.')
-  if (buffer.length > MAX_BYTES) {
-    throw new FlyerExtractionError(`That file is ${(buffer.length / 1e6).toFixed(1)} MB. Flyers must be under 10 MB.`)
+export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {}) {
+  if (!bytes?.length) throw new FlyerExtractionError('The uploaded file was empty.')
+  if (bytes.length > MAX_BYTES) {
+    throw new FlyerExtractionError(`That file is ${(bytes.length / 1e6).toFixed(1)} MB. Flyers must be under 10 MB.`)
   }
 
-  const anthropic = client || (isConfigured() ? new Anthropic() : null)
+  const anthropic =
+    client || (isConfigured(env) ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, authToken: env.ANTHROPIC_AUTH_TOKEN }) : null)
   if (!anthropic) {
     throw new FlyerExtractionError(
       'Reading flyers automatically needs an Anthropic API key. Set ANTHROPIC_API_KEY on the server, or enter the details by hand.',
@@ -99,11 +102,11 @@ export async function extractFromFlyer(buffer, mimeType, { client } = {}) {
     )
   }
 
-  const block = contentBlockFor(buffer, mimeType)
+  const block = contentBlockFor(bytes, mimeType)
 
   try {
     const response = await anthropic.messages.parse({
-      model: MODEL,
+      model: env.ANTHROPIC_MODEL || DEFAULT_MODEL,
       max_tokens: 16000,
       system: SYSTEM_PROMPT,
       output_config: {

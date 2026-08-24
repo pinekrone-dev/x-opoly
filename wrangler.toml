@@ -1,0 +1,31 @@
+name = "sitesurvey-cre"
+main = "worker/index.js"
+compatibility_date = "2026-06-01"
+
+# The built frontend. `single-page-application` makes deep links such as
+# /survey/:id and /s/:token resolve to index.html instead of a 404.
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Created with:  npx wrangler d1 create sitesurvey-cre
+# Paste the returned database_id here.
+[[d1_databases]]
+binding = "DB"
+database_name = "sitesurvey-cre"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+# Created with:  npx wrangler r2 bucket create sitesurvey-cre-uploads
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "sitesurvey-cre-uploads"
+
+[vars]
+# Basemap: any of osm, carto-voyager, carto-light, carto-dark.
+TILE_PROVIDER = "osm"
+
+# Secrets are NOT set here — they would end up in git. Use:
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put TILE_KEY          (only for a keyed basemap)

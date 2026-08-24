@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 
-import { DEFAULT_PROVIDER, TILE_PRESETS, availableBasemaps, placeholderTile, resolveTiles } from '../server/lib/tiles.js'
+import { DEFAULT_PROVIDER, TILE_PRESETS, availableBasemaps, placeholderTile, resolveTiles } from '../app/lib/tiles.js'
 
 describe('basemap selection', () => {
   test('defaults to a keyless basemap with real streets', () => {

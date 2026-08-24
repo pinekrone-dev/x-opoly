@@ -39,17 +39,17 @@ function parseNominatim(results) {
  * @param {string} query free-text address
  * @returns {Promise<Array>} candidate locations, best first
  */
-export async function geocode(query, { fetchImpl = fetch, timeout = 10000, signal } = {}) {
+export async function geocode(query, { env = {}, fetchImpl = fetch, timeout = 10000, signal } = {}) {
   const search = String(query || '').trim()
   if (search.length < 3) throw new GeocodeError('Enter at least three characters to search.')
 
-  const endpoint = process.env.GEOCODER_URL || DEFAULT_ENDPOINT
+  const endpoint = env.GEOCODER_URL || DEFAULT_ENDPOINT
   const url = new URL(endpoint)
   url.searchParams.set('q', search)
   url.searchParams.set('format', 'jsonv2')
   url.searchParams.set('addressdetails', '1')
   url.searchParams.set('limit', '8')
-  if (process.env.GEOCODER_KEY) url.searchParams.set('key', process.env.GEOCODER_KEY)
+  if (env.GEOCODER_KEY) url.searchParams.set('key', env.GEOCODER_KEY)
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
@@ -60,7 +60,7 @@ export async function geocode(query, { fetchImpl = fetch, timeout = 10000, signa
       signal: controller.signal,
       headers: {
         // Nominatim's usage policy requires an identifying User-Agent.
-        'user-agent': process.env.GEOCODER_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
+        'user-agent': env.GEOCODER_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
         accept: 'application/json',
       },
     })

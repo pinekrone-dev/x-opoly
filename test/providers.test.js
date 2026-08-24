@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 
-import { GeocodeError, geocode } from '../server/lib/geocode.js'
-import { extractFromFlyer, toPropertyInput } from '../server/lib/flyer.js'
+import { GeocodeError, geocode } from '../app/lib/geocode.js'
+import { extractFromFlyer, toPropertyInput } from '../app/lib/flyer.js'
 
 /** Minimal stand-in for fetch. */
 function stubFetch(response) {

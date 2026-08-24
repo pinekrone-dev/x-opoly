@@ -54,7 +54,7 @@ async function locateTract(lat, lng, fetchImpl, timeout) {
  * @returns {Promise<{ source: string, area: string, metrics: object }>}
  * @throws {DemographicsUnavailable} when the upstream API cannot be reached
  */
-export async function demographicsFor(lat, lng, { fetchImpl = fetch, timeout = 12000 } = {}) {
+export async function demographicsFor(lat, lng, { env = {}, fetchImpl = fetch, timeout = 12000 } = {}) {
   if (lat == null || lng == null) throw new DemographicsUnavailable('This property has no location yet.')
 
   try {
@@ -64,7 +64,7 @@ export async function demographicsFor(lat, lng, { fetchImpl = fetch, timeout = 1
     url.searchParams.set('get', `NAME,${Object.keys(VARIABLES).join(',')}`)
     url.searchParams.set('for', `tract:${tract.tract}`)
     url.searchParams.set('in', `state:${tract.state} county:${tract.county}`)
-    if (process.env.CENSUS_API_KEY) url.searchParams.set('key', process.env.CENSUS_API_KEY)
+    if (env.CENSUS_API_KEY) url.searchParams.set('key', env.CENSUS_API_KEY)
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeout)

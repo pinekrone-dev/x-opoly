@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 
-import { haversineMiles, legs, planTour, routeLength } from '../server/lib/tour.js'
+import { haversineMiles, legs, planTour, routeLength } from '../app/lib/tour.js'
 
 // Real Austin-area coordinates, deliberately out of geographic order.
 const SITES = [

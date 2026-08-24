@@ -96,7 +96,7 @@ export const TILE_PRESETS = {
  * `TILE_PROVIDER` picks a preset, and a keyed preset with no `TILE_KEY` falls
  * back to OpenStreetMap rather than silently serving broken tiles.
  */
-export function resolveTiles(env = process.env) {
+export function resolveTiles(env = {}) {
   if (env.TILE_URL) {
     return {
       provider: 'custom',
@@ -139,7 +139,7 @@ function toConfig(provider, preset, key, env = {}) {
  * The basemaps a viewer can switch between right now — the keyless ones, plus
  * any keyed provider this deployment actually has a key for.
  */
-export function availableBasemaps(env = process.env) {
+export function availableBasemaps(env = {}) {
   const key = env.TILE_KEY || ''
   const options = []
 

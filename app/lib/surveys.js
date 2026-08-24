@@ -6,7 +6,7 @@
  * deal stages as the broker works them.
  */
 
-import { db, newId, newShareToken, nowIso, toBool } from './db.js'
+import { newId, newShareToken, nowIso, toBool } from './ids.js'
 
 export const STAGES = ['prospect', 'touring', 'loi', 'under_contract', 'passed']
 
@@ -144,25 +144,21 @@ function buildPatch(input, allowed) {
   return { columns, values }
 }
 
-export function listSurveys() {
-  const rows = db()
-    .prepare(
-      `SELECT s.*, (SELECT COUNT(*) FROM properties p WHERE p.survey_id = s.id) AS pin_count
-       FROM surveys s ORDER BY s.updated_at DESC`,
-    )
-    .all()
+export async function listSurveys(db) {
+  const rows = await db.all(
+    `SELECT s.*, (SELECT COUNT(*) FROM properties p WHERE p.survey_id = s.id) AS pin_count
+     FROM surveys s ORDER BY s.updated_at DESC`,
+  )
   return rows.map((row) => ({ ...mapSurvey(row), pinCount: row.pin_count }))
 }
 
-export function createSurvey(input = {}) {
+export async function createSurvey(db, input = {}) {
   const id = newId()
   const timestamp = nowIso()
-  db()
-    .prepare(
-      `INSERT INTO surveys (id, name, client_name, broker_name, company_name, brand_color, center_lat, center_lng, zoom, share_token, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
+  await db.run(
+    `INSERT INTO surveys (id, name, client_name, broker_name, company_name, brand_color, center_lat, center_lng, zoom, share_token, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
       id,
       text(input.name, 200) || 'Untitled survey',
       text(input.clientName, 200),
@@ -175,48 +171,47 @@ export function createSurvey(input = {}) {
       newShareToken(),
       timestamp,
       timestamp,
-    )
-  return getSurvey(id)
+    ],
+  )
+  return getSurvey(db, id)
 }
 
-export function getSurvey(id) {
-  return mapSurvey(db().prepare('SELECT * FROM surveys WHERE id = ?').get(id))
+export async function getSurvey(db, id) {
+  return mapSurvey(await db.get('SELECT * FROM surveys WHERE id = ?', [id]))
 }
 
-export function updateSurvey(id, input) {
+export async function updateSurvey(db, id, input) {
   const { columns, values } = buildPatch(input, SURVEY_FIELDS)
   if (columns.length > 0) {
-    db()
-      .prepare(`UPDATE surveys SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`)
-      .run(...values, nowIso(), id)
+    await db.run(`UPDATE surveys SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`, [...values, nowIso(), id])
   }
-  return getSurvey(id)
+  return getSurvey(db, id)
 }
 
-export function deleteSurvey(id) {
-  return db().prepare('DELETE FROM surveys WHERE id = ?').run(id).changes > 0
+export async function deleteSurvey(db, id) {
+  const { changes } = await db.run('DELETE FROM surveys WHERE id = ?', [id])
+  return changes > 0
 }
 
 /** Bumps the survey's timestamp so the dashboard sorts by real activity. */
-function touchSurvey(surveyId) {
-  db().prepare('UPDATE surveys SET updated_at = ? WHERE id = ?').run(nowIso(), surveyId)
+async function touchSurvey(db, surveyId) {
+  await db.run('UPDATE surveys SET updated_at = ? WHERE id = ?', [nowIso(), surveyId])
 }
 
-export function listProperties(surveyId) {
-  return db()
-    .prepare(
-      `SELECT * FROM properties WHERE survey_id = ?
-       ORDER BY CASE WHEN tour_order IS NULL THEN 1 ELSE 0 END, tour_order, created_at`,
-    )
-    .all(surveyId)
-    .map(mapProperty)
+export async function listProperties(db, surveyId) {
+  const rows = await db.all(
+    `SELECT * FROM properties WHERE survey_id = ?
+     ORDER BY CASE WHEN tour_order IS NULL THEN 1 ELSE 0 END, tour_order, created_at`,
+    [surveyId],
+  )
+  return rows.map(mapProperty)
 }
 
-export function getProperty(id) {
-  return mapProperty(db().prepare('SELECT * FROM properties WHERE id = ?').get(id))
+export async function getProperty(db, id) {
+  return mapProperty(await db.get('SELECT * FROM properties WHERE id = ?', [id]))
 }
 
-export function createProperty(surveyId, input = {}) {
+export async function createProperty(db, surveyId, input = {}) {
   const id = newId()
   const timestamp = nowIso()
   const columns = Object.keys(PROPERTY_FIELDS)
@@ -226,59 +221,50 @@ export function createProperty(surveyId, input = {}) {
     return PROPERTY_FIELDS[column](raw)
   })
 
-  db()
-    .prepare(
-      `INSERT INTO properties (id, survey_id, ${columns.join(', ')}, created_at, updated_at)
-       VALUES (?, ?, ${columns.map(() => '?').join(', ')}, ?, ?)`,
-    )
-    .run(id, surveyId, ...values, timestamp, timestamp)
+  await db.run(
+    `INSERT INTO properties (id, survey_id, ${columns.join(', ')}, created_at, updated_at)
+     VALUES (?, ?, ${columns.map(() => '?').join(', ')}, ?, ?)`,
+    [id, surveyId, ...values, timestamp, timestamp],
+  )
 
-  touchSurvey(surveyId)
-  return getProperty(id)
+  await touchSurvey(db, surveyId)
+  return getProperty(db, id)
 }
 
-export function updateProperty(id, input) {
+export async function updateProperty(db, id, input) {
   const { columns, values } = buildPatch(input, PROPERTY_FIELDS)
   if (columns.length > 0) {
-    db()
-      .prepare(`UPDATE properties SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`)
-      .run(...values, nowIso(), id)
+    await db.run(`UPDATE properties SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`, [...values, nowIso(), id])
   }
-  const property = getProperty(id)
-  if (property) touchSurvey(property.surveyId)
+  const property = await getProperty(db, id)
+  if (property) await touchSurvey(db, property.surveyId)
   return property
 }
 
-export function deleteProperty(id) {
-  const property = getProperty(id)
-  const removed = db().prepare('DELETE FROM properties WHERE id = ?').run(id).changes > 0
-  if (removed && property) touchSurvey(property.surveyId)
-  return removed
+export async function deleteProperty(db, id) {
+  const property = await getProperty(db, id)
+  const { changes } = await db.run('DELETE FROM properties WHERE id = ?', [id])
+  if (changes > 0 && property) await touchSurvey(db, property.surveyId)
+  return changes > 0
 }
 
-/** Writes the tour order in one transaction so a partial reorder can't stick. */
-export function setTourOrder(surveyId, orderedIds) {
-  const connection = db()
-  const clear = connection.prepare('UPDATE properties SET tour_order = NULL WHERE survey_id = ?')
-  const set = connection.prepare('UPDATE properties SET tour_order = ? WHERE id = ? AND survey_id = ?')
-
-  connection.exec('BEGIN')
-  try {
-    clear.run(surveyId)
-    orderedIds.forEach((id, index) => set.run(index, id, surveyId))
-    connection.exec('COMMIT')
-  } catch (error) {
-    connection.exec('ROLLBACK')
-    throw error
-  }
-  return listProperties(surveyId)
+/** Writes the tour order atomically so a partial reorder cannot stick. */
+export async function setTourOrder(db, surveyId, orderedIds) {
+  await db.batch([
+    ['UPDATE properties SET tour_order = NULL WHERE survey_id = ?', [surveyId]],
+    ...orderedIds.map((id, index) => [
+      'UPDATE properties SET tour_order = ? WHERE id = ? AND survey_id = ?',
+      [index, id, surveyId],
+    ]),
+  ])
+  return listProperties(db, surveyId)
 }
 
 /**
  * Turns sharing on or off, and optionally mints a fresh token so an old link
  * a client still has stops working.
  */
-export function updateShare(surveyId, { enabled, expiresAt, regenerate } = {}) {
+export async function updateShare(db, surveyId, { enabled, expiresAt, regenerate } = {}) {
   const updates = []
   const values = []
 
@@ -297,19 +283,17 @@ export function updateShare(surveyId, { enabled, expiresAt, regenerate } = {}) {
   }
 
   if (updates.length > 0) {
-    db()
-      .prepare(`UPDATE surveys SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`)
-      .run(...values, nowIso(), surveyId)
+    await db.run(`UPDATE surveys SET ${updates.join(', ')}, updated_at = ? WHERE id = ?`, [...values, nowIso(), surveyId])
   }
-  return getSurvey(surveyId)
+  return getSurvey(db, surveyId)
 }
 
 /**
  * Resolves a public share link.
  * Returns a reason rather than throwing, so the client view can explain itself.
  */
-export function resolveShare(token) {
-  const row = db().prepare('SELECT * FROM surveys WHERE share_token = ?').get(token)
+export async function resolveShare(db, token) {
+  const row = await db.get('SELECT * FROM surveys WHERE share_token = ?', [token])
   if (!row) return { ok: false, reason: 'not_found' }
   if (!toBool(row.share_enabled)) return { ok: false, reason: 'disabled' }
   if (row.share_expires_at && new Date(row.share_expires_at).getTime() < Date.now()) {
@@ -330,6 +314,6 @@ export function resolveShare(token) {
       zoom: survey.zoom,
       expiresAt: survey.share.expiresAt,
     },
-    properties: listProperties(row.id).map(({ surveyId, notes, ...rest }) => rest),
+    properties: (await listProperties(db, row.id)).map(({ surveyId, notes, ...rest }) => rest),
   }
 }

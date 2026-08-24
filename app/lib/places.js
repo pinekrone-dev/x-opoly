@@ -142,6 +142,7 @@ export async function nearbyBusinesses({
   category = null,
   keyword = null,
   radiusMiles = 5,
+  env = {},
   fetchImpl = fetch,
   timeout = 25000,
 } = {}) {
@@ -151,7 +152,7 @@ export async function nearbyBusinesses({
 
   const radius = Math.min(Math.max(Number(radiusMiles) || 5, 0.25), 10)
   const query = buildQuery({ lat, lng, radiusMeters: Math.round(radius * 1609.34), category, keyword })
-  const endpoint = process.env.OVERPASS_URL || DEFAULT_OVERPASS
+  const endpoint = env.OVERPASS_URL || DEFAULT_OVERPASS
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeout)
@@ -162,7 +163,7 @@ export async function nearbyBusinesses({
       signal: controller.signal,
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
-        'user-agent': process.env.PLACES_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
+        'user-agent': env.PLACES_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
       },
       body: `data=${encodeURIComponent(query)}`,
     })
