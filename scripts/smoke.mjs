@@ -204,7 +204,12 @@ try {
 
   // 3. Load it in a real browser.
   browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  // acceptDownloads is explicit rather than relied on: the export check
+  // depends on it, and a default that changes would fail as a mystery timeout.
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    acceptDownloads: true,
+  })
   const page = await context.newPage()
 
   const tileRequests = []
@@ -334,6 +339,21 @@ try {
   const fillButton = await page.$('text=Fill in from flyer')
   check('the fill-from-flyer button is on the flyer tab', Boolean(fillButton))
 
+  // Directions: the clickable half of the pair. The tour book PDF prints the
+  // same destination as a QR, which paper needs and a screen does not.
+  await page.click('text="details"').catch(() => undefined)
+  await page.waitForTimeout(600)
+  const directions = await page.$('a:has-text("Get directions")')
+  check('a Get directions link is offered', Boolean(directions))
+  if (directions) {
+    const href = await directions.getAttribute('href')
+    check(
+      'directions point at the dropped pin, not just the street',
+      Boolean(href?.includes('google.com/maps/dir/') && href?.includes(String(PINS[0].lat))),
+      String(href),
+    )
+  }
+
   await page.screenshot({ path: 'smoke-map.png', fullPage: false })
   console.log('\nScreenshot written to smoke-map.png')
 
@@ -351,6 +371,26 @@ try {
     nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
   )
   check('the captured photo appears in the book', bookImages > 0, `${bookImages} images loaded`)
+
+  // Exporting must produce a real file. A button that throws inside jsPDF
+  // looks identical to one that works until someone tries to send the book.
+  try {
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 45000 }),
+      page.click('text=Export PDF'),
+    ])
+    const path = await download.path()
+    const bytes = path ? (await import('node:fs')).statSync(path).size : 0
+    check('Export PDF downloads a file', Boolean(path), download.suggestedFilename())
+    check('the exported PDF has real content', bytes > 20000, `${bytes} bytes`)
+
+    const head = path
+      ? (await import('node:fs')).readFileSync(path).subarray(0, 5).toString('latin1')
+      : ''
+    check('the download is a PDF', head === '%PDF-', JSON.stringify(head))
+  } catch (error) {
+    check('Export PDF downloads a file', false, error.message.split('\n')[0])
+  }
   await page.screenshot({ path: 'smoke-book.png', fullPage: false })
 } catch (error) {
   failed = true

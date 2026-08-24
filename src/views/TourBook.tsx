@@ -3,14 +3,18 @@ import { api } from '../api'
 import type { DealStage, Property, Survey, TourPlan } from '../types'
 import { navigate } from '../lib/router'
 import { fullAddress, displayName } from '../lib/format'
+import { exportTourBook } from '../lib/tourBookPdf'
 
 /**
  * The tour book: the document a broker hands a client before the drive.
  *
  * One page per stop, in tour order, each leading with the photograph cropped
- * out of the flyer. It is built for paper rather than for the screen — the
- * "export" is the browser's own print-to-PDF, which every machine already has
- * and which needs no server-side renderer to keep working.
+ * out of the flyer.
+ *
+ * Two ways out: Export PDF builds a real file in the browser with jsPDF, which
+ * is what a broker emails to a client; Print goes through the browser's own
+ * dialog for anyone who wants paper or different settings. Both are
+ * client-side, so there is no server-side renderer to keep working.
  */
 
 export default function TourBook({ id }: { id: string }) {
@@ -19,6 +23,8 @@ export default function TourBook({ id }: { id: string }) {
   const [stages, setStages] = useState<DealStage[]>([])
   const [plan, setPlan] = useState<TourPlan | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -111,10 +117,46 @@ export default function TourBook({ id }: { id: string }) {
             {plan?.itinerary ? ` · ${plan.itinerary.startTime} — ${plan.itinerary.endTime}` : ''}
           </p>
         </div>
-        <button type="button" className="btn-primary ml-auto py-1.5" onClick={() => window.print()}>
-          Print / Save as PDF
+        <button
+          type="button"
+          className="btn-primary ml-auto py-1.5"
+          disabled={exporting || stops.length === 0}
+          onClick={async () => {
+            setExporting(true)
+            setExportError(null)
+            try {
+              await exportTourBook({
+                survey,
+                stops,
+                stages,
+                times,
+                summary: plan?.itinerary
+                  ? {
+                      startTime: plan.itinerary.startTime,
+                      endTime: plan.itinerary.endTime,
+                      driveLabel: plan.itinerary.driveLabel,
+                    }
+                  : null,
+              })
+            } catch (cause) {
+              setExportError(
+                cause instanceof Error ? cause.message : 'The PDF could not be built.',
+              )
+            } finally {
+              setExporting(false)
+            }
+          }}
+        >
+          {exporting ? 'Building PDF…' : 'Export PDF'}
+        </button>
+        <button type="button" className="btn-secondary py-1.5" onClick={() => window.print()}>
+          Print
         </button>
       </header>
+
+      {exportError ? (
+        <p className="no-print bg-rose-500/10 px-4 py-2 text-xs text-rose-300">{exportError}</p>
+      ) : null}
 
       <div className="mx-auto max-w-[8.5in] p-6 print:p-0">
         {/* Cover */}

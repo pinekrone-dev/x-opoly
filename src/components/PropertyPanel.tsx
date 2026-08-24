@@ -12,6 +12,7 @@ import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '
 import CompetitionPanel from './CompetitionPanel'
 import CustomFields from './CustomFields'
 import DemographicsPanel from './DemographicsPanel'
+import { directionsUrl } from '../lib/directions'
 
 /**
  * pdf.js is over a megabyte, and most sessions never open a flyer. Loading it
@@ -304,6 +305,20 @@ export default function PropertyPanel({
                     </div>
                   ))}
                 </dl>
+
+                {directionsUrl(property) ? (
+                  <a
+                    className="btn-secondary mt-3 w-full justify-center text-xs"
+                    href={directionsUrl(property) as string}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                      <path d="M3 11l19-9-9 19-2-8-8-2z" />
+                    </svg>
+                    Get directions
+                  </a>
+                ) : null}
 
                 {property.fields?.length ? (
                   <dl className="mt-4 space-y-2 border-t border-white/5 pt-3">
