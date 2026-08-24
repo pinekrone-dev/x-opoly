@@ -1,0 +1,53 @@
+# Deploys the Worker from GitHub, so no terminal is needed.
+#
+# One-time setup, all in the browser:
+#   1. Cloudflare dashboard → My Profile → API Tokens → Create Token
+#      → use the "Edit Cloudflare Workers" template. Copy the token.
+#   2. GitHub → this repo → Settings → Secrets and variables → Actions
+#      → New repository secret, twice:
+#         CLOUDFLARE_API_TOKEN   the token from step 1
+#         CLOUDFLARE_ACCOUNT_ID  Cloudflare dashboard → Workers & Pages,
+#                                the Account ID shown in the right sidebar
+#   3. GitHub → Actions tab → "Deploy to Cloudflare" → Run workflow.
+#
+# After that it deploys on every push to this branch.
+#
+# ANTHROPIC_API_KEY is deliberately NOT set here. Add it once in the
+# Cloudflare dashboard (Workers & Pages → sitesurvey-cre → Settings →
+# Variables and Secrets → Add, type "Secret"), so the key lives only in
+# Cloudflare rather than in GitHub as well.
+
+name: Deploy to Cloudflare
+
+on:
+  push:
+    branches:
+      - main
+      - claude/sitemapcre-tool-clone-qyq7jy
+  workflow_dispatch: # adds a "Run workflow" button in the Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # A broken build should never reach production.
+      - run: npm test
+
+      - run: npm run build
+
+      - name: Deploy the Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

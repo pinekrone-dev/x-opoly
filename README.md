@@ -34,9 +34,31 @@ worker/index.js       Cloudflare entry point
 D1 is SQLite, so the schema is identical — `migrations/0001_init.sql` is generated from
 `app/lib/schema.js` by `npm run migrations`, so the two cannot drift.
 
-The D1 database and R2 bucket are already provisioned and wired into
-`wrangler.toml`, and the tables exist. What remains needs credentials, so it runs from
-your machine:
+The D1 database and R2 bucket are already provisioned and wired into `wrangler.toml`, and
+the tables exist. Only the deploy is left.
+
+### Deploying without a terminal
+
+Either of these works entirely in the browser.
+
+**Cloudflare builds from GitHub.** Workers & Pages → Create → Workers → Import a
+repository → pick this repo and branch. Cloudflare builds and deploys on every push, and
+no API token is involved at all.
+
+**Or GitHub Actions**, using `.github/workflows/deploy.yml` in this repo:
+
+1. Cloudflare → My Profile → API Tokens → Create Token → "Edit Cloudflare Workers".
+2. GitHub → Settings → Secrets and variables → Actions → add `CLOUDFLARE_API_TOKEN` and
+   `CLOUDFLARE_ACCOUNT_ID` (the Account ID is in the Workers & Pages sidebar).
+3. GitHub → Actions → "Deploy to Cloudflare" → Run workflow.
+
+The workflow runs the tests before deploying, so a broken build never reaches production.
+
+Either way, add `ANTHROPIC_API_KEY` once in the Cloudflare dashboard afterwards — Workers &
+Pages → sitesurvey-cre → Settings → Variables and Secrets, type "Secret". Keeping it there
+rather than in GitHub means the key lives in exactly one place.
+
+### Deploying from a terminal instead
 
 ```bash
 npx wrangler login
