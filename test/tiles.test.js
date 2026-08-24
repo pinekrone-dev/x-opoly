@@ -12,10 +12,18 @@ describe('basemap selection', () => {
     assert.equal(TILE_PRESETS[DEFAULT_PROVIDER].keyRequired, false, 'the default needs no API key')
   })
 
-  test('the default is dark natively rather than a filtered light basemap', () => {
-    // Inverting a light basemap to force it dark also inverts the street
-    // labels, which is the one thing that has to stay readable.
-    assert.equal(resolveTiles({}).darkNative, true)
+  test('the default is an ordinary street map, not a dark one', () => {
+    const tiles = resolveTiles({})
+    assert.equal(tiles.darkNative, false, 'the default basemap is a standard light street map')
+    assert.match(tiles.label, /street/i)
+  })
+
+  test('the keyed providers default to their standard street style', () => {
+    // A night style is a preference, not a default — these must look like an
+    // ordinary road map out of the box.
+    for (const provider of ['mapbox', 'here', 'maptiler', 'stadia']) {
+      assert.notEqual(resolveTiles({ TILE_PROVIDER: provider, TILE_KEY: 'k' }).darkNative, true, `${provider} defaults dark`)
+    }
   })
 
   test('substitutes the key and style into a keyed provider', () => {
@@ -48,8 +56,10 @@ describe('basemap selection', () => {
 
   test('reports which basemaps are dark, so the UI never has to guess', () => {
     assert.equal(resolveTiles({ TILE_PROVIDER: 'osm' }).darkNative, false)
+    assert.equal(resolveTiles({ TILE_PROVIDER: 'carto-voyager' }).darkNative, false)
+    assert.equal(resolveTiles({ TILE_PROVIDER: 'here', TILE_KEY: 'k' }).darkNative, false)
+    // Only the explicitly dark basemap reports itself as dark.
     assert.equal(resolveTiles({ TILE_PROVIDER: 'carto-dark' }).darkNative, true)
-    assert.equal(resolveTiles({ TILE_PROVIDER: 'here', TILE_KEY: 'k' }).darkNative, true)
   })
 
   test('every preset carries a human label for the switcher', () => {
@@ -86,7 +96,8 @@ describe('placeholder tiles', () => {
 describe('the basemap switcher', () => {
   test('offers only basemaps this deployment can actually load', () => {
     const keyless = availableBasemaps({})
-    assert.ok(keyless.length >= 3, 'several keyless street basemaps are offered')
+    assert.ok(keyless.length >= 4, 'several keyless basemaps are offered')
+    assert.match(keyless[0].label, /street/i, 'a plain street map is offered first')
     assert.ok(keyless.every((option) => !option.url.includes('{key}')), 'no option has an unfilled key')
     assert.ok(!keyless.some((option) => option.provider === 'mapbox'), 'a keyed provider is hidden without a key')
     assert.ok(!keyless.some((option) => option.placeholder), 'the placeholder grid is not offered as a real basemap')

@@ -113,14 +113,23 @@
 /*
  * The map keeps a visible ground even when tiles cannot load — an offline or
  * firewalled deployment still shows its pins over a grid instead of a void.
+ * The ground matches the basemap in use, so a light street map does not flash
+ * a dark panel behind its tiles while they load.
  */
 .leaflet-container {
+  background-color: #eceff3;
+  background-image:
+    linear-gradient(rgba(100, 116, 139, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(100, 116, 139, 0.1) 1px, transparent 1px);
+  background-size: 48px 48px;
+  font-family: inherit;
+}
+
+.map-dark .leaflet-container {
   background-color: #0f1620;
   background-image:
     linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
     linear-gradient(90deg, rgba(148, 163, 184, 0.07) 1px, transparent 1px);
-  background-size: 48px 48px;
-  font-family: inherit;
 }
 
 /*
@@ -130,22 +139,41 @@
  */
 
 .leaflet-control-zoom a {
+  background-color: #ffffff !important;
+  color: #334155 !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.map-dark .leaflet-control-zoom a {
   background-color: #161d27 !important;
   color: #cbd5e1 !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-.leaflet-control-zoom a:hover {
+.map-dark .leaflet-control-zoom a:hover {
   background-color: #1f2833 !important;
 }
 
 .leaflet-control-attribution {
-  background: rgba(13, 17, 23, 0.85) !important;
-  color: #64748b !important;
+  background: rgba(255, 255, 255, 0.85) !important;
+  color: #475569 !important;
   font-size: 10px !important;
 }
 
 .leaflet-control-attribution a {
+  color: #334155 !important;
+}
+
+.map-dark .leaflet-control-attribution {
+  background: rgba(13, 17, 23, 0.85) !important;
+  color: #64748b !important;
+}
+
+.map-dark .leaflet-control-attribution a {
   color: #94a3b8 !important;
 }
 
@@ -161,8 +189,8 @@
   height: 30px;
   border-radius: 999px 999px 999px 2px;
   transform: rotate(-45deg);
-  border: 2px solid rgba(8, 11, 15, 0.9);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.55);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.45);
   font-size: 11px;
   font-weight: 700;
   color: #080b0f;
@@ -175,5 +203,5 @@
 
 .site-pin--selected .site-pin__body {
   transform: rotate(-45deg) scale(1.25);
-  border-color: #ffffff;
+  border-color: #0f172a;
 }

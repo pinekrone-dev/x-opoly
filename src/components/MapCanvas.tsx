@@ -172,7 +172,12 @@ export default function MapCanvas({
       .map((property) => [property.lat as number, property.lng as number] as [number, number])
 
     if (points.length >= 2) {
-      route.current = L.polyline(points, { color: routeColor, weight: 3, opacity: 0.85, dashArray: '7 7' }).addTo(instance)
+      route.current = L.polyline(points, {
+        color: routeColor,
+        weight: 4,
+        opacity: 0.9,
+        dashArray: '8 8',
+      }).addTo(instance)
     }
   }, [routeIds, properties, routeColor])
 
@@ -190,11 +195,11 @@ export default function MapCanvas({
     for (const miles of [...rings.miles].sort((a, b) => b - a)) {
       L.circle([rings.lat, rings.lng], {
         radius: miles * 1609.34,
-        color: '#14b8a6',
-        weight: 1.2,
-        opacity: 0.55,
+        color: '#0f766e',
+        weight: 1.6,
+        opacity: 0.75,
         fillColor: '#14b8a6',
-        fillOpacity: 0.05,
+        fillOpacity: 0.06,
         dashArray: '5 6',
         interactive: false,
       })
@@ -267,7 +272,7 @@ export default function MapCanvas({
   }
 
   return (
-    <div className="relative h-full w-full">
+    <div className={`relative h-full w-full ${active.darkNative ? 'map-dark' : ''}`}>
       <div ref={container} className={className} role="application" aria-label="Property map" />
 
       {options && (

@@ -10,35 +10,44 @@
  */
 
 /**
- * A dark-native street basemap by default: real streets and labels, rendered
- * for a dark interface, and no API key. Forcing a light basemap dark with a CSS
- * filter inverts the label text too, which is the one thing on a basemap a
- * broker actually has to read.
+ * A standard street basemap by default — the ordinary road map people expect,
+ * with streets, place names and POI labels, and no API key.
+ *
+ * Basemaps are never colour-filtered: an earlier version forced light tiles
+ * dark with a CSS invert, which inverted the street labels along with them.
+ * Dark basemaps remain available in the switcher for anyone who wants one.
  */
-export const DEFAULT_PROVIDER = 'carto-dark'
+export const DEFAULT_PROVIDER = 'osm'
 
 export const TILE_PRESETS = {
-  'carto-dark': {
-    label: 'Dark streets',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '© OpenStreetMap contributors, © CARTO',
-    maxZoom: 20,
-    keyRequired: false,
-    darkNative: true,
-  },
   osm: {
-    label: 'OpenStreetMap',
+    label: 'Street map',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     attribution: '© OpenStreetMap contributors',
     maxZoom: 19,
     keyRequired: false,
   },
+  'carto-voyager': {
+    label: 'Street map (clean)',
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    attribution: '© OpenStreetMap contributors, © CARTO',
+    maxZoom: 20,
+    keyRequired: false,
+  },
   'carto-light': {
-    label: 'Light streets',
+    label: 'Muted',
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
     attribution: '© OpenStreetMap contributors, © CARTO',
     maxZoom: 20,
     keyRequired: false,
+  },
+  'carto-dark': {
+    label: 'Dark',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© OpenStreetMap contributors, © CARTO',
+    maxZoom: 20,
+    keyRequired: false,
+    darkNative: true,
   },
   mapbox: {
     label: 'Mapbox',
@@ -46,16 +55,14 @@ export const TILE_PRESETS = {
     attribution: '© Mapbox © OpenStreetMap',
     maxZoom: 22,
     keyRequired: true,
-    defaultStyle: 'dark-v11',
-    darkNative: true,
+    defaultStyle: 'streets-v12',
   },
   here: {
     label: 'HERE',
-    url: 'https://maps.hereapi.com/v3/base/mc/{z}/{x}/{y}/png8?apiKey={key}&style=explore.night',
+    url: 'https://maps.hereapi.com/v3/base/mc/{z}/{x}/{y}/png8?apiKey={key}&style=explore.day',
     attribution: '© HERE',
     maxZoom: 20,
     keyRequired: true,
-    darkNative: true,
   },
   maptiler: {
     label: 'MapTiler',
@@ -63,16 +70,14 @@ export const TILE_PRESETS = {
     attribution: '© MapTiler © OpenStreetMap contributors',
     maxZoom: 22,
     keyRequired: true,
-    defaultStyle: 'streets-v2-dark',
-    darkNative: true,
+    defaultStyle: 'streets-v2',
   },
   stadia: {
-    label: 'Stadia Alidade Dark',
-    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png?api_key={key}',
+    label: 'Stadia Alidade',
+    url: 'https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png?api_key={key}',
     attribution: '© Stadia Maps © OpenMapTiles © OpenStreetMap contributors',
     maxZoom: 20,
     keyRequired: true,
-    darkNative: true,
   },
   offline: {
     label: 'Offline placeholder',
@@ -80,7 +85,6 @@ export const TILE_PRESETS = {
     attribution: 'Placeholder grid — no basemap configured',
     maxZoom: 19,
     keyRequired: false,
-    darkNative: true,
     placeholder: true,
   },
 }
@@ -179,9 +183,9 @@ export function placeholderTile(z, x, y) {
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-  <rect width="${size}" height="${size}" fill="#0f1620"/>
-  <g stroke="#94a3b8" stroke-opacity="0.07" stroke-width="1">${lines.join('')}</g>
-  <rect width="${size}" height="${size}" fill="none" stroke="#94a3b8" stroke-opacity="0.13" stroke-width="1"/>
-  <text x="8" y="20" fill="#64748b" fill-opacity="0.5" font-family="monospace" font-size="10">${z}/${x}/${y}</text>
+  <rect width="${size}" height="${size}" fill="#eceff3"/>
+  <g stroke="#64748b" stroke-opacity="0.13" stroke-width="1">${lines.join('')}</g>
+  <rect width="${size}" height="${size}" fill="none" stroke="#64748b" stroke-opacity="0.22" stroke-width="1"/>
+  <text x="8" y="20" fill="#64748b" fill-opacity="0.75" font-family="monospace" font-size="10">${z}/${x}/${y}</text>
 </svg>`
 }

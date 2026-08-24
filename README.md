@@ -74,11 +74,12 @@ parts that need an outside service.
 
 `TILE_PROVIDER` takes one of:
 
-| Value | Provider | Key needed |
+| Value | Basemap | Key needed |
 | --- | --- | --- |
-| `carto-dark` *(default)* | Dark street basemap, OSM data rendered by CARTO | no |
-| `carto-light` | The same, light | no |
-| `osm` | OpenStreetMap standard | no |
+| `osm` *(default)* | Standard OpenStreetMap street map | no |
+| `carto-voyager` | Street map, cleaner rendering of the same data | no |
+| `carto-light` | Muted, for when the pins should dominate | no |
+| `carto-dark` | Dark | no |
 | `mapbox` | Mapbox styles (`TILE_STYLE`, default `dark-v11`) | yes |
 | `here` | HERE explore.night | yes |
 | `maptiler` | MapTiler (`TILE_STYLE`) | yes |
@@ -89,9 +90,13 @@ A keyed provider with no `TILE_KEY` falls back to the keyless default and says s
 than rendering a map of broken tiles. Whichever basemaps a deployment can actually load
 are offered in a switcher on the map itself, and the viewer's choice is remembered.
 
-Basemaps are never colour-filtered. An earlier version forced a light basemap dark with a
-CSS invert, which also inverted the street labels — the one thing on a basemap that has to
-stay readable. The default is dark natively instead.
+The default is an ordinary street map, and the keyed providers default to their standard
+street styles too. The map surface, zoom controls and attribution follow the basemap, so
+a light basemap does not sit on a dark panel while its tiles load.
+
+Basemaps are never colour-filtered. An earlier version forced light tiles dark with a CSS
+invert, which inverted the street labels along with them — the one thing on a basemap that
+has to stay readable.
 
 **Before going to production**, check the current usage terms of whichever basemap you
 point this at. The free public endpoints — OpenStreetMap's especially — publish usage
