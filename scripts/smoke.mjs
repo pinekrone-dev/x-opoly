@@ -42,8 +42,25 @@ async function api(path, init) {
 // Two real coordinates so the map has something to fit to. Downtown Dallas,
 // far enough apart to force a sensible zoom level.
 const PINS = [
-  { name: 'Smoke test — Main St', address: '1600 Main St, Dallas, TX', lat: 32.7808, lng: -96.7972 },
-  { name: 'Smoke test — Ross Ave', address: '2100 Ross Ave, Dallas, TX', lat: 32.7889, lng: -96.7969 },
+  {
+    name: 'Smoke test — Main St',
+    address: '1600 Main St, Dallas, TX',
+    lat: 32.7808,
+    lng: -96.7972,
+    brokerEmail: 'broker@example.com',
+    brokerPhone: '(214) 555-0100',
+    fields: [
+      { label: 'Available SF', value: '9,822 SF' },
+      { label: 'Lease Rate', value: '32/SF' },
+    ],
+  },
+  {
+    name: 'Smoke test — Ross Ave',
+    address: '2100 Ross Ave, Dallas, TX',
+    lat: 32.7889,
+    lng: -96.7969,
+    fields: [{ label: 'Year Built', value: '2019' }],
+  },
 ]
 
 let surveyId = null
@@ -66,13 +83,47 @@ try {
   surveyId = created.body?.survey?.id
   if (!surveyId) throw new Error(`No survey id came back: ${JSON.stringify(created.body)}`)
 
-  for (const pin of PINS) {
+  // Stages are seeded with the survey; the sidebar is built around them.
+  const stages = await api(`/api/surveys/${surveyId}/stages`)
+  check('survey opens with a seeded pipeline', (stages.body?.stages?.length ?? 0) >= 2,
+    `${stages.body?.stages?.length ?? 0} stages`)
+  const firstStage = stages.body?.stages?.[0]
+
+  const createdIds = []
+  for (const [index, pin] of PINS.entries()) {
     const added = await api(`/api/surveys/${surveyId}/properties`, {
       method: 'POST',
-      body: JSON.stringify(pin),
+      // File the first site under a stage, leave the second unstaged, so the
+      // sidebar renders both a stage group and the unstaged bucket.
+      body: JSON.stringify(index === 0 && firstStage ? { ...pin, stageId: firstStage.id } : pin),
     })
     check(`POST property "${pin.name}"`, added.status === 201, `status ${added.status}`)
+    if (added.body?.property?.id) createdIds.push(added.body.property.id)
+
+    if (pin.fields) {
+      const stored = added.body?.property?.fields ?? []
+      check(
+        `custom fields stored for "${pin.name}"`,
+        stored.length === pin.fields.length,
+        `${stored.length}/${pin.fields.length} fields`,
+      )
+    }
   }
+
+  // The tour endpoint must return a schedule, routed or estimated.
+  const tour = await api(`/api/surveys/${surveyId}/tour`, {
+    method: 'POST',
+    body: JSON.stringify({ propertyIds: createdIds, startTime: '10:00', stopMinutes: 20 }),
+  })
+  check('tour endpoint returns a schedule', tour.status === 200 && Array.isArray(tour.body?.itinerary?.items),
+    `status ${tour.status}`)
+  check(
+    'every stop has an arrival time',
+    (tour.body?.itinerary?.items ?? []).every((item) => /^\d{1,2}:\d{2} (AM|PM)$/.test(item.arrive)),
+    JSON.stringify(tour.body?.itinerary?.items?.map((item) => item.arrive)),
+  )
+  check('the route reports its source', ['osrm', 'estimate'].includes(tour.body?.routeSource),
+    String(tour.body?.routeSource))
 
   // 3. Load it in a real browser.
   browser = await chromium.launch()
@@ -143,6 +194,26 @@ try {
 
   const basemapPicker = await page.$('[aria-label="Change basemap"]')
   check('basemap switcher present', Boolean(basemapPicker))
+
+  // The pipeline sidebar, which replaced the flat list.
+  const stageName = firstStage?.name
+  if (stageName) {
+    const stageHeading = await page.$(`text=${stageName}`)
+    check(`sidebar renders the "${stageName}" stage`, Boolean(stageHeading))
+    const hideToggle = await page.$(`[aria-label*="${stageName}"][aria-pressed]`)
+    check('stage has a visibility toggle', Boolean(hideToggle))
+  }
+
+  const unstagedHeading = await page.$('text=Unstaged')
+  check('sidebar renders the unstaged bucket', Boolean(unstagedHeading))
+
+  // Custom fields should reach the rendered card, not just the database.
+  await page.click(`text=${PINS[0].name}`).catch(() => undefined)
+  await page.waitForTimeout(800)
+  const cardText = await page.textContent('body')
+  check('a custom field renders on the site card', cardText?.includes('Available SF') ?? false)
+  check('the custom field value renders', cardText?.includes('9,822 SF') ?? false)
+  check('broker contact renders', cardText?.includes('broker@example.com') ?? false)
 
   const zoomIn = await page.$('.leaflet-control-zoom-in')
   check('map controls present', Boolean(zoomIn))
