@@ -14,6 +14,15 @@ compatibility_flags = ["nodejs_compat"]
 # Cloudflare's "nothing here yet" page even though the deploy succeeded.
 workers_dev = true
 
+# The public address. `custom_domain` makes the deploy provision the DNS record
+# and certificate itself, so nothing has to be created in the dashboard — but
+# it requires realestateaistudio.com to be a zone in this same Cloudflare
+# account. If a deploy ever fails naming this route, that is what to check.
+# The *.workers.dev address above keeps working either way.
+[[routes]]
+pattern = "survey.realestateaistudio.com"
+custom_domain = true
+
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.
 [assets]
@@ -34,9 +43,16 @@ binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads"
 
 [vars]
-# Basemap: any of osm, carto-voyager, carto-light, carto-dark.
+# Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
+# All are keyless. The keyed providers (mapbox, here, maptiler) also need
+# TILE_KEY, which is a secret and so is not set here.
 TILE_PROVIDER = "osm"
 
 # Secrets are NOT set here — they would end up in git. Set them in the
 # dashboard under Settings -> Variables and Secrets, or with:
 #   npx wrangler secret put ANTHROPIC_API_KEY
+#
+# Optional, and all optional on purpose — every feature has a free default:
+#   ANTHROPIC_API_KEY  reading a flyer with AI
+#   GOOGLE_MAPS_API_KEY  Google routing and Places, instead of OSRM/Overpass
+#   CENSUS_API_KEY     raises the ACS rate limit; the data is free either way
