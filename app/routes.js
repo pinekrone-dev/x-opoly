@@ -37,6 +37,18 @@ import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
 /**
+ * Turns the unhelpful error a missing Worker binding produces into something
+ * that names the binding to add.
+ */
+function bindingError(error, binding) {
+  const message = error?.message || String(error)
+  if (/undefined|not a function|null/i.test(message)) {
+    return `The ${binding} binding looks missing from this deployment. Add it in the Worker's Settings → Bindings, then redeploy. (${message})`
+  }
+  return message
+}
+
+/**
  * @param {object} context
  * @param {object} context.db      SQL adapter (node:sqlite or D1)
  * @param {object} context.storage file store (disk or R2)
@@ -56,20 +68,53 @@ export function createApp({ db, storage, env = {} }) {
 
   // --- health --------------------------------------------------------------
 
-  app.get('/api/health', (c) => {
+  /**
+   * Health, including a real probe of each binding.
+   *
+   * Reporting the runtime alone is worthless on Cloudflare: the adapter is
+   * constructed whether or not the binding exists, so a Worker deployed with
+   * no database still claimed to be healthy. These checks actually touch the
+   * database and the file store, so a missing binding is visible here rather
+   * than as a 500 on the first real request.
+   */
+  app.get('/api/health', async (c) => {
     const tiles = resolveTiles(env)
-    return c.json({
-      ok: true,
-      runtime: db.kind === 'd1' ? 'cloudflare' : 'node',
-      stages: STAGES.map((id) => ({ id, label: STAGE_LABELS[id] })),
-      features: {
-        flyerExtraction: isConfigured(env),
-        tiles,
-        basemaps: availableBasemaps(env),
-        tileUrl: tiles.url,
-        tileAttribution: tiles.attribution,
+    const checks = {}
+
+    try {
+      await db.get('SELECT 1 AS ok')
+      checks.database = { ok: true, kind: db.kind }
+    } catch (error) {
+      checks.database = { ok: false, kind: db.kind, error: bindingError(error, 'DB') }
+    }
+
+    try {
+      // Reading a key that does not exist is cheap and writes nothing; it
+      // still fails loudly when the bucket binding is absent.
+      await storage.get('__health_probe__')
+      checks.storage = { ok: true, kind: storage.kind }
+    } catch (error) {
+      checks.storage = { ok: false, kind: storage.kind, error: bindingError(error, 'BUCKET') }
+    }
+
+    const ok = checks.database.ok && checks.storage.ok
+
+    return c.json(
+      {
+        ok,
+        runtime: db.kind === 'd1' ? 'cloudflare' : 'node',
+        checks,
+        stages: STAGES.map((id) => ({ id, label: STAGE_LABELS[id] })),
+        features: {
+          flyerExtraction: isConfigured(env),
+          tiles,
+          basemaps: availableBasemaps(env),
+          tileUrl: tiles.url,
+          tileAttribution: tiles.attribution,
+        },
       },
-    })
+      ok ? 200 : 503,
+    )
   })
 
   app.get('/api/tiles/:z/:x/:y', (c) => {

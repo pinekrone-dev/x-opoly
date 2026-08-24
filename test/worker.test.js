@@ -30,7 +30,22 @@ describe('the Cloudflare Worker', () => {
     const { status, body } = await call(env, '/api/health')
     assert.equal(status, 200)
     assert.equal(body.runtime, 'cloudflare', 'the D1 adapter is in use')
+    assert.equal(body.checks.database.ok, true)
+    assert.equal(body.checks.storage.ok, true)
     assert.ok(body.features.tiles.url.includes('{z}'))
+  })
+
+  test('a deployment missing its bindings fails health instead of passing it', async () => {
+    // Exactly the failure a Worker deployed without wrangler.toml's bindings
+    // hits: the adapters construct fine, then every real request 500s.
+    const env = { ...(await workerEnv()), DB: undefined, BUCKET: undefined }
+    const { status, body } = await call(env, '/api/health')
+
+    assert.equal(status, 503)
+    assert.equal(body.ok, false)
+    assert.equal(body.checks.database.ok, false)
+    assert.match(body.checks.database.error, /DB binding looks missing/)
+    assert.match(body.checks.storage.error, /BUCKET binding looks missing/)
   })
 
   test('serves the single-page app for non-API paths', async () => {

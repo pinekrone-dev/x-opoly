@@ -38,10 +38,13 @@ const asJson = (payload, method = 'POST') => ({
 })
 
 describe('http api on node', () => {
-  test('reports the runtime and which optional features are configured', async () => {
-    const { body } = await call('/api/health')
+  test('probes its bindings rather than just claiming to be healthy', async () => {
+    const { status, body } = await call('/api/health')
+    assert.equal(status, 200)
     assert.equal(body.ok, true)
     assert.equal(body.runtime, 'node')
+    assert.equal(body.checks.database.ok, true, 'the database was actually queried')
+    assert.equal(body.checks.storage.ok, true, 'the file store was actually read')
     assert.equal(typeof body.features.flyerExtraction, 'boolean')
     assert.ok(body.stages.some((stage) => stage.id === 'under_contract'))
   })

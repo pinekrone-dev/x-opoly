@@ -1,4 +1,7 @@
-name = "sitesurvey-cre"
+# Matches the Worker the Cloudflare Git integration created, which takes its
+# name from the repository. Renaming the repo does not rename the Worker; to
+# change it, rename the Worker in the dashboard and update this line together.
+name = "x-opoly"
 main = "worker/index.js"
 compatibility_date = "2026-06-01"
 
@@ -12,7 +15,10 @@ not_found_handling = "single-page-application"
 # Provisioned in the Cloudflare account, region ENAM. Tables already created.
 [[d1_databases]]
 binding = "DB"
-database_name = "sitesurvey-cre"
+database_# Matches the Worker the Cloudflare Git integration created, which takes its
+# name from the repository. Renaming the repo does not rename the Worker; to
+# change it, rename the Worker in the dashboard and update this line together.
+name = "x-opoly"
 database_id = "40bf42da-08df-46bb-ad73-de084621ebc4"
 migrations_dir = "migrations"
 
