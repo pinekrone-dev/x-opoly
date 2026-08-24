@@ -1,5 +1,6 @@
 import type {
   AppFeatures,
+  DealStage,
   CompetitionResult,
   Demographics,
   GeocodeResult,
@@ -34,7 +35,8 @@ export const api = {
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string }) =>
     request<{ survey: Survey }>('/api/surveys', json(input)),
-  getSurvey: (id: string) => request<{ survey: Survey; properties: Property[] }>(`/api/surveys/${id}`),
+  getSurvey: (id: string) =>
+    request<{ survey: Survey; properties: Property[]; stages: DealStage[] }>(`/api/surveys/${id}`),
   updateSurvey: (id: string, patch: Partial<Survey> & Record<string, unknown>) =>
     request<{ survey: Survey }>(`/api/surveys/${id}`, { ...json(patch), method: 'PATCH' }),
   deleteSurvey: (id: string) => request<void>(`/api/surveys/${id}`, { method: 'DELETE' }),
@@ -44,6 +46,15 @@ export const api = {
   updateProperty: (id: string, patch: Partial<Property>) =>
     request<{ property: Property }>(`/api/properties/${id}`, { ...json(patch), method: 'PATCH' }),
   deleteProperty: (id: string) => request<void>(`/api/properties/${id}`, { method: 'DELETE' }),
+
+  listStages: (surveyId: string) => request<{ stages: DealStage[] }>(`/api/surveys/${surveyId}/stages`),
+  addStage: (surveyId: string, input: { name: string; color?: string }) =>
+    request<{ stage: DealStage }>(`/api/surveys/${surveyId}/stages`, json(input)),
+  updateStage: (id: string, patch: { name?: string; color?: string; hidden?: boolean }) =>
+    request<{ stage: DealStage }>(`/api/stages/${id}`, { ...json(patch), method: 'PATCH' }),
+  deleteStage: (id: string) => request<void>(`/api/stages/${id}`, { method: 'DELETE' }),
+  reorderStages: (surveyId: string, order: string[]) =>
+    request<{ stages: DealStage[] }>(`/api/surveys/${surveyId}/stages`, { ...json({ order }), method: 'PUT' }),
 
   planTour: (surveyId: string, startId?: string | null) =>
     request<TourPlan>(`/api/surveys/${surveyId}/tour`, json({ startId: startId ?? null })),

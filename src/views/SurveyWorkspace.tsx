@@ -4,9 +4,10 @@ import MapCanvas from '../components/MapCanvas'
 import PropertyPanel from '../components/PropertyPanel'
 import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
+import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
-import type { AppFeatures, CompetitionResult, Property, Survey } from '../types'
+import type { AppFeatures, CompetitionResult, DealStage, Property, Survey } from '../types'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 
@@ -22,6 +23,7 @@ const TABS: { id: Tab; label: string }[] = [
 export default function SurveyWorkspace({ id, features }: { id: string; features: AppFeatures }) {
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [properties, setProperties] = useState<Property[]>([])
+  const [stages, setStages] = useState<DealStage[]>([])
   const [tab, setTab] = useState<Tab>('map')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
@@ -35,9 +37,10 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   useEffect(() => {
     api
       .getSurvey(id)
-      .then(({ survey: loaded, properties: list }) => {
+      .then(({ survey: loaded, properties: list, stages: pipeline }) => {
         setSurvey(loaded)
         setProperties(list)
+        setStages(pipeline ?? [])
         setFitKey((key) => key + 1)
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not open that survey.'))
@@ -47,6 +50,18 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     () => properties.find((property) => property.id === selectedId) ?? null,
     [properties, selectedId],
   )
+
+  /**
+   * Pins the map should draw.
+   *
+   * Hiding a stage is how a broker clears forty passed sites out of the way,
+   * so it has to reach the map, not just the sidebar list.
+   */
+  const visibleProperties = useMemo(() => {
+    const hidden = new Set(stages.filter((stage) => stage.hidden).map((stage) => stage.id))
+    if (hidden.size === 0) return properties
+    return properties.filter((property) => !property.stageId || !hidden.has(property.stageId))
+  }, [properties, stages])
 
   const upsert = useCallback((property: Property) => {
     setProperties((current) => {
@@ -70,6 +85,47 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     await api.deleteProperty(propertyId)
     setProperties((current) => current.filter((property) => property.id !== propertyId))
     setSelectedId(null)
+  }
+
+  const moveToStage = async (propertyId: string, stageId: string | null) => {
+    // Update locally first: dragging a card should feel instant, and the
+    // server is only confirming what the broker already sees.
+    setProperties((current) =>
+      current.map((property) => (property.id === propertyId ? { ...property, stageId } : property)),
+    )
+    try {
+      const { property } = await api.updateProperty(propertyId, { stageId })
+      upsert(property)
+    } catch {
+      setError('Could not move that site. Reload to see where it actually is.')
+    }
+  }
+
+  const toggleStageHidden = async (stage: DealStage) => {
+    const hidden = !stage.hidden
+    setStages((current) => current.map((entry) => (entry.id === stage.id ? { ...entry, hidden } : entry)))
+    await api.updateStage(stage.id, { hidden }).catch(() => undefined)
+  }
+
+  const addStage = async (name: string) => {
+    const { stage } = await api.addStage(id, { name })
+    setStages((current) => [...current, stage])
+  }
+
+  const renameStage = async (stage: DealStage, name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === stage.name) return
+    setStages((current) => current.map((entry) => (entry.id === stage.id ? { ...entry, name: trimmed } : entry)))
+    await api.updateStage(stage.id, { name: trimmed }).catch(() => undefined)
+  }
+
+  const removeStage = async (stage: DealStage) => {
+    await api.deleteStage(stage.id)
+    setStages((current) => current.filter((entry) => entry.id !== stage.id))
+    // Its sites are unstaged rather than deleted, so reflect that here too.
+    setProperties((current) =>
+      current.map((property) => (property.stageId === stage.id ? { ...property, stageId: null } : property)),
+    )
   }
 
   if (error) {
@@ -101,43 +157,17 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       onCompetition={setCompetition}
     />
   ) : (
-    <ul className="divide-y divide-white/5">
-      {properties.map((property) => (
-        <li key={property.id}>
-          <button
-            type="button"
-            className="flex w-full items-start gap-3 p-3 text-left hover:bg-white/[0.03]"
-            onClick={() => setSelectedId(property.id)}
-          >
-            {property.photoUrl ? (
-              <img src={property.photoUrl} alt="" className="h-12 w-14 shrink-0 rounded-md object-cover" />
-            ) : (
-              <span
-                className="grid h-12 w-14 shrink-0 place-items-center rounded-md"
-                style={{ background: `${STAGE_META[property.stage]?.color}1a` }}
-                aria-hidden
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={STAGE_META[property.stage]?.color} strokeWidth="1.8">
-                  <path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-5h6v5" />
-                </svg>
-              </span>
-            )}
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm font-medium text-slate-100">{displayName(property)}</span>
-              <span className="block truncate text-xs text-slate-500">{fullAddress(property)}</span>
-              <span className="mt-0.5 block truncate text-xs text-slate-400">
-                {rate(property)} · {sqft(property.sizeSqft)}
-              </span>
-            </span>
-          </button>
-        </li>
-      ))}
-      {properties.length === 0 && (
-        <li className="p-8 text-center text-sm text-slate-500">
-          No sites yet. Add one by address, or drop a flyer in and let it fill itself out.
-        </li>
-      )}
-    </ul>
+    <StageSidebar
+      stages={stages}
+      properties={properties}
+      selectedId={selectedId}
+      onSelect={setSelectedId}
+      onMove={(propertyId, stageId) => void moveToStage(propertyId, stageId)}
+      onToggleHidden={(stage) => void toggleStageHidden(stage)}
+      onAddStage={(name) => void addStage(name)}
+      onRenameStage={(stage, name) => void renameStage(stage, name)}
+      onDeleteStage={(stage) => void removeStage(stage)}
+    />
   )
 
   return (
@@ -211,7 +241,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-white/10 bg-ink-900">{sidebar}</div>
             <div className={dropPin ? 'cursor-crosshair' : ''}>
               <MapCanvas
-                properties={properties}
+                properties={visibleProperties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onMapClick={dropPin ? (lat, lng) => void addAt(lat, lng) : undefined}
@@ -253,7 +283,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             />
             <div className="panel overflow-hidden">
               <MapCanvas
-                properties={properties}
+                properties={visibleProperties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 tiles={features.tiles}

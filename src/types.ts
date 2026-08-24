@@ -1,5 +1,21 @@
 export type Stage = 'prospect' | 'touring' | 'loi' | 'under_contract' | 'passed'
 
+/** A pipeline column. Named, coloured and ordered by the broker. */
+export interface DealStage {
+  id: string
+  surveyId?: string
+  name: string
+  color: string
+  position: number
+  hidden: boolean
+}
+
+/** One arbitrary row on a site card — "Available SF", "Lease Rate". */
+export interface CustomField {
+  label: string
+  value: string | null
+}
+
 export interface Property {
   id: string
   surveyId?: string
@@ -21,6 +37,11 @@ export interface Property {
   yearBuilt: number | null
   availability: string | null
   listingBroker: string | null
+  brokerEmail: string | null
+  brokerPhone: string | null
+  stageId: string | null
+  tourMinutes: number | null
+  fields: CustomField[]
   notes?: string | null
   flyerUrl: string | null
   flyerName: string | null
@@ -40,9 +61,22 @@ export interface Survey {
   center: { lat: number; lng: number } | null
   zoom: number
   share: { token: string | null; enabled: boolean; expiresAt: string | null; url: string | null }
+  tour: {
+    startTime: string
+    stopMinutes: number
+    start: TourAnchor | null
+    end: TourAnchor | null
+  }
   pinCount?: number
   createdAt: string
   updatedAt: string
+}
+
+/** Where a tour begins or ends — an address, not necessarily one of the sites. */
+export interface TourAnchor {
+  address: string | null
+  lat: number
+  lng: number
 }
 
 export interface TourPlan {

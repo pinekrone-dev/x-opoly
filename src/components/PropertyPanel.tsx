@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { CompetitionResult, Demographics, Property, Stage } from '../types'
+import type { CompetitionResult, CustomField, Demographics, Property, Stage } from '../types'
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 import CompetitionPanel from './CompetitionPanel'
+import CustomFields from './CustomFields'
 import { StageSelect } from './StageBadge'
 
 interface Props {
@@ -32,12 +33,15 @@ const EDITABLE: { key: keyof Property; label: string; type?: string; suffix?: st
   { key: 'yearBuilt', label: 'Year built', type: 'number' },
   { key: 'availability', label: 'Available' },
   { key: 'listingBroker', label: 'Listing broker' },
+  { key: 'brokerEmail', label: 'Broker email' },
+  { key: 'brokerPhone', label: 'Broker phone' },
 ]
 
 export default function PropertyPanel({ property, readOnly = false, onChange, onDelete, onClose, onCompetition }: Props) {
   const [tab, setTab] = useState<Tab>('details')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Partial<Property>>({})
+  const [fields, setFields] = useState<CustomField[]>([])
   const [demographics, setDemographics] = useState<Demographics | null>(null)
   const [demoError, setDemoError] = useState<string | null>(null)
   const [demoLoading, setDemoLoading] = useState(false)
@@ -46,19 +50,24 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
   useEffect(() => {
     setEditing(false)
     setDraft({})
+    setFields(property.fields ?? [])
     setDemographics(null)
     setDemoError(null)
     setTab('details')
   }, [property.id])
 
   const save = async () => {
-    if (Object.keys(draft).length === 0) {
+    const fieldsChanged = JSON.stringify(fields) !== JSON.stringify(property.fields ?? [])
+    if (Object.keys(draft).length === 0 && !fieldsChanged) {
       setEditing(false)
       return
     }
-    const { property: updated } = await api.updateProperty(property.id, draft)
+    // Fields ride along with the column patch, so one save is one request.
+    const payload = fieldsChanged ? { ...draft, fields } : draft
+    const { property: updated } = await api.updateProperty(property.id, payload)
     onChange?.(updated)
     setDraft({})
+    setFields(updated.fields ?? [])
     setEditing(false)
   }
 
@@ -197,6 +206,7 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
                     />
                   </label>
                 ))}
+                <CustomFields fields={fields} onChange={setFields} />
                 <label className="sm:col-span-2">
                   <span className="label">Notes</span>
                   <textarea
@@ -209,7 +219,15 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
                   <button type="button" className="btn-primary flex-1" onClick={() => void save()}>
                     Save changes
                   </button>
-                  <button type="button" className="btn-secondary" onClick={() => { setEditing(false); setDraft({}) }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => {
+                      setEditing(false)
+                      setDraft({})
+                      setFields(property.fields ?? [])
+                    }}
+                  >
                     Cancel
                   </button>
                 </div>
@@ -227,12 +245,40 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
                   ))}
                 </dl>
 
-                {property.listingBroker && (
-                  <p className="mt-3 text-xs text-slate-400">
-                    <span className="text-slate-500">Listed by </span>
-                    {property.listingBroker}
-                  </p>
-                )}
+                {property.fields?.length ? (
+                  <dl className="mt-4 space-y-2 border-t border-white/5 pt-3">
+                    {property.fields.map((field, index) => (
+                      <div key={`${field.label}-${index}`}>
+                        <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                          {field.label}
+                        </dt>
+                        <dd className="text-sm text-slate-100">{field.value || '—'}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+
+                {property.listingBroker || property.brokerEmail || property.brokerPhone ? (
+                  <div className="mt-4 border-t border-white/5 pt-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Broker</p>
+                    {property.listingBroker && (
+                      <p className="mt-1 text-sm text-slate-100">{property.listingBroker}</p>
+                    )}
+                    <p className="text-xs text-slate-400">
+                      {property.brokerEmail && (
+                        <a className="hover:text-teal-300" href={`mailto:${property.brokerEmail}`}>
+                          {property.brokerEmail}
+                        </a>
+                      )}
+                      {property.brokerEmail && property.brokerPhone ? ' · ' : ''}
+                      {property.brokerPhone && (
+                        <a className="hover:text-teal-300" href={`tel:${property.brokerPhone}`}>
+                          {property.brokerPhone}
+                        </a>
+                      )}
+                    </p>
+                  </div>
+                ) : null}
 
                 {property.notes && (
                   <p className="mt-3 whitespace-pre-wrap rounded-lg bg-ink-850 p-3 text-xs leading-relaxed text-slate-300">
