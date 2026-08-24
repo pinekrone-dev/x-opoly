@@ -9,6 +9,7 @@ import type {
   SharePayload,
   Survey,
   TourPlan,
+  TourRequest,
 } from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -56,8 +57,8 @@ export const api = {
   reorderStages: (surveyId: string, order: string[]) =>
     request<{ stages: DealStage[] }>(`/api/surveys/${surveyId}/stages`, { ...json({ order }), method: 'PUT' }),
 
-  planTour: (surveyId: string, startId?: string | null) =>
-    request<TourPlan>(`/api/surveys/${surveyId}/tour`, json({ startId: startId ?? null })),
+  planTour: (surveyId: string, options: TourRequest = {}) =>
+    request<TourPlan>(`/api/surveys/${surveyId}/tour`, json(options)),
   saveTourOrder: (surveyId: string, order: string[]) =>
     request<{ properties: Property[] }>(`/api/surveys/${surveyId}/tour`, { ...json({ order }), method: 'PUT' }),
 

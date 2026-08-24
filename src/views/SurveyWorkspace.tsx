@@ -7,7 +7,7 @@ import ShareSettings from '../components/ShareSettings'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
-import type { AppFeatures, CompetitionResult, DealStage, Property, Survey } from '../types'
+import type { AppFeatures, CompetitionResult, DealStage, Property, Survey, TourPlan } from '../types'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 
@@ -32,6 +32,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
+  const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
   const [competition, setCompetition] = useState<(CompetitionResult & { center: { lat: number; lng: number } }) | null>(null)
 
   useEffect(() => {
@@ -277,9 +278,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             <TourPlanner
               surveyId={survey.id}
               properties={properties}
+              defaults={survey.tour}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onOrderChange={setTourOrder}
+              onPlan={setTourPlan}
             />
             <div className="panel overflow-hidden">
               <MapCanvas
@@ -289,6 +292,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 tiles={features.tiles}
                 basemaps={features.basemaps}
                 routeIds={tourOrder}
+                routeGeometry={tourPlan?.geometry ?? null}
                 routeColor={survey.brandColor}
                 fitKey={`tour-${properties.length}`}
               />

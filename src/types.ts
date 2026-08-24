@@ -79,12 +79,48 @@ export interface TourAnchor {
   lng: number
 }
 
+/** What the planner asks the server to schedule. */
+export interface TourRequest {
+  propertyIds?: string[]
+  startId?: string | null
+  startTime?: string
+  stopMinutes?: number
+  optimize?: boolean
+  start?: TourAnchor | null
+  end?: TourAnchor | null
+}
+
+export interface TourStopSchedule {
+  id: string
+  driveMinutes: number
+  stopMinutes: number
+  arriveMinutes: number
+  arrive: string
+  depart: string
+}
+
+export interface Itinerary {
+  items: TourStopSchedule[]
+  startTime: string
+  endTime: string
+  driveMinutes: number
+  totalMinutes: number
+  driveLabel: string
+  totalLabel: string
+}
+
 export interface TourPlan {
   stops: Property[]
   unlocated: Property[]
   miles: number
   minutes: number
   legs: { fromId: string; toId: string; miles: number }[]
+  itinerary: Itinerary
+  geometry: [number, number][]
+  routeSource: 'osrm' | 'estimate' | 'none'
+  driveMiles: number
+  start: TourAnchor | null
+  end: TourAnchor | null
 }
 
 export interface GeocodeResult {

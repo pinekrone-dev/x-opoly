@@ -13,6 +13,12 @@ interface Props {
   onMapClick?: (lat: number, lng: number) => void
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
+  /**
+   * The routed path as [lat, lng] points. When present it is drawn instead of
+   * joining the pins directly, so the line follows streets. Absent means
+   * routing was unavailable and the straight join is the honest picture.
+   */
+  routeGeometry?: [number, number][] | null
   routeColor?: string
   /** Rings drawn around a point, in miles. */
   rings?: { lat: number; lng: number; miles: number[] } | null
@@ -56,6 +62,7 @@ export default function MapCanvas({
   onSelect,
   onMapClick,
   routeIds,
+  routeGeometry,
   routeColor = '#14b8a6',
   rings = null,
   competitors,
@@ -166,20 +173,26 @@ export default function MapCanvas({
     route.current = null
     if (!routeIds || routeIds.length < 2) return
 
-    const points = routeIds
-      .map((id) => properties.find((property) => property.id === id))
-      .filter((property): property is Property => Boolean(property?.lat && property?.lng))
-      .map((property) => [property.lat as number, property.lng as number] as [number, number])
+    // A real routed path is solid, because it is what the drive looks like.
+    // The pin-to-pin fallback stays dashed, so an estimate never reads as a
+    // road that exists.
+    const routed = routeGeometry && routeGeometry.length >= 2
+    const points = routed
+      ? routeGeometry
+      : routeIds
+          .map((id) => properties.find((property) => property.id === id))
+          .filter((property): property is Property => Boolean(property?.lat && property?.lng))
+          .map((property) => [property.lat as number, property.lng as number] as [number, number])
 
     if (points.length >= 2) {
       route.current = L.polyline(points, {
         color: routeColor,
-        weight: 4,
+        weight: routed ? 5 : 4,
         opacity: 0.9,
-        dashArray: '8 8',
+        dashArray: routed ? undefined : '8 8',
       }).addTo(instance)
     }
-  }, [routeIds, properties, routeColor])
+  }, [routeIds, routeGeometry, properties, routeColor])
 
   // Radius rings around the site being scoped.
   useEffect(() => {
