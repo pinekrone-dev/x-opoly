@@ -1,0 +1,72 @@
+# Proves the deployed app really loads: opens it in a headless browser on a
+# GitHub runner, checks the OpenStreetMap basemap paints, and uploads a
+# screenshot. Runs after a push (Cloudflare's Git integration deploys on the
+# same push) and on demand from the Actions tab.
+#
+# No secrets needed — it only talks to the public URL.
+
+name: Smoke test the deployment
+
+on:
+  push:
+    branches:
+      - main
+      - claude/sitemapcre-tool-clone-qyq7jy
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Base URL to test'
+        required: false
+        default: 'https://x-opoly.shiny-butterfly-2b90.workers.dev'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    env:
+      SMOKE_URL: ${{ github.event.inputs.url || 'https://x-opoly.shiny-butterfly-2b90.workers.dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install a browser
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      # Cloudflare deploys from the same push, so the new version may still be
+      # rolling out. Wait for the Worker to answer before judging it.
+      - name: Wait for the deployment to answer
+        run: |
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$SMOKE_URL/api/health" || echo 000)
+            echo "attempt $attempt: /api/health -> $code"
+            if [ "$code" = "200" ]; then
+              echo "Worker is answering."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "The Worker never returned 200 from /api/health."
+          echo "Last response body:"
+          curl -s "$SMOKE_URL/api/health" | head -c 2000
+          exit 1
+
+      - name: Run the smoke test
+        run: node scripts/smoke.mjs "$SMOKE_URL"
+
+      - name: Upload the map screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-map
+          path: smoke-map.png
+          if-no-files-found: warn

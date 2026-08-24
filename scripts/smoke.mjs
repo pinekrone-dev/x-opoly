@@ -1,0 +1,176 @@
+// Post-deploy smoke test: proves the deployed app actually loads in a browser
+// and that the street basemap paints, rather than inferring it from config.
+//
+//   node scripts/smoke.mjs https://x-opoly.example.workers.dev
+//
+// Exits non-zero with a readable report if anything fails. Creates a survey
+// through the live API, opens it, checks the map, and deletes it again, so a
+// run leaves no trace behind.
+
+import { chromium } from 'playwright'
+
+const BASE = (process.argv[2] || process.env.SMOKE_URL || '').replace(/\/$/, '')
+if (!BASE) {
+  console.error('Usage: node scripts/smoke.mjs <base-url>')
+  process.exit(2)
+}
+
+const results = []
+let failed = false
+
+function check(name, ok, detail = '') {
+  results.push({ name, ok, detail })
+  if (!ok) failed = true
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
+}
+
+async function api(path, init) {
+  const response = await fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { 'content-type': 'application/json', ...(init?.headers || {}) },
+  })
+  const text = await response.text()
+  let body
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = text.slice(0, 400)
+  }
+  return { status: response.status, body }
+}
+
+// Two real coordinates so the map has something to fit to. Downtown Dallas,
+// far enough apart to force a sensible zoom level.
+const PINS = [
+  { name: 'Smoke test — Main St', address: '1600 Main St, Dallas, TX', lat: 32.7808, lng: -96.7972 },
+  { name: 'Smoke test — Ross Ave', address: '2100 Ross Ave, Dallas, TX', lat: 32.7889, lng: -96.7969 },
+]
+
+let surveyId = null
+let browser = null
+
+try {
+  // 1. The Worker itself, with no static assets involved.
+  const health = await api('/api/health')
+  check('GET /api/health responds 200', health.status === 200, `status ${health.status}`)
+  check('health reports ok', health.body?.ok === true, JSON.stringify(health.body?.checks || health.body))
+  check('D1 database binding works', health.body?.checks?.database?.ok === true)
+  check('R2 storage binding works', health.body?.checks?.storage?.ok === true)
+
+  // 2. Seed a survey so there is a map worth loading.
+  const created = await api('/api/surveys', {
+    method: 'POST',
+    body: JSON.stringify({ name: `Smoke test ${new Date().toISOString()}` }),
+  })
+  check('POST /api/surveys creates a survey', created.status === 201, `status ${created.status}`)
+  surveyId = created.body?.survey?.id
+  if (!surveyId) throw new Error(`No survey id came back: ${JSON.stringify(created.body)}`)
+
+  for (const pin of PINS) {
+    const added = await api(`/api/surveys/${surveyId}/properties`, {
+      method: 'POST',
+      body: JSON.stringify(pin),
+    })
+    check(`POST property "${pin.name}"`, added.status === 201, `status ${added.status}`)
+  }
+
+  // 3. Load it in a real browser.
+  browser = await chromium.launch()
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  const page = await context.newPage()
+
+  const tileRequests = []
+  page.on('response', (response) => {
+    const url = response.url()
+    if (/tile\.openstreetmap\.org|basemaps\.cartocdn\.com|\/api\/tiles\//.test(url)) {
+      tileRequests.push({ url, status: response.status() })
+    }
+  })
+
+  const consoleErrors = []
+  page.on('pageerror', (error) => consoleErrors.push(error.message))
+
+  const response = await page.goto(`${BASE}/survey/${surveyId}`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 45000,
+  })
+  check('GET /survey/:id serves the app', response?.status() === 200, `status ${response?.status()}`)
+
+  // The frontend booted at all — this is what a missing asset upload breaks.
+  await page.waitForSelector('#root *', { timeout: 20000 })
+  check('React app mounted', true)
+
+  // 4. The map container and its tiles.
+  await page.waitForSelector('[aria-label="Property map"]', { timeout: 20000 })
+  check('map container rendered', true)
+
+  await page.waitForSelector('img.leaflet-tile', { timeout: 20000 })
+  // Give the tile grid a moment to finish filling in.
+  await page.waitForTimeout(4000)
+
+  const tiles = await page.$$eval('img.leaflet-tile', (nodes) =>
+    nodes.map((node) => ({
+      src: node.getAttribute('src') || '',
+      loaded: node.complete && node.naturalWidth > 0,
+      width: node.naturalWidth,
+    })),
+  )
+
+  const loaded = tiles.filter((tile) => tile.loaded)
+  check('tile elements exist', tiles.length > 0, `${tiles.length} tile <img> elements`)
+  check(
+    'tiles actually painted',
+    loaded.length >= 4,
+    `${loaded.length}/${tiles.length} loaded with non-zero pixels`,
+  )
+
+  const unresolved = tiles.filter((tile) => /\{[a-z]\}/.test(tile.src))
+  check('no unresolved URL placeholders', unresolved.length === 0, unresolved[0]?.src || '')
+
+  const osm = tiles.filter((tile) => tile.src.includes('tile.openstreetmap.org'))
+  check(
+    'base layer is the OpenStreetMap street basemap',
+    osm.length > 0,
+    `${osm.length} tiles from tile.openstreetmap.org; sample: ${tiles[0]?.src || 'none'}`,
+  )
+
+  const badTiles = tileRequests.filter((tile) => tile.status >= 400)
+  check('no failing tile requests', badTiles.length === 0, badTiles.slice(0, 3).map((t) => `${t.status} ${t.url}`).join(', '))
+
+  // 5. The UI around the map.
+  const markers = await page.$$('.leaflet-marker-icon')
+  check('property pins rendered on the map', markers.length >= PINS.length, `${markers.length} markers`)
+
+  const basemapPicker = await page.$('[aria-label="Change basemap"]')
+  check('basemap switcher present', Boolean(basemapPicker))
+
+  const zoomIn = await page.$('.leaflet-control-zoom-in')
+  check('map controls present', Boolean(zoomIn))
+
+  // Interact, to show the UI is live rather than a static paint.
+  if (zoomIn) {
+    await zoomIn.click()
+    await page.waitForTimeout(2500)
+    const afterZoom = await page.$$eval('img.leaflet-tile', (nodes) =>
+      nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
+    )
+    check('tiles reload after zooming', afterZoom >= 4, `${afterZoom} tiles loaded after zoom in`)
+  }
+
+  check('no uncaught page errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
+
+  await page.screenshot({ path: 'smoke-map.png', fullPage: false })
+  console.log('\nScreenshot written to smoke-map.png')
+} catch (error) {
+  failed = true
+  console.error(`\nSmoke test threw: ${error.stack || error.message}`)
+} finally {
+  if (surveyId) {
+    const removed = await api(`/api/surveys/${surveyId}`, { method: 'DELETE' }).catch(() => null)
+    console.log(`\nCleanup: deleted survey ${surveyId} (status ${removed?.status ?? 'unknown'})`)
+  }
+  if (browser) await browser.close()
+}
+
+console.log(`\n${results.filter((r) => r.ok).length}/${results.length} checks passed against ${BASE}`)
+process.exit(failed ? 1 : 0)
