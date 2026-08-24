@@ -96,9 +96,17 @@ export const assetsShim = {
 }
 
 /** A worker environment wired to the shims. */
-export async function workerEnv(overrides = {}) {
+/**
+ * @param {object} overrides  replace or add bindings
+ * @param {object} options
+ * @param {boolean} options.migrated  pre-apply the schema, as a long-running
+ *   deployment would already have it. Pass false to hand the Worker a bare
+ *   database and check it migrates itself — the case that broke production
+ *   while every test here passed, because this helper was hiding it.
+ */
+export async function workerEnv(overrides = {}, { migrated = true } = {}) {
   const { d1Adapter } = await import('../app/lib/sql.js')
   const DB = new D1Shim()
-  await d1Adapter(DB).migrate()
+  if (migrated) await d1Adapter(DB).migrate()
   return { DB, BUCKET: new R2Shim(), ASSETS: assetsShim, ...overrides }
 }

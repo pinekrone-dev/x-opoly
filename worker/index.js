@@ -25,6 +25,36 @@ import { r2Storage } from '../app/lib/storage.js'
  */
 const apps = new WeakMap()
 
+/**
+ * Schema migration, run once per isolate.
+ *
+ * The Node server migrates at startup; the Worker has no startup, so for a
+ * while it did not migrate at all. The D1 schema was applied out of band
+ * instead, which meant a schema change shipped in code was invisible in
+ * production until someone remembered to run it by hand — and the first
+ * request that needed a new table failed with `no such table`.
+ *
+ * Applying it lazily costs one PRAGMA sweep on a cold start and makes the
+ * deployment self-healing. A failure is not cached: the promise is cleared so
+ * the next request tries again rather than the isolate wedging on a transient
+ * D1 error.
+ */
+const schemas = new WeakMap()
+
+function ensureSchema(env) {
+  let pending = schemas.get(env)
+  if (!pending) {
+    pending = d1Adapter(env.DB)
+      .migrate()
+      .catch((error) => {
+        schemas.delete(env)
+        throw error
+      })
+    schemas.set(env, pending)
+  }
+  return pending
+}
+
 function appFor(env) {
   let app = apps.get(env)
   if (!app) {
@@ -87,6 +117,12 @@ export default {
     const url = new URL(request.url)
 
     if (url.pathname.startsWith('/api/')) {
+      if (env.DB) {
+        // Let the request through even if migrating failed: routes that do not
+        // touch the database still work, and the ones that do will report the
+        // real error rather than this one.
+        await ensureSchema(env).catch(() => undefined)
+      }
       return appFor(env).fetch(request, env, ctx)
     }
 

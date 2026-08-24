@@ -35,6 +35,21 @@ describe('the Cloudflare Worker', () => {
     assert.ok(body.features.tiles.url.includes('{z}'))
   })
 
+  test('migrates a database that has never had the schema applied', async () => {
+    // The Node server migrates at startup. The Worker has no startup, so for a
+    // while it never migrated: a schema change shipped in code was invisible
+    // in production, and the first request needing a new table failed with
+    // `no such table: stages`. Every test here passed because the shim was
+    // applying the schema itself.
+    const env = await workerEnv({}, { migrated: false })
+
+    const created = await call(env, '/api/surveys', asJson({ name: 'Cold start' }))
+    assert.equal(created.status, 201, 'the Worker applied the schema on the first request')
+
+    const stages = await call(env, `/api/surveys/${created.body.survey.id}/stages`)
+    assert.ok(stages.body.stages.length > 0, 'including tables added after the first release')
+  })
+
   test('a deployment missing its bindings fails health instead of passing it', async () => {
     // Exactly the failure a Worker deployed without wrangler.toml's bindings
     // hits: the adapters construct fine, then every real request 500s.
