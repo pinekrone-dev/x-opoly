@@ -205,3 +205,58 @@
   transform: rotate(-45deg) scale(1.25);
   border-color: #0f172a;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Tour book printing                                                          */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The tour book's export is the browser's own print-to-PDF, so the print
+ * stylesheet is the export format. Every machine already has it, and there is
+ * no server-side renderer to keep working.
+ */
+
+.book-page {
+  break-inside: avoid;
+}
+
+@media print {
+  /* The app chrome is for editing the book, not for the book. */
+  .no-print {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  @page {
+    size: letter portrait;
+    margin: 0.5in;
+  }
+
+  /* One stop per page: a stop split across a page break is unreadable on a
+     dashboard while driving, which is where this document gets used. */
+  .book-page {
+    break-after: page;
+    page-break-after: always;
+    box-shadow: none !important;
+  }
+
+  .book-page:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+
+  /* Without this, browsers drop background fills and the stage colours and
+     numbered badges print as empty outlines. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  img {
+    break-inside: avoid;
+  }
+}

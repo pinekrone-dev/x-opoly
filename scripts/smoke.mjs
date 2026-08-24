@@ -63,6 +63,36 @@ const PINS = [
   },
 ]
 
+
+/**
+ * A minimal one-page PDF, inline so the test carries no binary fixture.
+ * pdf.js has to actually parse and render this, so a malformed document
+ * fails the run rather than passing quietly.
+ */
+const FLYER_PDF = Uint8Array.from(atob('JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA1IDAgUiA+PiA+PiAvQ29udGVudHMgNCAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA3NiA+PgpzdHJlYW0KQlQgL0YxIDI0IFRmIDcyIDcwMCBUZCAoU21va2UgVGVzdCBGbHllcikgVGogRVQKMCAwIDEgcmcgNzIgNDAwIDQwMCAyNTAgcmUgZgplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDM2NyAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQzNwolJUVPRgo='), (c) => c.charCodeAt(0))
+
+/** A 1x1 PNG, for the image-upload path. */
+const TINY_PNG = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='),
+  (c) => c.charCodeAt(0),
+)
+
+async function upload(path, bytes, contentType, headers = {}) {
+  const response = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: { 'content-type': contentType, ...headers },
+    body: bytes,
+  })
+  const text = await response.text()
+  let body
+  try {
+    body = JSON.parse(text)
+  } catch {
+    body = text.slice(0, 300)
+  }
+  return { status: response.status, body }
+}
+
 let surveyId = null
 let browser = null
 
@@ -124,6 +154,29 @@ try {
   )
   check('the route reports its source', ['osrm', 'estimate'].includes(tour.body?.routeSource),
     String(tour.body?.routeSource))
+
+  // Flyer and images: what the tour book is built out of.
+  const flyerAttached = await upload(
+    `/api/properties/${createdIds[0]}/flyer`,
+    FLYER_PDF,
+    'application/pdf',
+    { 'x-filename': 'smoke-flyer.pdf' },
+  )
+  check('a PDF flyer attaches to an existing site', flyerAttached.status === 200,
+    `status ${flyerAttached.status}`)
+  check('the flyer is served back for rendering',
+    Boolean(flyerAttached.body?.property?.flyerUrl), String(flyerAttached.body?.property?.flyerUrl))
+
+  const imageAdded = await upload(
+    `/api/properties/${createdIds[0]}/images`,
+    TINY_PNG,
+    'image/png',
+    { 'x-source': 'flyer-crop', 'x-caption': encodeURIComponent('Front elevation') },
+  )
+  check('a cropped image stores against the site', imageAdded.status === 201,
+    `status ${imageAdded.status}`)
+  check('and is credited to the flyer', imageAdded.body?.image?.source === 'flyer-crop',
+    String(imageAdded.body?.image?.source))
 
   // 3. Load it in a real browser.
   browser = await chromium.launch()
@@ -230,8 +283,37 @@ try {
 
   check('no uncaught page errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
 
+  // The flyer viewer: pdf.js is a lazy chunk, so this also proves the split
+  // bundle actually loads rather than 404ing.
+  await page.click('text=Flyer').catch(() => undefined)
+  await page.waitForTimeout(3500)
+  const flyerCanvas = await page.$('[aria-label="Flyer page"]')
+  check('the flyer renders to a canvas', Boolean(flyerCanvas))
+  if (flyerCanvas) {
+    const painted = await flyerCanvas.evaluate((node) => node.width > 0 && node.height > 0)
+    check('the PDF page actually rasterised', painted)
+  }
+  const viewerText = await page.textContent('body')
+  check('the crop prompt is shown', viewerText?.includes('Drag a box') ?? false)
+
   await page.screenshot({ path: 'smoke-map.png', fullPage: false })
   console.log('\nScreenshot written to smoke-map.png')
+
+  // The tour book, which is the document the whole flyer-crop flow feeds.
+  const bookResponse = await page.goto(`${BASE}/survey/${surveyId}/book`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 45000,
+  })
+  check('the tour book route serves', bookResponse?.status() === 200, `status ${bookResponse?.status()}`)
+  await page.waitForTimeout(3000)
+  const bookText = await page.textContent('body')
+  check('the book names the survey', bookText?.includes('Site tour') ?? false)
+  check('the book lists a stop', bookText?.includes(PINS[0].name) ?? false)
+  const bookImages = await page.$$eval('.book-page img', (nodes) =>
+    nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
+  )
+  check('the captured photo appears in the book', bookImages > 0, `${bookImages} images loaded`)
+  await page.screenshot({ path: 'smoke-book.png', fullPage: false })
 } catch (error) {
   failed = true
   console.error(`\nSmoke test threw: ${error.stack || error.message}`)

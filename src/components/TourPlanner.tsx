@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import type { Property, TourAnchor, TourPlan } from '../types'
 import { displayName, fullAddress } from '../lib/format'
+import { navigate } from '../lib/router'
 
 /**
  * The tour configuration panel.
@@ -152,6 +153,13 @@ export default function TourPlanner({
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Tour configuration</h2>
+        <button
+          type="button"
+          className="btn-secondary px-2 py-1 text-xs"
+          onClick={() => navigate(`/survey/${surveyId}/book`)}
+        >
+          Tour book
+        </button>
         {onClose ? (
           <button
             type="button"

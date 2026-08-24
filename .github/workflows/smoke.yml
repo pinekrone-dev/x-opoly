@@ -76,6 +76,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-map-${{ strategy.job-index }}
-          path: smoke-map.png
+          name: smoke-shots-${{ strategy.job-index }}
+          path: |
+            smoke-map.png
+            smoke-book.png
           if-no-files-found: warn

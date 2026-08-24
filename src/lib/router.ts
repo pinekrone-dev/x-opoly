@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
 /**
- * A minimal path router. The app has three destinations, so a dependency would
- * cost more than it saves.
+ * A minimal path router. The app has a handful of destinations, so a
+ * dependency would cost more than it saves.
  */
 export function navigate(path: string): void {
   window.history.pushState({}, '', path)
@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'surveys' | 'workspace' | 'share'
+  view: 'surveys' | 'workspace' | 'share' | 'book'
   id?: string
   token?: string
 }
@@ -30,6 +30,10 @@ export interface Route {
 export function matchRoute(path: string): Route {
   const shared = path.match(/^\/s\/([\w-]+)\/?$/)
   if (shared) return { view: 'share', token: shared[1] }
+
+  // Matched before the workspace, whose pattern would otherwise not reach it.
+  const book = path.match(/^\/survey\/([\w-]+)\/book\/?$/)
+  if (book) return { view: 'book', id: book[1] }
 
   const workspace = path.match(/^\/survey\/([\w-]+)\/?$/)
   if (workspace) return { view: 'workspace', id: workspace[1] }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import ShareView from './views/ShareView'
 import SurveyList from './views/SurveyList'
 import SurveyWorkspace from './views/SurveyWorkspace'
+import TourBook from './views/TourBook'
 import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
 import type { AppFeatures } from './types'
@@ -43,6 +44,10 @@ export default function App() {
 
   if (route.view === 'share' && route.token) {
     return <ShareView token={route.token} features={features} />
+  }
+
+  if (route.view === 'book' && route.id) {
+    return <TourBook id={route.id} />
   }
 
   if (route.view === 'workspace' && route.id) {
