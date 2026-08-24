@@ -164,7 +164,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     return (
       <div className="grid min-h-full place-items-center p-6">
         <div className="panel max-w-md p-8 text-center">
-          <p className="text-sm text-slate-300">{error}</p>
+          <p className="text-sm text-body">{error}</p>
           <button type="button" className="btn-secondary mt-4" onClick={() => navigate('/')}>
             Back to surveys
           </button>
@@ -173,7 +173,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     )
   }
 
-  if (!survey) return <div className="grid min-h-full place-items-center text-sm text-slate-500">Loading…</div>
+  if (!survey) return <div className="grid min-h-full place-items-center text-sm text-muted">Loading…</div>
 
   const counts = properties.reduce<Record<string, number>>((totals, property) => {
     totals[property.stage] = (totals[property.stage] ?? 0) + 1
@@ -205,7 +205,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-b border-white/10 bg-ink-900">
+      <header className="border-b border-line bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">
             <button type="button" className="btn-ghost px-2 py-1" onClick={() => navigate('/')} aria-label="Back to surveys">
@@ -215,13 +215,13 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             </button>
             <div className="min-w-0">
               <input
-                className="w-full truncate border-0 bg-transparent p-0 text-sm font-semibold text-white focus:outline-none"
+                className="w-full truncate border-0 bg-transparent p-0 text-sm font-semibold text-ink focus:outline-none"
                 value={survey.name}
                 aria-label="Survey name"
                 onChange={(event) => setSurvey({ ...survey, name: event.target.value })}
                 onBlur={(event) => void api.updateSurvey(survey.id, { name: event.target.value })}
               />
-              <p className="truncate text-xs text-slate-500">
+              <p className="truncate text-xs text-muted">
                 {survey.clientName ? `for ${survey.clientName} · ` : ''}
                 {properties.length} site{properties.length === 1 ? '' : 's'}
                 {Object.entries(counts)
@@ -255,11 +255,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         </div>
 
         {(notice || dropPin) && (
-          <p className="flex items-center justify-between gap-3 border-t border-white/5 bg-brand/10 px-4 py-2 text-xs text-brand-soft">
+          <p className="flex items-center justify-between gap-3 border-t border-line bg-brand/10 px-4 py-2 text-xs text-brand-soft">
             {dropPin ? 'Click the map to place the new site.' : notice}
             <button
               type="button"
-              className="text-slate-400 hover:text-slate-100"
+              className="text-muted hover:text-ink"
               onClick={() => { setNotice(null); setDropPin(false) }}
             >
               Dismiss
@@ -271,7 +271,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       <main className="min-h-0 flex-1">
         {tab === 'map' && (
           <div className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]">
-            <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-white/10 bg-ink-900">{sidebar}</div>
+            <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">{sidebar}</div>
             <div className={dropPin ? 'cursor-crosshair' : ''}>
               <MapCanvas
                 properties={visibleProperties}

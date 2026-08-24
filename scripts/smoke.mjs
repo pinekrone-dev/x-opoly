@@ -372,22 +372,58 @@ try {
   )
   check('the captured photo appears in the book', bookImages > 0, `${bookImages} images loaded`)
 
-  // Exporting must produce a real file. A button that throws inside jsPDF
-  // looks identical to one that works until someone tries to send the book.
+  // Exporting must produce a real file, and the file must contain the things
+  // the book exists to carry. Byte size was the first check here and it was a
+  // bad one: it only ever asserted "bigger than a number I guessed", and it
+  // failed on a fixture using a 1x1 PNG while the export was working fine.
+  // Parsing the PDF checks the actual claims instead.
   try {
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 45000 }),
       page.click('text=Export PDF'),
     ])
-    const path = await download.path()
-    const bytes = path ? (await import('node:fs')).statSync(path).size : 0
-    check('Export PDF downloads a file', Boolean(path), download.suggestedFilename())
-    check('the exported PDF has real content', bytes > 20000, `${bytes} bytes`)
+    const file = await download.path()
+    check('Export PDF downloads a file', Boolean(file), download.suggestedFilename())
 
-    const head = path
-      ? (await import('node:fs')).readFileSync(path).subarray(0, 5).toString('latin1')
-      : ''
-    check('the download is a PDF', head === '%PDF-', JSON.stringify(head))
+    if (file) {
+      const fs = await import('node:fs')
+      const bytes = fs.readFileSync(file)
+      check('the download is a PDF', bytes.subarray(0, 5).toString('latin1') === '%PDF-')
+
+      const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+      const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise
+
+      check(
+        'the book is a cover plus one page per stop',
+        doc.numPages === PINS.length + 1,
+        `${doc.numPages} pages for ${PINS.length} stops`,
+      )
+
+      let text = ''
+      let artwork = 0
+      for (let number = 1; number <= doc.numPages; number += 1) {
+        const pdfPage = await doc.getPage(number)
+        const content = await pdfPage.getTextContent()
+        text += content.items.map((item) => item.str).join(' ')
+        const ops = await pdfPage.getOperatorList()
+        artwork += ops.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject).length
+      }
+      // charSpace and line breaks make exact matching brittle, so compare with
+      // whitespace removed.
+      const flat = text.replace(/\s+/g, '').toLowerCase()
+
+      check('the book carries the street address', flat.includes('1600mainst'), text.slice(0, 120))
+      check('the book carries the property details', flat.includes('availablesf'))
+      check('the book carries the detail values', flat.includes('9,822sf'))
+      check('the book carries the listing contact', flat.includes('broker@example.com'))
+      check('the book offers directions', flat.includes('scanfordirections'))
+      check('the book carries arrival times', /\d{1,2}:\d{2}(am|pm)/.test(flat))
+      check(
+        'photos and QR codes are embedded',
+        artwork >= PINS.length,
+        `${artwork} images across ${doc.numPages} pages`,
+      )
+    }
   } catch (error) {
     check('Export PDF downloads a file', false, error.message.split('\n')[0])
   }

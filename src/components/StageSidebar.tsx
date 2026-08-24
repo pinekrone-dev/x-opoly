@@ -69,9 +69,9 @@ export default function StageSidebar({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b border-white/5 px-3 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Sites</h2>
-        <span className="ml-auto text-xs text-slate-500">{properties.length}</span>
+      <header className="flex items-center gap-2 border-b border-line px-3 py-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted">Sites</h2>
+        <span className="ml-auto text-xs text-muted">{properties.length}</span>
         <button
           type="button"
           className="btn-secondary px-2 py-1 text-xs"
@@ -83,10 +83,10 @@ export default function StageSidebar({
       </header>
 
       {adding ? (
-        <div className="flex gap-2 border-b border-white/5 px-3 py-2">
+        <div className="flex gap-2 border-b border-line px-3 py-2">
           <input
             autoFocus
-            className="input flex-1 py-1 text-sm"
+            className="field flex-1 py-1 text-sm"
             placeholder="Stage name"
             aria-label="New stage name"
             value={newName}
@@ -112,7 +112,7 @@ export default function StageSidebar({
           return (
             <section
               key={stage.id}
-              className={`border-l-2 transition-colors ${isOver(stage.id) ? 'bg-white/[0.06]' : ''}`}
+              className={`border-l-2 transition-colors ${isOver(stage.id) ? 'bg-brand-tint' : ''}`}
               style={{ borderLeftColor: stage.color }}
               {...dropHandlers(stage.id)}
             >
@@ -125,7 +125,7 @@ export default function StageSidebar({
                 {renaming === stage.id ? (
                   <input
                     autoFocus
-                    className="input flex-1 py-0.5 text-sm"
+                    className="field flex-1 py-0.5 text-sm"
                     defaultValue={stage.name}
                     aria-label={`Rename ${stage.name}`}
                     onBlur={(event) => {
@@ -140,18 +140,18 @@ export default function StageSidebar({
                 ) : (
                   <button
                     type="button"
-                    className="truncate text-sm font-semibold text-slate-200"
+                    className="truncate text-sm font-semibold text-ink"
                     onDoubleClick={() => setRenaming(stage.id)}
                     title="Double-click to rename"
                   >
                     {stage.name}
                   </button>
                 )}
-                <span className="text-xs text-slate-500">({sites.length})</span>
+                <span className="text-xs text-muted">({sites.length})</span>
 
                 <button
                   type="button"
-                  className="ml-auto text-slate-500 hover:text-slate-200"
+                  className="ml-auto text-muted hover:text-ink"
                   onClick={() => onToggleHidden(stage)}
                   aria-label={stage.hidden ? `Show ${stage.name} on the map` : `Hide ${stage.name} from the map`}
                   aria-pressed={stage.hidden}
@@ -160,7 +160,7 @@ export default function StageSidebar({
                 </button>
                 <button
                   type="button"
-                  className="text-slate-500 hover:text-slate-200"
+                  className="text-muted hover:text-ink"
                   onClick={() => setCollapsed((current) => ({ ...current, [stage.id]: !current[stage.id] }))}
                   aria-label={isCollapsed ? `Expand ${stage.name}` : `Collapse ${stage.name}`}
                   aria-expanded={!isCollapsed}
@@ -169,7 +169,7 @@ export default function StageSidebar({
                 </button>
                 <button
                   type="button"
-                  className="text-slate-600 hover:text-rose-400"
+                  className="text-faint hover:text-rose-400"
                   onClick={() => onDeleteStage(stage)}
                   aria-label={`Delete ${stage.name}`}
                   title="Sites in this stage become unstaged"
@@ -191,7 +191,7 @@ export default function StageSidebar({
                     />
                   ))}
                   {sites.length === 0 ? (
-                    <li className="px-2 py-2 text-xs text-slate-600">Drag a site here</li>
+                    <li className="px-2 py-2 text-xs text-faint">Drag a site here</li>
                   ) : null}
                 </ul>
               ) : null}
@@ -200,10 +200,10 @@ export default function StageSidebar({
         })}
 
         <section
-          className={`mt-2 border-t border-white/5 transition-colors ${isOver(null) ? 'bg-white/[0.06]' : ''}`}
+          className={`mt-2 border-t border-line transition-colors ${isOver(null) ? 'bg-brand-tint' : ''}`}
           {...dropHandlers(null)}
         >
-          <h3 className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Unstaged</h3>
+          <h3 className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted">Unstaged</h3>
           <ul className="space-y-1 px-2 pb-4">
             {unstaged.map((property) => (
               <SiteCard
@@ -215,7 +215,7 @@ export default function StageSidebar({
               />
             ))}
             {unstaged.length === 0 ? (
-              <li className="rounded-lg border border-dashed border-white/10 px-3 py-4 text-center text-xs text-slate-600">
+              <li className="rounded-lg border border-dashed border-line px-3 py-4 text-center text-xs text-faint">
                 Drop here to unstage
               </li>
             ) : null}
@@ -248,16 +248,16 @@ function SiteCard({
           event.dataTransfer.effectAllowed = 'move'
         }}
         className={`flex cursor-grab items-center gap-2 rounded-lg border px-2 py-2 text-left active:cursor-grabbing ${
-          selected ? 'border-teal-400/40 bg-teal-400/10' : 'border-white/5 bg-white/[0.02] hover:bg-white/[0.05]'
+          selected ? 'border-brand/50 bg-brand-tint' : 'border-line bg-sunken hover:bg-sunken'
         } ${dimmed ? 'opacity-50' : ''}`}
       >
-        <span className="text-slate-600" aria-hidden>
+        <span className="text-faint" aria-hidden>
           <Grip />
         </span>
         <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
         <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(property.id)}>
-          <span className="block truncate text-sm text-slate-100">{property.name || 'Untitled site'}</span>
-          <span className="block truncate text-xs text-slate-500">{property.address || 'No address'}</span>
+          <span className="block truncate text-sm text-ink">{property.name || 'Untitled site'}</span>
+          <span className="block truncate text-xs text-muted">{property.address || 'No address'}</span>
         </button>
       </div>
     </li>

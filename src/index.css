@@ -6,7 +6,7 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   html,
@@ -16,29 +16,33 @@
   }
 
   body {
-    @apply bg-ink-950 text-slate-200 antialiased;
+    @apply bg-paper text-body antialiased;
   }
 
   ::selection {
-    @apply bg-brand/30 text-white;
+    @apply bg-brand/25 text-ink;
   }
 
   *:focus-visible {
-    @apply outline-none ring-2 ring-brand/70 ring-offset-2 ring-offset-ink-950;
+    @apply outline-none ring-2 ring-brand/60 ring-offset-2 ring-offset-paper;
   }
 }
 
 @layer components {
+  /*
+   * On a light interface, depth comes from a hairline and a soft shadow.
+   * Reusing the dark theme's heavy black shadow here reads as dirt.
+   */
   .panel {
-    @apply rounded-xl border border-white/10 bg-ink-900 shadow-lg shadow-black/30;
+    @apply rounded-xl border border-line bg-surface shadow-sm shadow-slate-900/5;
   }
 
   .panel-header {
-    @apply flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3;
+    @apply flex items-center justify-between gap-3 border-b border-line px-4 py-3;
   }
 
   .panel-title {
-    @apply text-sm font-semibold text-slate-100;
+    @apply text-sm font-semibold text-ink;
   }
 
   .btn {
@@ -46,29 +50,33 @@
       disabled:cursor-not-allowed disabled:opacity-40;
   }
 
+  /*
+   * White on teal, not dark-on-teal: #14b8a6 is mid-toned, and dark text over
+   * it is the weaker of the two contrasts.
+   */
   .btn-primary {
-    @apply btn bg-brand text-ink-950 hover:bg-brand-soft;
+    @apply btn bg-brand text-white hover:bg-brand-deep;
   }
 
   .btn-secondary {
-    @apply btn border border-white/15 bg-white/5 text-slate-200 hover:border-white/25 hover:bg-white/10;
+    @apply btn border border-line-strong bg-surface text-body hover:border-muted hover:bg-sunken;
   }
 
   .btn-ghost {
-    @apply btn text-slate-400 hover:bg-white/5 hover:text-slate-100;
+    @apply btn text-muted hover:bg-sunken hover:text-ink;
   }
 
   .btn-danger {
-    @apply btn border border-rose-500/30 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20;
+    @apply btn border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100;
   }
 
   .field {
-    @apply w-full rounded-lg border border-white/10 bg-ink-950 px-3 py-2 text-sm text-slate-100
-      placeholder:text-slate-500 focus:border-brand/60;
+    @apply w-full rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-ink
+      placeholder:text-faint focus:border-brand focus:ring-0;
   }
 
   .label {
-    @apply mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500;
+    @apply mb-1 block text-[11px] font-semibold uppercase tracking-wider text-muted;
   }
 
   .pill {
@@ -76,16 +84,16 @@
   }
 
   .tab {
-    @apply relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-400 transition
-      hover:text-slate-100;
+    @apply relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-muted transition
+      hover:text-ink;
   }
 
   .tab-active {
-    @apply bg-white/10 text-white;
+    @apply bg-brand-tint text-brand-deep;
   }
 
   .stat {
-    @apply rounded-lg border border-white/10 bg-ink-850 px-3 py-2;
+    @apply rounded-lg border border-line bg-sunken px-3 py-2;
   }
 }
 

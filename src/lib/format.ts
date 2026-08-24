@@ -1,11 +1,11 @@
 import type { Property, Stage } from '../types'
 
 export const STAGE_META: Record<Stage, { label: string; color: string; ring: string }> = {
-  prospect: { label: 'Prospect', color: '#94a3b8', ring: 'bg-slate-500/15 text-slate-300 ring-slate-400/30' },
+  prospect: { label: 'Prospect', color: '#94a3b8', ring: 'bg-slate-500/15 text-body ring-slate-400/30' },
   touring: { label: 'Touring', color: '#38bdf8', ring: 'bg-sky-500/15 text-sky-300 ring-sky-400/30' },
   loi: { label: 'LOI out', color: '#fbbf24', ring: 'bg-amber-500/15 text-amber-300 ring-amber-400/30' },
   under_contract: { label: 'Under contract', color: '#34d399', ring: 'bg-emerald-500/15 text-emerald-300 ring-emerald-400/30' },
-  passed: { label: 'Passed', color: '#64748b', ring: 'bg-slate-600/20 text-slate-400 ring-slate-500/30' },
+  passed: { label: 'Passed', color: '#64748b', ring: 'bg-slate-600/20 text-muted ring-slate-500/30' },
 }
 
 export const STAGE_ORDER: Stage[] = ['prospect', 'touring', 'loi', 'under_contract', 'passed']

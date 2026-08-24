@@ -60,7 +60,7 @@ export default function CustomFields({
     <div className="sm:col-span-2">
       <div className="mb-2 flex items-center gap-2">
         <span className="label mb-0">Custom</span>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-muted">
           ({fields.length}/{MAX_FIELDS})
         </span>
       </div>
@@ -81,7 +81,7 @@ export default function CustomFields({
               draggable
               onDragStart={() => setDragging(index)}
               onDragEnd={() => setDragging(null)}
-              className="cursor-grab px-0.5 text-slate-600 active:cursor-grabbing"
+              className="cursor-grab px-0.5 text-faint active:cursor-grabbing"
               aria-hidden
             >
               <Grip />
@@ -102,7 +102,7 @@ export default function CustomFields({
             />
             <button
               type="button"
-              className="px-1 text-slate-600 hover:text-rose-400"
+              className="px-1 text-faint hover:text-rose-400"
               onClick={() => remove(index)}
               aria-label={`Remove ${field.label || `field ${index + 1}`}`}
             >
@@ -121,7 +121,7 @@ export default function CustomFields({
             <button
               key={suggestion}
               type="button"
-              className="rounded-md border border-white/10 px-2 py-1 text-xs text-slate-400 hover:bg-white/5 hover:text-slate-200"
+              className="rounded-md border border-line px-2 py-1 text-xs text-muted hover:bg-sunken hover:text-ink"
               onClick={() => add(suggestion)}
             >
               + {suggestion}
@@ -129,7 +129,7 @@ export default function CustomFields({
           ))}
         </div>
       ) : (
-        <p className="mt-2 text-xs text-slate-500">
+        <p className="mt-2 text-xs text-muted">
           That is the maximum of {MAX_FIELDS} fields. Remove one to add another.
         </p>
       )}

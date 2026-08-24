@@ -332,7 +332,7 @@ export default function MapCanvas({
         <div className="absolute right-3 top-3 z-[500]">
           <button
             type="button"
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/90 px-2.5 py-1.5 text-xs font-medium text-slate-200 shadow-lg backdrop-blur hover:border-white/25"
+            className="flex items-center gap-1.5 rounded-lg border border-line bg-surface/90 px-2.5 py-1.5 text-xs font-medium text-ink shadow-lg backdrop-blur hover:border-muted"
             aria-expanded={pickerOpen}
             aria-label="Change basemap"
             onClick={() => setPickerOpen((open) => !open)}
@@ -344,13 +344,13 @@ export default function MapCanvas({
           </button>
 
           {pickerOpen && (
-            <ul className="animate-fade-in mt-1 w-48 overflow-hidden rounded-lg border border-white/10 bg-ink-900/95 shadow-xl backdrop-blur">
+            <ul className="animate-fade-in mt-1 w-48 overflow-hidden rounded-lg border border-line bg-surface/95 shadow-xl backdrop-blur">
               {options.map((option) => (
                 <li key={option.provider}>
                   <button
                     type="button"
-                    className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-white/5 ${
-                      option.provider === active.provider ? 'text-brand' : 'text-slate-300'
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-sunken ${
+                      option.provider === active.provider ? 'text-brand' : 'text-body'
                     }`}
                     onClick={() => chooseBasemap(option.provider)}
                   >

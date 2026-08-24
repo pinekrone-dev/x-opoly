@@ -39,7 +39,7 @@ export default function App() {
   }, [])
 
   if (!features) {
-    return <div className="grid min-h-full place-items-center text-sm text-slate-500">Starting up…</div>
+    return <div className="grid min-h-full place-items-center text-sm text-muted">Starting up…</div>
   }
 
   if (route.view === 'share' && route.token) {

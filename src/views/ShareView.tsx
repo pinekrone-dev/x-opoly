@@ -30,21 +30,21 @@ export default function ShareView({ token, features }: { token: string; features
     return (
       <div className="grid min-h-full place-items-center p-6">
         <div className="panel max-w-md p-8 text-center">
-          <h1 className="text-lg font-semibold text-slate-100">This map is not available</h1>
-          <p className="mt-2 text-sm text-slate-400">{error}</p>
+          <h1 className="text-lg font-semibold text-ink">This map is not available</h1>
+          <p className="mt-2 text-sm text-muted">{error}</p>
         </div>
       </div>
     )
   }
 
-  if (!payload) return <div className="grid min-h-full place-items-center text-sm text-slate-500">Loading the map…</div>
+  if (!payload) return <div className="grid min-h-full place-items-center text-sm text-muted">Loading the map…</div>
 
   const { survey, properties } = payload
   const accent = survey.brandColor || '#14b8a6'
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-ink-900 px-5 py-3">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-5 py-3">
         <div className="flex items-center gap-3">
           <span className="grid h-9 w-9 place-items-center rounded-lg" style={{ background: `${accent}22` }}>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={accent} strokeWidth="2" aria-hidden>
@@ -53,31 +53,31 @@ export default function ShareView({ token, features }: { token: string; features
             </svg>
           </span>
           <div>
-            <h1 className="text-sm font-semibold text-white">{survey.name}</h1>
-            <p className="text-xs text-slate-500">
+            <h1 className="text-sm font-semibold text-ink">{survey.name}</h1>
+            <p className="text-xs text-muted">
               {[survey.clientName && `Prepared for ${survey.clientName}`, survey.brokerName && `by ${survey.brokerName}`]
                 .filter(Boolean)
                 .join(' · ')}
             </p>
           </div>
         </div>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-muted">
           {properties.length} site{properties.length === 1 ? '' : 's'}
           {survey.expiresAt && ` · link valid to ${shortDate(survey.expiresAt)}`}
         </p>
       </header>
 
       <div className="grid min-h-0 flex-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
-        <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-white/10 bg-ink-900">
+        <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">
           {selected ? (
             <PropertyPanel property={selected} readOnly onClose={() => setSelectedId(null)} />
           ) : (
-            <ul className="divide-y divide-white/5">
+            <ul className="divide-y divide-line">
               {properties.map((property) => (
                 <li key={property.id}>
                   <button
                     type="button"
-                    className="flex w-full items-start gap-3 p-4 text-left hover:bg-white/[0.03]"
+                    className="flex w-full items-start gap-3 p-4 text-left hover:bg-sunken"
                     onClick={() => setSelectedId(property.id)}
                   >
                     {property.photoUrl ? (
@@ -94,9 +94,9 @@ export default function ShareView({ token, features }: { token: string; features
                       </span>
                     )}
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium text-slate-100">{displayName(property)}</span>
-                      <span className="block truncate text-xs text-slate-500">{fullAddress(property)}</span>
-                      <span className="mt-1 block text-xs text-slate-400">
+                      <span className="block truncate text-sm font-medium text-ink">{displayName(property)}</span>
+                      <span className="block truncate text-xs text-muted">{fullAddress(property)}</span>
+                      <span className="mt-1 block text-xs text-muted">
                         {rate(property)} · {sqft(property.sizeSqft)}
                       </span>
                     </span>
@@ -104,7 +104,7 @@ export default function ShareView({ token, features }: { token: string; features
                 </li>
               ))}
               {properties.length === 0 && (
-                <li className="p-10 text-center text-sm text-slate-500">No sites have been added yet.</li>
+                <li className="p-10 text-center text-sm text-muted">No sites have been added yet.</li>
               )}
             </ul>
           )}

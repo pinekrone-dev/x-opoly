@@ -235,7 +235,7 @@ export default function FlyerViewer({
 
   if (!property.flyerUrl) {
     return (
-      <p className="p-4 text-xs text-slate-500">
+      <p className="p-4 text-xs text-muted">
         No flyer on this site yet. Upload one and its pages render here, ready to cut photos out of.
       </p>
     )
@@ -243,7 +243,7 @@ export default function FlyerViewer({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-3 py-2">
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         <button
           type="button"
           className="btn-secondary px-2 py-1 text-xs"
@@ -252,7 +252,7 @@ export default function FlyerViewer({
         >
           Prev
         </button>
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-muted">
           Page {page}
           {pageCount ? ` of ${pageCount}` : ''}
         </span>
@@ -274,7 +274,7 @@ export default function FlyerViewer({
           >
             −
           </button>
-          <span className="w-12 text-center text-xs text-slate-500">{Math.round(zoom * 100)}%</span>
+          <span className="w-12 text-center text-xs text-muted">{Math.round(zoom * 100)}%</span>
           <button
             type="button"
             className="btn-secondary px-2 py-1 text-xs"
@@ -286,8 +286,8 @@ export default function FlyerViewer({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 border-b border-white/5 bg-ink-850 px-3 py-2">
-        <p className="text-xs text-slate-400">
+      <div className="flex items-center gap-2 border-b border-line bg-sunken px-3 py-2">
+        <p className="text-xs text-muted">
           {selection
             ? `${Math.round(selection.width)} × ${Math.round(selection.height)} selected`
             : 'Drag a box over the page to cut out a photo.'}
@@ -308,7 +308,7 @@ export default function FlyerViewer({
       </div>
 
       {error ? <p className="px-3 py-2 text-xs text-rose-400">{error}</p> : null}
-      {loading ? <p className="px-3 py-2 text-xs text-slate-500">Loading the flyer…</p> : null}
+      {loading ? <p className="px-3 py-2 text-xs text-muted">Loading the flyer…</p> : null}
 
       <div ref={wrapRef} className="flex-1 overflow-auto p-3">
         <div className="relative inline-block">
@@ -322,7 +322,7 @@ export default function FlyerViewer({
           />
           {selection ? (
             <div
-              className="pointer-events-none absolute border-2 border-teal-400 bg-teal-400/15"
+              className="pointer-events-none absolute border-2 border-brand bg-brand/20"
               style={{
                 left: selection.x,
                 top: selection.y,
@@ -336,7 +336,7 @@ export default function FlyerViewer({
       </div>
 
       {images.length > 0 ? (
-        <div className="border-t border-white/5 p-3">
+        <div className="border-t border-line p-3">
           <h4 className="label">Captured photos ({images.length})</h4>
           <ul className="mt-2 grid grid-cols-3 gap-2">
             {images.map((image) => (
@@ -345,20 +345,20 @@ export default function FlyerViewer({
                   src={image.url}
                   alt={image.caption ?? 'Captured from the flyer'}
                   className={`h-20 w-full rounded-md object-cover ${
-                    property.coverImageId === image.id ? 'ring-2 ring-teal-400' : ''
+                    property.coverImageId === image.id ? 'ring-2 ring-brand' : ''
                   }`}
                 />
-                <div className="absolute inset-x-0 bottom-0 flex justify-between gap-1 rounded-b-md bg-ink-900/80 px-1 py-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="absolute inset-x-0 bottom-0 flex justify-between gap-1 rounded-b-md bg-surface/80 px-1 py-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                   <button
                     type="button"
-                    className="text-[10px] text-slate-300 hover:text-teal-300"
+                    className="text-[10px] text-body hover:text-brand-deep"
                     onClick={() => void setCover(image.id)}
                   >
                     Cover
                   </button>
                   <button
                     type="button"
-                    className="text-[10px] text-slate-300 hover:text-rose-400"
+                    className="text-[10px] text-body hover:text-rose-400"
                     onClick={() => void removeImage(image.id)}
                   >
                     Remove

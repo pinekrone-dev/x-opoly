@@ -97,7 +97,7 @@ export default function AddPropertyDialog({ surveyId, flyerExtractionEnabled, on
           </button>
         </header>
 
-        <nav className="flex gap-1 border-b border-white/5 px-3 py-2">
+        <nav className="flex gap-1 border-b border-line px-3 py-2">
           {([
             ['search', 'Search address'],
             ['flyer', 'Drop a flyer'],
@@ -143,7 +143,7 @@ export default function AddPropertyDialog({ surveyId, flyerExtractionEnabled, on
                     <li key={`${result.lat},${result.lng}`}>
                       <button
                         type="button"
-                        className="w-full rounded-lg px-3 py-2 text-left text-xs text-slate-300 hover:bg-white/5"
+                        className="w-full rounded-lg px-3 py-2 text-left text-xs text-body hover:bg-sunken"
                         onClick={() => void addFromResult(result)}
                       >
                         {result.label}
@@ -159,17 +159,17 @@ export default function AddPropertyDialog({ surveyId, flyerExtractionEnabled, on
             <div>
               <button
                 type="button"
-                className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-white/15 bg-ink-850 px-4 py-8 text-center hover:border-brand/40 hover:bg-ink-800"
+                className="flex w-full flex-col items-center gap-2 rounded-xl border border-dashed border-line-strong bg-sunken px-4 py-8 text-center hover:border-brand/40 hover:bg-sunken"
                 onClick={() => fileInput.current?.click()}
                 disabled={busy}
               >
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" className="text-brand" aria-hidden>
                   <path d="M12 16V4m0 0L8 8m4-4 4 4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
                 </svg>
-                <span className="text-sm font-semibold text-slate-200">
+                <span className="text-sm font-semibold text-ink">
                   {busy ? 'Reading the flyer…' : 'Choose a PDF or image'}
                 </span>
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-muted">
                   The rate, size, zoning and address are pulled out for you.
                 </span>
               </button>

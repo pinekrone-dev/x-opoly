@@ -70,11 +70,11 @@ export default function PropertyTable({ properties, selectedId, onSelect, readOn
 
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto">
         <table className="w-full table-fixed border-collapse text-sm">
-          <thead className="sticky top-0 z-10 bg-ink-850">
-            <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500">
+          <thead className="sticky top-0 z-10 bg-sunken">
+            <tr className="text-left text-[11px] uppercase tracking-wider text-muted">
               {columns.map((column) => (
                 <th key={column.key} scope="col" className={`px-4 py-2 font-semibold ${column.className}`}>
-                  <button type="button" className="inline-flex items-center gap-1 hover:text-slate-200" onClick={() => applySort(column.key)}>
+                  <button type="button" className="inline-flex items-center gap-1 hover:text-ink" onClick={() => applySort(column.key)}>
                     {column.label}
                     {sort.key === column.key && <span aria-hidden>{sort.direction === 1 ? '↑' : '↓'}</span>}
                   </button>
@@ -86,31 +86,31 @@ export default function PropertyTable({ properties, selectedId, onSelect, readOn
             {rows.map((property) => (
               <tr
                 key={property.id}
-                className={`cursor-pointer border-t border-white/5 hover:bg-white/[0.03] ${
+                className={`cursor-pointer border-t border-line hover:bg-sunken ${
                   property.id === selectedId ? 'bg-brand/10' : ''
                 }`}
                 onClick={() => onSelect(property.id)}
               >
                 <td className="max-w-0 px-4 py-2">
-                  <span className="block truncate font-medium text-slate-100">{displayName(property)}</span>
-                  <span className="block truncate text-xs text-slate-500">{fullAddress(property)}</span>
+                  <span className="block truncate font-medium text-ink">{displayName(property)}</span>
+                  <span className="block truncate text-xs text-muted">{fullAddress(property)}</span>
                 </td>
                 <td className="px-4 py-2">
                   <StageBadge stage={property.stage} />
                 </td>
-                <td className="px-4 py-2 text-right text-xs text-slate-300">
+                <td className="px-4 py-2 text-right text-xs text-body">
                   {rate(property)}
-                  {property.nnn != null && <span className="block text-[11px] text-slate-500">+{money(property.nnn)} NNN</span>}
+                  {property.nnn != null && <span className="block text-[11px] text-muted">+{money(property.nnn)} NNN</span>}
                 </td>
-                <td className="px-4 py-2 text-right font-mono text-xs text-slate-300">{sqft(property.sizeSqft)}</td>
-                <td className="hidden px-4 py-2 text-right font-mono text-xs text-slate-400 lg:table-cell">
+                <td className="px-4 py-2 text-right font-mono text-xs text-body">{sqft(property.sizeSqft)}</td>
+                <td className="hidden px-4 py-2 text-right font-mono text-xs text-muted lg:table-cell">
                   {count(property.yearBuilt)}
                 </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm text-slate-500">
+                <td colSpan={columns.length} className="px-4 py-12 text-center text-sm text-muted">
                   {readOnly ? 'No sites in this survey yet.' : 'Nothing at this stage yet.'}
                 </td>
               </tr>

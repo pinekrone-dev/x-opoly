@@ -74,15 +74,15 @@ export default function DemographicsPanel({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-start gap-2 border-b border-white/10 px-4 py-3">
+      <header className="flex items-start gap-2 border-b border-line px-4 py-3">
         <div className="min-w-0">
-          <h2 className="text-sm font-semibold text-slate-100">Demographics</h2>
-          <p className="truncate text-xs text-slate-500">{property.name || 'This site'}</p>
+          <h2 className="text-sm font-semibold text-ink">Demographics</h2>
+          <p className="truncate text-xs text-muted">{property.name || 'This site'}</p>
         </div>
         {onClose ? (
           <button
             type="button"
-            className="ml-auto text-slate-500 hover:text-slate-200"
+            className="ml-auto text-muted hover:text-ink"
             onClick={onClose}
             aria-label="Close demographics"
           >
@@ -101,8 +101,8 @@ export default function DemographicsPanel({
                 type="button"
                 className={`rounded-md px-3 py-1 text-xs font-semibold ${
                   activeRadius === miles
-                    ? 'bg-teal-400 text-ink-900'
-                    : 'border border-white/10 text-slate-400 hover:bg-white/5'
+                    ? 'bg-brand text-white'
+                    : 'border border-line text-muted hover:bg-sunken'
                 }`}
                 onClick={() => onRadius(miles)}
                 aria-pressed={activeRadius === miles}
@@ -113,7 +113,7 @@ export default function DemographicsPanel({
           </div>
         </section>
 
-        {loading ? <p className="mt-4 text-xs text-slate-500">Loading census figures…</p> : null}
+        {loading ? <p className="mt-4 text-xs text-muted">Loading census figures…</p> : null}
         {error ? <p className="mt-4 text-xs text-rose-400">{error}</p> : null}
 
         {data && !loading ? (
@@ -127,13 +127,13 @@ export default function DemographicsPanel({
                     style={{ background: `linear-gradient(90deg, ${SCALE.join(', ')})` }}
                     aria-hidden
                   />
-                  <div className="mt-1 flex justify-between text-[10px] text-slate-500">
+                  <div className="mt-1 flex justify-between text-[10px] text-muted">
                     <span>{formatMetric(range.min, definition.format)}</span>
                     <span>{formatMetric(range.max, definition.format)}</span>
                   </div>
                 </>
               ) : (
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-xs text-muted">
                   No block group nearby publishes {definition.label.toLowerCase()}.
                 </p>
               )}
@@ -142,7 +142,7 @@ export default function DemographicsPanel({
             <section className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
-                  <tr className="text-slate-500">
+                  <tr className="text-muted">
                     <th className="pb-1 font-medium">Metric</th>
                     {radii.map((ring) => (
                       <th key={ring.miles} className="pb-1 text-right font-medium">
@@ -153,13 +153,13 @@ export default function DemographicsPanel({
                 </thead>
                 <tbody>
                   {METRIC_DEFINITIONS.map((metric) => (
-                    <tr key={metric.key} className="border-t border-white/5">
-                      <th scope="row" className="py-1.5 font-normal text-slate-400">
+                    <tr key={metric.key} className="border-t border-line">
+                      <th scope="row" className="py-1.5 font-normal text-muted">
                         {metric.label}
                         {metric.approximate ? (
                           <button
                             type="button"
-                            className="ml-1 text-slate-600 hover:text-slate-300"
+                            className="ml-1 text-faint hover:text-body"
                             onClick={() => setShowApproximateNote((open) => !open)}
                             aria-label={`Why is ${metric.label} approximate?`}
                           >
@@ -168,7 +168,7 @@ export default function DemographicsPanel({
                         ) : null}
                       </th>
                       {radii.map((ring) => (
-                        <td key={ring.miles} className="py-1.5 text-right tabular-nums text-slate-100">
+                        <td key={ring.miles} className="py-1.5 text-right tabular-nums text-ink">
                           {formatMetric(ring.metrics?.[metric.key], metric.format)}
                         </td>
                       ))}
@@ -179,7 +179,7 @@ export default function DemographicsPanel({
             </section>
 
             {showApproximateNote ? (
-              <p className="mt-2 rounded-lg bg-ink-850 p-2 text-[11px] leading-relaxed text-slate-400">
+              <p className="mt-2 rounded-lg bg-sunken p-2 text-[11px] leading-relaxed text-muted">
                 A median cannot be added together. Where a ring covers several block groups, the
                 starred figures are averaged and weighted by the population behind each one, so they
                 are close to the true median but are not a published census value.
@@ -195,8 +195,8 @@ export default function DemographicsPanel({
                     type="button"
                     className={`rounded-md px-2 py-1 text-[11px] ${
                       colorBy === metric.key
-                        ? 'bg-teal-400 text-ink-900 font-semibold'
-                        : 'border border-white/10 text-slate-400 hover:bg-white/5'
+                        ? 'bg-brand text-white font-semibold'
+                        : 'border border-line text-muted hover:bg-sunken'
                     }`}
                     onClick={() => onColorBy(metric.key)}
                     aria-pressed={colorBy === metric.key}
@@ -207,7 +207,7 @@ export default function DemographicsPanel({
               </div>
             </section>
 
-            <p className="mt-4 text-[10px] text-slate-600">
+            <p className="mt-4 text-[10px] text-faint">
               {data.source}
               {radii[radii.length - 1]?.blockGroups
                 ? ` · ${radii[radii.length - 1].blockGroups} block groups`

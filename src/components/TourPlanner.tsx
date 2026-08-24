@@ -151,8 +151,8 @@ export default function TourPlanner({
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-300">Tour configuration</h2>
+      <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-body">Tour configuration</h2>
         <button
           type="button"
           className="btn-secondary px-2 py-1 text-xs"
@@ -163,7 +163,7 @@ export default function TourPlanner({
         {onClose ? (
           <button
             type="button"
-            className="ml-auto text-slate-500 hover:text-slate-200"
+            className="ml-auto text-muted hover:text-ink"
             onClick={onClose}
             aria-label="Close tour planner"
           >
@@ -203,7 +203,7 @@ export default function TourPlanner({
         <section className="mt-4">
           <button
             type="button"
-            className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400"
+            className="flex w-full items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted"
             onClick={() => setSitesOpen((open) => !open)}
             aria-expanded={sitesOpen}
           >
@@ -217,22 +217,22 @@ export default function TourPlanner({
             <ul className="mt-2 space-y-1">
               {located.map((property) => (
                 <li key={property.id}>
-                  <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-white/5 bg-white/[0.02] p-2 hover:bg-white/[0.05]">
+                  <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-line bg-sunken p-2 hover:bg-sunken">
                     <input
                       type="checkbox"
-                      className="mt-0.5 accent-teal-400"
+                      className="mt-0.5 accent-brand"
                       checked={chosen.includes(property.id)}
                       onChange={() => toggle(property.id)}
                     />
                     <span className="min-w-0">
-                      <span className="block truncate text-sm text-slate-100">{displayName(property)}</span>
-                      <span className="block truncate text-xs text-slate-500">{fullAddress(property)}</span>
+                      <span className="block truncate text-sm text-ink">{displayName(property)}</span>
+                      <span className="block truncate text-xs text-muted">{fullAddress(property)}</span>
                     </span>
                   </label>
                 </li>
               ))}
               {located.length === 0 ? (
-                <li className="py-3 text-xs text-slate-500">
+                <li className="py-3 text-xs text-muted">
                   No sites have coordinates yet — a tour needs somewhere to drive.
                 </li>
               ) : null}
@@ -253,7 +253,7 @@ export default function TourPlanner({
 
         <section className="mt-4">
           <div className="flex items-center gap-2">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Tour stops</h3>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Tour stops</h3>
             <button
               type="button"
               className="btn-secondary ml-auto px-2 py-1 text-xs"
@@ -273,7 +273,7 @@ export default function TourPlanner({
                 <li
                   key={id}
                   className={`rounded-lg border p-2 ${
-                    selectedId === id ? 'border-teal-400/40 bg-teal-400/10' : 'border-white/5 bg-white/[0.02]'
+                    selectedId === id ? 'border-brand/50 bg-brand-tint' : 'border-line bg-sunken'
                   } ${dragging === index ? 'opacity-40' : ''}`}
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
@@ -287,29 +287,29 @@ export default function TourPlanner({
                       draggable
                       onDragStart={() => setDragging(index)}
                       onDragEnd={() => setDragging(null)}
-                      className="cursor-grab pt-1 text-slate-600 active:cursor-grabbing"
+                      className="cursor-grab pt-1 text-faint active:cursor-grabbing"
                       aria-hidden
                     >
                       <Grip />
                     </span>
-                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400 text-xs font-bold text-ink-900">
+                    <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-brand text-xs font-bold text-white">
                       {index + 1}
                     </span>
                     <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onSelect(id)}>
-                      <span className="block truncate text-sm font-medium text-slate-100">
+                      <span className="block truncate text-sm font-medium text-ink">
                         {displayName(property)}
                       </span>
-                      <span className="block truncate text-xs text-slate-500">{fullAddress(property)}</span>
+                      <span className="block truncate text-xs text-muted">{fullAddress(property)}</span>
                       {time ? (
                         <span className="mt-1 block text-xs">
-                          <span className="text-teal-300">{time.driveMinutes} min drive</span>
-                          <span className="text-slate-400"> · Arrive {time.arrive}</span>
+                          <span className="text-brand-deep">{time.driveMinutes} min drive</span>
+                          <span className="text-muted"> · Arrive {time.arrive}</span>
                         </span>
                       ) : null}
                     </button>
                     <button
                       type="button"
-                      className="text-slate-600 hover:text-rose-400"
+                      className="text-faint hover:text-rose-400"
                       onClick={() => removeStop(id)}
                       aria-label={`Remove ${displayName(property)} from the tour`}
                     >
@@ -317,7 +317,7 @@ export default function TourPlanner({
                     </button>
                   </div>
 
-                  <label className="mt-2 flex items-center gap-2 pl-8 text-xs text-slate-400">
+                  <label className="mt-2 flex items-center gap-2 pl-8 text-xs text-muted">
                     Time at stop:
                     <input
                       type="number"
@@ -336,12 +336,12 @@ export default function TourPlanner({
           </ol>
 
           {stops.length === 0 ? (
-            <p className="mt-2 text-xs text-slate-500">Select at least one site to build a tour.</p>
+            <p className="mt-2 text-xs text-muted">Select at least one site to build a tour.</p>
           ) : null}
         </section>
 
         {plan?.itinerary && stops.length > 0 ? (
-          <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-white/5 pt-3 text-xs text-slate-400">
+          <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-line pt-3 text-xs text-muted">
             <span>
               {plan.itinerary.items.length} stop{plan.itinerary.items.length === 1 ? '' : 's'}
             </span>
@@ -422,19 +422,19 @@ function AnchorField({
 
   return (
     <section className="mt-4">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</h3>
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">{label}</h3>
       {anchor ? (
-        <div className="mt-2 flex items-center gap-2 rounded-lg border border-teal-400/30 bg-teal-400/5 p-2">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-teal-400 text-xs font-bold text-ink-900">
+        <div className="mt-2 flex items-center gap-2 rounded-lg border border-brand/40 bg-brand-tint p-2">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-brand text-xs font-bold text-white">
             {badge}
           </span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm text-slate-100">{anchor.address || 'Pinned location'}</span>
-            {hint ? <span className="block text-xs text-slate-500">{hint}</span> : null}
+            <span className="block truncate text-sm text-ink">{anchor.address || 'Pinned location'}</span>
+            {hint ? <span className="block text-xs text-muted">{hint}</span> : null}
           </span>
           <button
             type="button"
-            className="text-slate-500 hover:text-rose-400"
+            className="text-muted hover:text-rose-400"
             onClick={() => onSet(null)}
             aria-label={`Clear ${label.toLowerCase()} location`}
           >

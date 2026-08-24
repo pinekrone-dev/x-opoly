@@ -32,8 +32,8 @@ export default function SurveyList() {
     <div className="mx-auto max-w-5xl px-6 py-10">
       <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Your surveys</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-2xl font-bold tracking-tight text-ink">Your surveys</h1>
+          <p className="mt-1 text-sm text-muted">
             One survey per client search. Map the candidates, work the stages, send a link.
           </p>
         </div>
@@ -78,11 +78,11 @@ export default function SurveyList() {
       )}
 
       {loading ? (
-        <p className="text-sm text-slate-500">Loading…</p>
+        <p className="text-sm text-muted">Loading…</p>
       ) : surveys.length === 0 ? (
         <div className="panel p-12 text-center">
-          <p className="text-sm font-semibold text-slate-200">No surveys yet.</p>
-          <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
+          <p className="text-sm font-semibold text-ink">No surveys yet.</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-muted">
             Start one for your next requirement, drop the flyers in, and the map builds itself.
           </p>
         </div>
@@ -97,15 +97,15 @@ export default function SurveyList() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <h2 className="truncate font-semibold text-slate-100">{survey.name}</h2>
-                    {survey.clientName && <p className="truncate text-sm text-slate-500">for {survey.clientName}</p>}
+                    <h2 className="truncate font-semibold text-ink">{survey.name}</h2>
+                    {survey.clientName && <p className="truncate text-sm text-muted">for {survey.clientName}</p>}
                   </div>
                   {survey.share.enabled && (
                     <span className="pill bg-brand/15 text-brand ring-brand/30">shared</span>
                   )}
                 </div>
-                <p className="mt-4 flex items-center gap-3 text-xs text-slate-500">
-                  <span className="font-mono text-slate-300">{survey.pinCount ?? 0}</span> sites
+                <p className="mt-4 flex items-center gap-3 text-xs text-muted">
+                  <span className="font-mono text-body">{survey.pinCount ?? 0}</span> sites
                   <span aria-hidden>·</span>
                   updated {shortDate(survey.updatedAt)}
                 </p>

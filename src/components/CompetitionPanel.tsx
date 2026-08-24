@@ -124,25 +124,25 @@ export default function CompetitionPanel({ property, onResult }: Props) {
           <dl className="mt-4 grid grid-cols-3 gap-2">
             {result.rings.map((ring) => (
               <div key={ring.miles} className="stat text-center">
-                <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{ring.miles} mile</dt>
-                <dd className="mt-0.5 font-mono text-lg font-semibold text-slate-100">{ring.count}</dd>
+                <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted">{ring.miles} mile</dt>
+                <dd className="mt-0.5 font-mono text-lg font-semibold text-ink">{ring.count}</dd>
               </div>
             ))}
           </dl>
 
           {result.results.length === 0 ? (
-            <p className="mt-4 rounded-lg border border-dashed border-white/10 p-6 text-center text-xs text-slate-500">
+            <p className="mt-4 rounded-lg border border-dashed border-line p-6 text-center text-xs text-muted">
               Nothing matching within {result.radiusMiles} miles. Widen the radius or drop the name filter before reading
               that as a clear field — the directory only knows businesses that have been mapped.
             </p>
           ) : (
-            <ul className="mt-4 divide-y divide-white/5">
+            <ul className="mt-4 divide-y divide-line">
               {result.results.map((business) => (
                 <li key={business.id} className="flex items-baseline gap-3 py-2">
                   <span className="w-12 shrink-0 font-mono text-[11px] text-brand">{business.miles} mi</span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-slate-100">{business.name}</span>
-                    <span className="block truncate text-[11px] capitalize text-slate-500">
+                    <span className="block truncate text-sm text-ink">{business.name}</span>
+                    <span className="block truncate text-[11px] capitalize text-muted">
                       {[business.category, business.address].filter(Boolean).join(' · ') || '—'}
                     </span>
                   </span>
@@ -151,7 +151,7 @@ export default function CompetitionPanel({ property, onResult }: Props) {
             </ul>
           )}
 
-          <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+          <p className="mt-3 text-[11px] leading-relaxed text-muted">
             {result.results.length} found within {result.radiusMiles} miles · {result.source}
           </p>
         </>

@@ -40,10 +40,10 @@ export default function ShareSettings({ survey, onChange }: Props) {
     <section className="panel mx-auto w-full max-w-2xl">
       <header className="panel-header">
         <h2 className="panel-title">Client link</h2>
-        <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-300">
+        <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-body">
           <input
             type="checkbox"
-            className="h-4 w-4 rounded border-white/20 bg-ink-950 text-brand"
+            className="h-4 w-4 rounded border-line-strong bg-paper text-brand"
             checked={survey.share.enabled}
             disabled={busy}
             onChange={(event) => void update({ enabled: event.target.checked })}
@@ -53,7 +53,7 @@ export default function ShareSettings({ survey, onChange }: Props) {
       </header>
 
       <div className="p-5">
-        <p className="text-sm leading-relaxed text-slate-400">
+        <p className="text-sm leading-relaxed text-muted">
           Send this to your client and they see the map, the pins and the flyers — read-only, with your name on it and no
           sign-in. Your private notes stay in here.
         </p>
@@ -87,7 +87,7 @@ export default function ShareSettings({ survey, onChange }: Props) {
               value={survey.share.expiresAt ? survey.share.expiresAt.slice(0, 10) : ''}
               onChange={(event) => void update({ expiresAt: event.target.value || null })}
             />
-            <span className="mt-1 block text-[11px] text-slate-500">
+            <span className="mt-1 block text-[11px] text-muted">
               {survey.share.expiresAt
                 ? expired
                   ? `Expired ${shortDate(survey.share.expiresAt)} — the link no longer opens.`
@@ -114,7 +114,7 @@ export default function ShareSettings({ survey, onChange }: Props) {
             >
               Turn sharing off
             </button>
-            <span className="text-[11px] leading-relaxed text-slate-500">
+            <span className="text-[11px] leading-relaxed text-muted">
               A new link immediately breaks the old one, wherever it was forwarded.
             </span>
           </div>

@@ -173,8 +173,8 @@ export default function PropertyPanel({
     <aside className="flex h-full min-h-0 flex-col">
       <header className="panel-header">
         <div className="min-w-0">
-          <h2 className="truncate text-sm font-semibold text-slate-100">{displayName(property)}</h2>
-          <p className="truncate text-xs text-slate-500">{fullAddress(property)}</p>
+          <h2 className="truncate text-sm font-semibold text-ink">{displayName(property)}</h2>
+          <p className="truncate text-xs text-muted">{fullAddress(property)}</p>
         </div>
         {onClose && (
           <button type="button" className="btn-ghost px-2 py-1" onClick={onClose} aria-label="Close property details">
@@ -192,7 +192,7 @@ export default function PropertyPanel({
           !readOnly && (
             <button
               type="button"
-              className="flex h-24 w-full items-center justify-center gap-2 border-b border-white/5 bg-ink-850 text-xs text-slate-500 hover:bg-ink-800 hover:text-slate-300"
+              className="flex h-24 w-full items-center justify-center gap-2 border-b border-line bg-sunken text-xs text-muted hover:bg-sunken hover:text-body"
               onClick={() => photoInput.current?.click()}
             >
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
@@ -215,7 +215,7 @@ export default function PropertyPanel({
           }}
         />
 
-        <div className="flex items-center justify-between gap-2 border-b border-white/5 px-4 py-3">
+        <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
           {readOnly ? (
             <span className="pill" style={{ background: `${STAGE_META[property.stage]?.color}22`, color: STAGE_META[property.stage]?.color }}>
               {STAGE_META[property.stage]?.label}
@@ -224,13 +224,13 @@ export default function PropertyPanel({
             <StageSelect stage={property.stage} onChange={(stage) => void setStage(stage)} />
           )}
           {property.lat != null && (
-            <span className="font-mono text-[11px] text-slate-600">
+            <span className="font-mono text-[11px] text-faint">
               {property.lat.toFixed(4)}, {property.lng?.toFixed(4)}
             </span>
           )}
         </div>
 
-        <nav className="flex gap-1 border-b border-white/5 px-3 py-2" aria-label="Property sections">
+        <nav className="flex gap-1 border-b border-line px-3 py-2" aria-label="Property sections">
           {((readOnly ? ['details', 'flyer', 'demographics'] : ['details', 'flyer', 'demographics', 'competition']) as Tab[]).map((entry) => (
             <button
               key={entry}
@@ -298,8 +298,8 @@ export default function PropertyPanel({
                 <dl className="grid grid-cols-2 gap-2">
                   {stats.map((stat) => (
                     <div key={stat.label} className="stat">
-                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{stat.label}</dt>
-                      <dd className="mt-0.5 truncate text-sm font-semibold text-slate-100" title={stat.value}>
+                      <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted">{stat.label}</dt>
+                      <dd className="mt-0.5 truncate text-sm font-semibold text-ink" title={stat.value}>
                         {stat.value}
                       </dd>
                     </div>
@@ -321,33 +321,33 @@ export default function PropertyPanel({
                 ) : null}
 
                 {property.fields?.length ? (
-                  <dl className="mt-4 space-y-2 border-t border-white/5 pt-3">
+                  <dl className="mt-4 space-y-2 border-t border-line pt-3">
                     {property.fields.map((field, index) => (
                       <div key={`${field.label}-${index}`}>
-                        <dt className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted">
                           {field.label}
                         </dt>
-                        <dd className="text-sm text-slate-100">{field.value || '—'}</dd>
+                        <dd className="text-sm text-ink">{field.value || '—'}</dd>
                       </div>
                     ))}
                   </dl>
                 ) : null}
 
                 {property.listingBroker || property.brokerEmail || property.brokerPhone ? (
-                  <div className="mt-4 border-t border-white/5 pt-3">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Broker</p>
+                  <div className="mt-4 border-t border-line pt-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Broker</p>
                     {property.listingBroker && (
-                      <p className="mt-1 text-sm text-slate-100">{property.listingBroker}</p>
+                      <p className="mt-1 text-sm text-ink">{property.listingBroker}</p>
                     )}
-                    <p className="text-xs text-slate-400">
+                    <p className="text-xs text-muted">
                       {property.brokerEmail && (
-                        <a className="hover:text-teal-300" href={`mailto:${property.brokerEmail}`}>
+                        <a className="hover:text-brand-deep" href={`mailto:${property.brokerEmail}`}>
                           {property.brokerEmail}
                         </a>
                       )}
                       {property.brokerEmail && property.brokerPhone ? ' · ' : ''}
                       {property.brokerPhone && (
-                        <a className="hover:text-teal-300" href={`tel:${property.brokerPhone}`}>
+                        <a className="hover:text-brand-deep" href={`tel:${property.brokerPhone}`}>
                           {property.brokerPhone}
                         </a>
                       )}
@@ -356,7 +356,7 @@ export default function PropertyPanel({
                 ) : null}
 
                 {property.notes && (
-                  <p className="mt-3 whitespace-pre-wrap rounded-lg bg-ink-850 p-3 text-xs leading-relaxed text-slate-300">
+                  <p className="mt-3 whitespace-pre-wrap rounded-lg bg-sunken p-3 text-xs leading-relaxed text-body">
                     {property.notes}
                   </p>
                 )}
@@ -382,9 +382,9 @@ export default function PropertyPanel({
           <div className="flex min-h-0 flex-1 flex-col">
             {property.flyerUrl ? (
               <>
-                <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2">
+                <div className="flex items-center gap-2 border-b border-line px-3 py-2">
                   <a
-                    className="truncate text-xs text-slate-400 hover:text-teal-300"
+                    className="truncate text-xs text-muted hover:text-brand-deep"
                     href={property.flyerUrl}
                     target="_blank"
                     rel="noreferrer noopener"
@@ -413,8 +413,8 @@ export default function PropertyPanel({
                 </div>
 
                 {extraction ? (
-                  <div className="border-b border-white/5 bg-ink-850 px-3 py-2 text-xs">
-                    <p className="text-slate-300">
+                  <div className="border-b border-line bg-sunken px-3 py-2 text-xs">
+                    <p className="text-body">
                       Filled {extraction.filled.length} field
                       {extraction.filled.length === 1 ? '' : 's'}
                       {extraction.confidence ? ` · ${extraction.confidence} confidence` : ''}
@@ -425,11 +425,11 @@ export default function PropertyPanel({
                       </p>
                     ) : null}
                     {extraction.skipped.length ? (
-                      <p className="mt-1 text-slate-500">
+                      <p className="mt-1 text-muted">
                         Left alone because they already had a value: {extraction.skipped.join(', ')}.{' '}
                         <button
                           type="button"
-                          className="underline hover:text-slate-300"
+                          className="underline hover:text-body"
                           onClick={() => void readFlyer(true)}
                         >
                           Overwrite them
@@ -440,13 +440,13 @@ export default function PropertyPanel({
                 ) : null}
 
                 {extractError ? (
-                  <p className="border-b border-white/5 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+                  <p className="border-b border-line bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
                     {extractError}
                   </p>
                 ) : null}
                 <div className="min-h-0 flex-1">
                   <Suspense
-                    fallback={<p className="p-4 text-xs text-slate-500">Loading the PDF viewer…</p>}
+                    fallback={<p className="p-4 text-xs text-muted">Loading the PDF viewer…</p>}
                   >
                     <FlyerViewer property={property} onChange={onChange} />
                   </Suspense>
@@ -454,7 +454,7 @@ export default function PropertyPanel({
               </>
             ) : (
               <div className="p-4">
-                <p className="rounded-lg border border-dashed border-white/10 p-6 text-center text-xs text-slate-500">
+                <p className="rounded-lg border border-dashed border-line p-6 text-center text-xs text-muted">
                   No flyer attached to this site.
                 </p>
                 {!readOnly ? (
@@ -491,7 +491,7 @@ export default function PropertyPanel({
 
         {tab === 'demographics' && (
           <div className="p-4">
-            {demoLoading && <p className="text-xs text-slate-500">Pulling census data…</p>}
+            {demoLoading && <p className="text-xs text-muted">Pulling census data…</p>}
 
             {demoError && (
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3">

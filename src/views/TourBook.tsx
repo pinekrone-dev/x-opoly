@@ -94,12 +94,12 @@ export default function TourBook({ id }: { id: string }) {
   }
 
   if (!survey) {
-    return <div className="grid min-h-full place-items-center text-sm text-slate-500">Loading…</div>
+    return <div className="grid min-h-full place-items-center text-sm text-muted">Loading…</div>
   }
 
   return (
-    <div className="min-h-full bg-ink-950 print:bg-white">
-      <header className="no-print sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-ink-900 px-4 py-3">
+    <div className="min-h-full bg-paper print:bg-white">
+      <header className="no-print sticky top-0 z-10 flex items-center gap-3 border-b border-line bg-surface px-4 py-3">
         <button
           type="button"
           className="btn-ghost px-2 py-1"
@@ -111,8 +111,8 @@ export default function TourBook({ id }: { id: string }) {
           </svg>
         </button>
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-white">Tour book</p>
-          <p className="truncate text-xs text-slate-500">
+          <p className="truncate text-sm font-semibold text-ink">Tour book</p>
+          <p className="truncate text-xs text-muted">
             {stops.length} stop{stops.length === 1 ? '' : 's'}
             {plan?.itinerary ? ` · ${plan.itinerary.startTime} — ${plan.itinerary.endTime}` : ''}
           </p>

@@ -4,19 +4,27 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: {
-          950: '#080b0f',
-          900: '#0d1117',
-          850: '#11171f',
-          800: '#161d27',
-          700: '#1f2833',
-          600: '#2c3743',
-          500: '#3d4a58',
+        // Semantic rather than numbered, so a component says what a colour is
+        // for instead of how dark it is. That is what made the switch from a
+        // dark interface to a light one a rename rather than a rewrite.
+        paper: '#f6f8fa', // the page behind everything
+        surface: '#ffffff', // panels and cards
+        sunken: '#f1f5f9', // inset wells, inputs, hover
+        line: {
+          DEFAULT: '#e2e8f0',
+          strong: '#cbd5e1',
         },
+        ink: '#0f172a', // primary text
+        body: '#334155', // secondary text
+        muted: '#64748b', // labels and captions
+        faint: '#94a3b8', // the quietest legible text
         brand: {
           DEFAULT: '#14b8a6',
+          // Teal on white is too light to read as text, so links and emphasis
+          // use the deep shade; the bright one stays for fills.
           soft: '#5eead4',
           deep: '#0f766e',
+          tint: '#f0fdfa',
         },
         stage: {
           prospect: '#94a3b8',
