@@ -285,8 +285,12 @@ try {
   check('sidebar renders the unstaged bucket', Boolean(unstagedHeading))
 
   // Custom fields should reach the rendered card, not just the database.
-  await page.click(`text=${PINS[0].name}`).catch(() => undefined)
-  await page.waitForTimeout(800)
+  try {
+    await page.click(`text=${PINS[0].name}`, { timeout: 10000 })
+  } catch (error) {
+    check('the site card could be opened', false, error.message.split('\n')[0])
+  }
+  await page.waitForTimeout(1200)
   const cardText = await page.textContent('body')
   check('a custom field renders on the site card', cardText?.includes('Available SF') ?? false)
   check('the custom field value renders', cardText?.includes('9,822 SF') ?? false)
@@ -309,8 +313,16 @@ try {
 
   // The flyer viewer: pdf.js is a lazy chunk, so this also proves the split
   // bundle actually loads rather than 404ing.
-  await page.click('text=Flyer').catch(() => undefined)
-  await page.waitForTimeout(3500)
+  // Exact, case-sensitive: the tab's literal text is "flyer" (capitalised by
+  // CSS), and a loose match also hits "Fill in from flyer" and "Listing flyer"
+  // once the tab is open. Failures are reported rather than swallowed — a
+  // silently skipped click made the last failure read as a missing canvas.
+  try {
+    await page.click('text="flyer"', { timeout: 10000 })
+  } catch (error) {
+    check('the flyer tab could be opened', false, error.message.split('\n')[0])
+  }
+  await page.waitForTimeout(4000)
   const flyerCanvas = await page.$('[aria-label="Flyer page"]')
   check('the flyer renders to a canvas', Boolean(flyerCanvas))
   if (flyerCanvas) {

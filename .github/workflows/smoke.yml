@@ -51,23 +51,16 @@ jobs:
           npm install --no-save playwright
           npx playwright install --with-deps chromium
 
+      # Build locally so the deploy wait has this commit's bundle hash to
+      # compare against.
+      - run: npm run build
+
       # Cloudflare deploys from the same push, so the new version may still be
-      # rolling out. Wait for the Worker to answer before judging it.
-      - name: Wait for the deployment to answer
-        run: |
-          for attempt in $(seq 1 30); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' "$SMOKE_URL/api/health" || echo 000)
-            echo "attempt $attempt: /api/health -> $code"
-            if [ "$code" = "200" ]; then
-              echo "Worker is answering."
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "The Worker never returned 200 from /api/health."
-          echo "Last response body:"
-          curl -s "$SMOKE_URL/api/health" | head -c 2000
-          exit 1
+      # rolling out. Polling /api/health for a 200 is not enough — the previous
+      # deployment answers 200 too, so the run would race the rollout and
+      # report the old build as verified.
+      - name: Wait for this commit to be live
+        run: node scripts/wait-for-deploy.mjs "$SMOKE_URL"
 
       - name: Run the smoke test
         run: node scripts/smoke.mjs "$SMOKE_URL"
