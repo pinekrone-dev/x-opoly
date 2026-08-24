@@ -46,8 +46,24 @@ jobs:
 
       - run: npm run build
 
+      # Cloudflare's own Git integration also deploys this repo, so the API
+      # token here is optional. Without it, this workflow still builds and
+      # tests every push; it just does not deploy, rather than failing red on
+      # a secret that was never meant to exist.
       - name: Deploy the Worker
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Note that deploying was skipped
+        if: ${{ secrets.CLOUDFLARE_API_TOKEN == '' }}
+        run: |
+          echo "CLOUDFLARE_API_TOKEN is not set, so this run built and tested"
+          echo "the app but did not deploy it."
+          echo
+          echo "That is fine if Cloudflare's Git integration is connected to"
+          echo "this repo, which deploys on push without any token here."
+          echo "To deploy from GitHub instead, add the two repository secrets"
+          echo "described at the top of this file."
