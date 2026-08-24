@@ -1,3 +1,15 @@
+/** The signed-in broker. The phone is only ever a hint, never the number. */
+export interface Account {
+  id: string
+  email: string
+  name: string | null
+  phoneHint: string | null
+  hasPhone: boolean
+  sms2fa: boolean
+  createdAt: string
+  lastLoginAt: string | null
+}
+
 export type Stage = 'prospect' | 'touring' | 'loi' | 'under_contract' | 'passed'
 
 /** A pipeline column. Named, coloured and ordered by the broker. */

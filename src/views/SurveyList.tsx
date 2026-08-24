@@ -1,10 +1,21 @@
 import { useEffect, useState } from 'react'
+import AccountMenu from '../components/AccountMenu'
 import { api } from '../api'
 import type { Survey } from '../types'
 import { navigate } from '../lib/router'
 import { shortDate } from '../lib/format'
 
-export default function SurveyList() {
+export default function SurveyList({
+  account,
+  smsConfigured,
+  onAccountChange,
+  onSignedOut,
+}: {
+  account?: import('../types').Account | null
+  smsConfigured?: boolean
+  onAccountChange?: (account: import('../types').Account) => void
+  onSignedOut?: () => void
+}) {
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [creating, setCreating] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -40,6 +51,14 @@ export default function SurveyList() {
         <button type="button" className="btn-primary" onClick={() => setCreating(true)}>
           New survey
         </button>
+        {account ? (
+          <AccountMenu
+            account={account}
+            smsConfigured={Boolean(smsConfigured)}
+            onChange={(next) => onAccountChange?.(next)}
+            onSignedOut={() => onSignedOut?.()}
+          />
+        ) : null}
       </header>
 
       {error && <p className="panel mb-4 border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-200">{error}</p>}

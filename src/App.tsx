@@ -1,20 +1,25 @@
 import { useEffect, useState } from 'react'
 import ShareView from './views/ShareView'
 import SurveyList from './views/SurveyList'
+import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
 import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
-import type { AppFeatures } from './types'
+import type { Account, AppFeatures } from './types'
 
-/** Used only if /api/health cannot be reached; keyless and dark-native. */
+/**
+ * Used only if /api/health cannot be reached. Keyless, and a light street map
+ * to match the interface — a dark fallback would flash a black slab into an
+ * otherwise white page exactly when something is already going wrong.
+ */
 const FALLBACK_TILES = {
-  provider: 'carto-dark',
-  label: 'Dark streets',
-  url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  attribution: '© OpenStreetMap contributors, © CARTO',
-  maxZoom: 20,
-  darkNative: true,
+  provider: 'osm',
+  label: 'Street map',
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19,
+  darkNative: false,
   placeholder: false,
 }
 
@@ -26,10 +31,17 @@ const FALLBACK_FEATURES: AppFeatures = {
   tileAttribution: FALLBACK_TILES.attribution,
 }
 
+interface Session {
+  user: Account | null
+  setupRequired: boolean
+  smsConfigured: boolean
+}
+
 export default function App() {
   const path = usePath()
   const route = matchRoute(path)
   const [features, setFeatures] = useState<AppFeatures | null>(null)
+  const [session, setSession] = useState<Session | null>(null)
 
   useEffect(() => {
     api
@@ -38,12 +50,38 @@ export default function App() {
       .catch(() => setFeatures(FALLBACK_FEATURES))
   }, [])
 
-  if (!features) {
+  useEffect(() => {
+    api
+      .me()
+      .then(setSession)
+      // A server too old to know about accounts, or unreachable: treat the app
+      // as open rather than locking someone out of their own data.
+      .catch(() => setSession({ user: null, setupRequired: true, smsConfigured: false }))
+  }, [])
+
+  if (!features || !session) {
     return <div className="grid min-h-full place-items-center text-sm text-muted">Starting up…</div>
   }
 
+  /*
+   * Client share links are checked before the session is. Someone following a
+   * link has no account and must never be asked for one — the token is the
+   * credential, and it is checked server-side.
+   */
   if (route.view === 'share' && route.token) {
     return <ShareView token={route.token} features={features} />
+  }
+
+  // `setupRequired` keeps a fresh deployment usable: nothing is locked until
+  // an account exists to unlock it with.
+  if (!session.user && !session.setupRequired) {
+    return (
+      <SignIn
+        setupRequired={false}
+        smsConfigured={session.smsConfigured}
+        onSignedIn={(user) => setSession({ ...session, user, setupRequired: false })}
+      />
+    )
   }
 
   if (route.view === 'book' && route.id) {
@@ -54,5 +92,12 @@ export default function App() {
     return <SurveyWorkspace id={route.id} features={features} />
   }
 
-  return <SurveyList />
+  return (
+    <SurveyList
+      account={session.user}
+      smsConfigured={session.smsConfigured}
+      onAccountChange={(user) => setSession({ ...session, user })}
+      onSignedOut={() => setSession({ ...session, user: null, setupRequired: false })}
+    />
+  )
 }

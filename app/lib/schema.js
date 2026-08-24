@@ -76,11 +76,40 @@ export const SCHEMA_STATEMENTS = [
     source      TEXT,
     created_at  TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS users (
+    id             TEXT PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    password_hash  TEXT NOT NULL,
+    name           TEXT,
+    phone          TEXT,
+    sms_2fa        INTEGER NOT NULL DEFAULT 0,
+    failed_logins  INTEGER NOT NULL DEFAULT 0,
+    locked_until   TEXT,
+    created_at     TEXT NOT NULL,
+    last_login_at  TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS login_challenges (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    code_salt  TEXT NOT NULL,
+    code_hash  TEXT NOT NULL,
+    attempts   INTEGER NOT NULL DEFAULT 0,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
   'CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_fields_property ON property_fields(property_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id)',
+  'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
 ]
 
 /**
@@ -102,6 +131,10 @@ export const COLUMN_ADDITIONS = [
   ['properties', 'tour_minutes', 'INTEGER'],
   // Which stored image is the hero shot in the tour book.
   ['properties', 'cover_image_id', 'TEXT'],
+
+  // Who a survey belongs to. NULL means it predates accounts existing; the
+  // first account to be created adopts those rather than orphaning them.
+  ['surveys', 'owner_id', 'TEXT'],
 
   // Tour configuration lives on the survey: one planned tour per survey.
   ['surveys', 'tour_start_time', 'TEXT'],

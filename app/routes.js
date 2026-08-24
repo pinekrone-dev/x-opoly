@@ -41,6 +41,24 @@ import {
   reorderImages,
   updateImage,
 } from './lib/images.js'
+import {
+  MIN_PASSWORD_LENGTH,
+  adoptOrphanSurveys,
+  authenticate,
+  countUsers,
+  createChallenge,
+  createSession,
+  createUser,
+  destroyAllSessions,
+  destroySession,
+  findByEmail,
+  getUser,
+  markLogin,
+  normalizePhone,
+  sessionUser,
+  verifyChallenge,
+} from './lib/auth.js'
+import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
@@ -164,6 +182,206 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   // --- surveys -------------------------------------------------------------
+
+  // --- accounts --------------------------------------------------------------
+
+  const SESSION_COOKIE = 'session'
+
+  /**
+   * Secure is set only on HTTPS, because a Secure cookie is never sent over
+   * http and local development would silently fail to hold a session.
+   * SameSite=Lax keeps the cookie off cross-site POSTs while still surviving
+   * an ordinary link into the app.
+   */
+  function setSessionCookie(c, token, maxAgeSeconds = 14 * 24 * 60 * 60) {
+    const secure = new URL(c.req.url).protocol === 'https:' ? ' Secure;' : ''
+    c.header(
+      'set-cookie',
+      `${SESSION_COOKIE}=${token}; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`,
+    )
+  }
+
+  function clearSessionCookie(c) {
+    const secure = new URL(c.req.url).protocol === 'https:' ? ' Secure;' : ''
+    c.header('set-cookie', `${SESSION_COOKIE}=; HttpOnly;${secure} SameSite=Lax; Path=/; Max-Age=0`)
+  }
+
+  function tokenFrom(c) {
+    const header = c.req.header('cookie') || ''
+    const match = header.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))
+    return match ? decodeURIComponent(match[1]) : null
+  }
+
+  /**
+   * Paths that must work without a session.
+   *
+   * Client share links are the reason /api/share and /api/files are open: a
+   * client following a link has no account and must never need one. The stored
+   * filenames are random UUIDs, so they are unguessable rather than listable.
+   */
+  const PUBLIC_PATHS = [/^\/api\/health$/, /^\/api\/auth\//, /^\/api\/share\//, /^\/api\/tiles\//, /^\/api\/files\//]
+
+  /**
+   * Requires a session for everything else — unless no account exists yet.
+   *
+   * That exception is the setup window. Locking the API down before anyone can
+   * create an account would make the instance unusable and unrecoverable
+   * through the browser, which is the only tool the operator has here.
+   */
+  app.use('/api/*', async (c, next) => {
+    const path = new URL(c.req.url).pathname
+    if (PUBLIC_PATHS.some((pattern) => pattern.test(path))) return next()
+
+    if ((await countUsers(db)) === 0) {
+      c.set('setupMode', true)
+      return next()
+    }
+
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    c.set('user', user)
+    return next()
+  })
+
+  app.get('/api/auth/me', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    return c.json({
+      user,
+      setupRequired: (await countUsers(db)) === 0,
+      smsConfigured: smsConfigured(env),
+    })
+  })
+
+  /**
+   * Creates an account.
+   *
+   * Open only while no account exists, so the first person to reach a fresh
+   * deployment claims it. After that it needs SIGNUP_TOKEN, which is how a
+   * second broker gets added without opening registration to the internet.
+   */
+  app.post('/api/auth/register', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const existing = await countUsers(db)
+
+    if (existing > 0) {
+      const offered = String(body?.inviteToken ?? '')
+      if (!env.SIGNUP_TOKEN || offered !== env.SIGNUP_TOKEN) {
+        return c.json({ error: 'Registration is closed on this instance.' }, 403)
+      }
+    }
+
+    const result = await createUser(db, body)
+    if (result.error) return c.json({ error: result.error }, 400)
+
+    // The first account adopts anything created before accounts existed,
+    // rather than letting real work become unreachable.
+    const adopted = existing === 0 ? await adoptOrphanSurveys(db, result.user.id) : 0
+
+    const token = await createSession(db, result.user.id)
+    await markLogin(db, result.user.id)
+    setSessionCookie(c, token)
+    return c.json({ user: result.user, adoptedSurveys: adopted }, 201)
+  })
+
+  app.post('/api/auth/login', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const result = await authenticate(db, body?.email, body?.password)
+    if (result.error) return c.json({ error: result.error }, result.locked ? 429 : 401)
+
+    // With 2FA on, the password alone must not produce a session.
+    if (result.row.sms_2fa && result.row.phone) {
+      const { challengeId, code } = await createChallenge(db, result.row.id)
+      try {
+        await sendSms(result.row.phone, codeMessage(code), { env })
+      } catch (error) {
+        if (error instanceof SmsUnavailable) {
+          return c.json({ error: error.message, configured: error.configured }, 503)
+        }
+        throw error
+      }
+      return c.json({ challengeId, phoneHint: result.user.phoneHint, twoFactor: true })
+    }
+
+    const token = await createSession(db, result.row.id)
+    await markLogin(db, result.row.id)
+    setSessionCookie(c, token)
+    return c.json({ user: result.user, twoFactor: false })
+  })
+
+  app.post('/api/auth/verify', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const result = await verifyChallenge(db, String(body?.challengeId ?? ''), body?.code)
+    if (result.error) return c.json({ error: result.error, remaining: result.remaining }, 401)
+
+    const token = await createSession(db, result.userId)
+    setSessionCookie(c, token)
+    return c.json({ user: await getUser(db, result.userId) })
+  })
+
+  app.post('/api/auth/logout', async (c) => {
+    await destroySession(db, tokenFrom(c))
+    clearSessionCookie(c)
+    return c.body(null, 204)
+  })
+
+  /**
+   * Turns the second factor on or off.
+   *
+   * Enabling requires the current password: an unattended logged-in browser
+   * should not be able to hand someone else the second factor by pointing it
+   * at their phone.
+   */
+  app.post('/api/auth/2fa', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const row = await findByEmail(db, user.email)
+    const check = await authenticate(db, user.email, body?.password)
+    if (check.error) return c.json({ error: 'That password is not right.' }, 403)
+
+    const enable = body?.enabled !== false
+    const phone = normalizePhone(body?.phone ?? row.phone)
+
+    if (enable) {
+      if (!phone) return c.json({ error: 'Add a mobile number to text codes to.' }, 400)
+      if (!smsConfigured(env)) {
+        return c.json(
+          { error: 'Texting is not configured on this server yet, so a code could never arrive.', configured: false },
+          503,
+        )
+      }
+    }
+
+    await db.run('UPDATE users SET phone = ?, sms_2fa = ? WHERE id = ?', [
+      phone,
+      enable ? 1 : 0,
+      user.id,
+    ])
+    return c.json({ user: await getUser(db, user.id) })
+  })
+
+  app.post('/api/auth/password', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const check = await authenticate(db, user.email, body?.currentPassword)
+    if (check.error) return c.json({ error: 'That password is not right.' }, 403)
+
+    const next = String(body?.newPassword ?? '')
+    if (next.length < MIN_PASSWORD_LENGTH) {
+      return c.json({ error: `Use at least ${MIN_PASSWORD_LENGTH} characters.` }, 400)
+    }
+
+    const { hashPassword } = await import('./lib/crypto.js')
+    await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [await hashPassword(next), user.id])
+
+    // Every other device is signed out, then this one is signed back in.
+    await destroyAllSessions(db, user.id)
+    setSessionCookie(c, await createSession(db, user.id))
+    return c.json({ ok: true })
+  })
 
   app.get('/api/surveys', async (c) => c.json({ surveys: await listSurveys(db) }))
 

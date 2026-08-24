@@ -1,4 +1,5 @@
 import type {
+  Account,
   AppFeatures,
   DealStage,
   CompetitionResult,
@@ -34,6 +35,26 @@ const json = (payload: unknown): RequestInit => ({
 
 export const api = {
   health: () => request<{ features: AppFeatures }>('/api/health'),
+
+  // --- accounts -------------------------------------------------------------
+  me: () =>
+    request<{ user: Account | null; setupRequired: boolean; smsConfigured: boolean }>(
+      '/api/auth/me',
+    ),
+  register: (input: { email: string; password: string; name?: string; phone?: string; inviteToken?: string }) =>
+    request<{ user: Account; adoptedSurveys: number }>('/api/auth/register', json(input)),
+  signIn: (input: { email: string; password: string }) =>
+    request<{ user?: Account; twoFactor: boolean; challengeId?: string; phoneHint?: string }>(
+      '/api/auth/login',
+      json(input),
+    ),
+  verifyCode: (input: { challengeId: string; code: string }) =>
+    request<{ user: Account }>('/api/auth/verify', json(input)),
+  signOut: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  setTwoFactor: (input: { enabled: boolean; password: string; phone?: string }) =>
+    request<{ user: Account }>('/api/auth/2fa', json(input)),
+  changePassword: (input: { currentPassword: string; newPassword: string }) =>
+    request<{ ok: true }>('/api/auth/password', json(input)),
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string }) =>

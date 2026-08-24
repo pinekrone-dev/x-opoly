@@ -24,11 +24,20 @@ function check(name, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`)
 }
 
+/** Holds the session cookie once signed in, the way a browser would. */
+let sessionCookie = null
+
 async function api(path, init) {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers || {}) },
+    headers: {
+      'content-type': 'application/json',
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
+      ...(init?.headers || {}),
+    },
   })
+  const setCookie = response.headers.get('set-cookie')
+  if (setCookie) sessionCookie = setCookie.split(';')[0]
   const text = await response.text()
   let body
   try {
@@ -80,7 +89,11 @@ const TINY_PNG = Uint8Array.from(
 async function upload(path, bytes, contentType, headers = {}) {
   const response = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': contentType, ...headers },
+    headers: {
+      'content-type': contentType,
+      ...(sessionCookie ? { cookie: sessionCookie } : {}),
+      ...headers,
+    },
     body: bytes,
   })
   const text = await response.text()
@@ -103,6 +116,35 @@ try {
   check('health reports ok', health.body?.ok === true, JSON.stringify(health.body?.checks || health.body))
   check('D1 database binding works', health.body?.checks?.database?.ok === true)
   check('R2 storage binding works', health.body?.checks?.storage?.ok === true)
+
+  // Accounts: an unclaimed instance is open, a claimed one needs credentials.
+  // Failing loudly here matters — silently skipping the API checks would make
+  // a locked-out run look like a passing one.
+  const account = await api('/api/auth/me')
+  if (account.body?.setupRequired) {
+    check('the workspace is unclaimed, so the API is open', true, 'no account exists yet')
+  } else if (process.env.SMOKE_EMAIL && process.env.SMOKE_PASSWORD) {
+    const signedIn = await api('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: process.env.SMOKE_EMAIL,
+        password: process.env.SMOKE_PASSWORD,
+      }),
+    })
+    if (signedIn.body?.twoFactor) {
+      throw new Error(
+        'The smoke account has two-factor enabled, which this test cannot complete. ' +
+          'Use a dedicated account without 2FA for automated checks.',
+      )
+    }
+    check('signed in as the smoke account', signedIn.status === 200 && Boolean(sessionCookie),
+      `status ${signedIn.status}`)
+  } else {
+    throw new Error(
+      'This workspace has an account, so the API needs credentials. ' +
+        'Add SMOKE_EMAIL and SMOKE_PASSWORD as repository secrets.',
+    )
+  }
 
   // 2. Seed a survey so there is a map worth loading.
   const created = await api('/api/surveys', {
@@ -210,6 +252,13 @@ try {
     viewport: { width: 1440, height: 900 },
     acceptDownloads: true,
   })
+
+  if (sessionCookie) {
+    const [name, value] = sessionCookie.split('=')
+    await context.addCookies([
+      { name, value, url: BASE, httpOnly: true, sameSite: 'Lax' },
+    ])
+  }
   const page = await context.newPage()
 
   const tileRequests = []
