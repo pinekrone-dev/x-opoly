@@ -9,15 +9,14 @@ directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# Created with:  npx wrangler d1 create sitesurvey-cre
-# Paste the returned database_id here.
+# Provisioned in the Cloudflare account, region ENAM. Tables already created.
 [[d1_databases]]
 binding = "DB"
 database_name = "sitesurvey-cre"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "40bf42da-08df-46bb-ad73-de084621ebc4"
 migrations_dir = "migrations"
 
-# Created with:  npx wrangler r2 bucket create sitesurvey-cre-uploads
+# Provisioned in the Cloudflare account, region ENAM.
 [[r2_buckets]]
 binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads"

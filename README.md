@@ -34,21 +34,26 @@ worker/index.js       Cloudflare entry point
 D1 is SQLite, so the schema is identical — `migrations/0001_init.sql` is generated from
 `app/lib/schema.js` by `npm run migrations`, so the two cannot drift.
 
+The D1 database and R2 bucket are already provisioned and wired into
+`wrangler.toml`, and the tables exist. What remains needs credentials, so it runs from
+your machine:
+
 ```bash
-# 1. Create the database and the bucket
-npx wrangler d1 create sitesurvey-cre
-npx wrangler r2 bucket create sitesurvey-cre-uploads
+npx wrangler login
 
-# 2. Paste the returned database_id into wrangler.toml
-
-# 3. Create the tables
-npm run cf:migrate
-
-# 4. Secrets — never in wrangler.toml, which is in git
+# Secrets — never in wrangler.toml, which is in git
 npx wrangler secret put ANTHROPIC_API_KEY     # for reading flyers
 npx wrangler secret put TILE_KEY              # only for a keyed basemap
 
-# 5. Ship
+npm run deploy
+```
+
+Starting from scratch in a different account instead:
+
+```bash
+npx wrangler d1 create sitesurvey-cre          # paste the id into wrangler.toml
+npx wrangler r2 bucket create sitesurvey-cre-uploads
+npm run cf:migrate                             # creates the tables
 npm run deploy
 ```
 
