@@ -136,6 +136,15 @@ export const COLUMN_ADDITIONS = [
   // first account to be created adopts those rather than orphaning them.
   ['surveys', 'owner_id', 'TEXT'],
 
+  // An authenticator app as the second factor. Kept alongside SMS rather than
+  // replacing it: TOTP needs no carrier and no third party, which is why it is
+  // preferred, but a broker who wants a text should still get one.
+  ['users', 'totp_secret', 'TEXT'],
+  ['users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+
+  // Which factor a pending challenge is waiting on.
+  ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],
+
   // Tour configuration lives on the survey: one planned tour per survey.
   ['surveys', 'tour_start_time', 'TEXT'],
   ['surveys', 'tour_stop_minutes', 'INTEGER'],

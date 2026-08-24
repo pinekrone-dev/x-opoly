@@ -20,6 +20,7 @@ import {
   verifyCode,
   verifyPassword,
 } from './crypto.js'
+import { generateSecret, otpauthUri, verifyTotp } from './totp.js'
 
 /** Sessions last a fortnight; a broker should not log in every morning. */
 const SESSION_DAYS = 14
@@ -73,6 +74,10 @@ function mapUser(row) {
     phoneHint: row.phone ? `••• ••• ${String(row.phone).slice(-4)}` : null,
     hasPhone: Boolean(row.phone),
     sms2fa: Boolean(row.sms_2fa),
+    totp: Boolean(row.totp_enabled),
+    // What the login form will ask for. TOTP wins when both are on: it needs
+    // no carrier, costs nothing, and survives a SIM swap.
+    secondFactor: row.totp_enabled ? 'totp' : row.sms_2fa && row.phone ? 'sms' : null,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
   }
@@ -199,7 +204,56 @@ export async function destroyAllSessions(db, userId) {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Issues a one-time code and returns it alongside the challenge id.
+ * Opens a challenge for an authenticator app.
+ *
+ * No code is stored, because there is nothing to store: the phone and the
+ * server both derive the code from the shared secret and the clock. The row
+ * exists only to carry the fact that the password step happened, and to expire.
+ */
+export async function createTotpChallenge(db, userId) {
+  const id = newId()
+  await db.batch([
+    ['DELETE FROM login_challenges WHERE user_id = ?', [userId]],
+    [
+      `INSERT INTO login_challenges (id, user_id, code_salt, code_hash, attempts, expires_at, created_at, method)
+       VALUES (?, ?, '', '', 0, ?, ?, 'totp')`,
+      [id, userId, minutesFromNow(CODE_TTL_MINUTES), nowIso()],
+    ],
+  ])
+  return { challengeId: id }
+}
+
+/**
+ * Starts enrolling an authenticator.
+ *
+ * The secret is stored but not switched on until a code proves the phone
+ * actually holds it. Enabling first would let someone lock themselves out with
+ * a mistyped setup.
+ */
+export async function beginTotpEnrollment(db, user) {
+  const secret = generateSecret()
+  await db.run('UPDATE users SET totp_secret = ?, totp_enabled = 0 WHERE id = ?', [secret, user.id])
+  return { secret, uri: otpauthUri(secret, { account: user.email }) }
+}
+
+export async function confirmTotpEnrollment(db, userId, code) {
+  const row = await db.get('SELECT * FROM users WHERE id = ?', [userId])
+  if (!row?.totp_secret) return { error: 'Start the setup again — there is no pending secret.' }
+
+  if (!(await verifyTotp(row.totp_secret, code))) {
+    return { error: 'That code is not right. Check the clock on your phone and try the next one.' }
+  }
+
+  await db.run('UPDATE users SET totp_enabled = 1 WHERE id = ?', [userId])
+  return { ok: true }
+}
+
+export async function disableTotp(db, userId) {
+  await db.run('UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?', [userId])
+}
+
+/**
+ * Issues a one-time code by text and returns it alongside the challenge id.
  *
  * The caller sends the code; it is never stored in the clear and never
  * returned to the browser. Any older challenge for the user is deleted, so a
@@ -242,7 +296,14 @@ export async function verifyChallenge(db, challengeId, code) {
     return { error: 'Too many wrong codes. Sign in again to get a new one.' }
   }
 
-  if (!(await verifyCode(String(code ?? '').trim(), row.code_salt, row.code_hash))) {
+  // A texted code is checked against what was stored; an authenticator code is
+  // checked against the shared secret and the clock.
+  const correct =
+    row.method === 'totp'
+      ? await verifyTotpFor(db, row.user_id, code)
+      : await verifyCode(String(code ?? '').trim(), row.code_salt, row.code_hash)
+
+  if (!correct) {
     const attempts = Number(row.attempts ?? 0) + 1
     if (attempts >= MAX_CODE_ATTEMPTS) {
       await db.run('DELETE FROM login_challenges WHERE id = ?', [challengeId])
@@ -267,6 +328,12 @@ export async function verifyChallenge(db, challengeId, code) {
  * The alternative is that they become unreachable the moment auth is turned
  * on, which would silently destroy real work.
  */
+async function verifyTotpFor(db, userId, code) {
+  const row = await db.get('SELECT totp_secret FROM users WHERE id = ?', [userId])
+  if (!row?.totp_secret) return false
+  return verifyTotp(row.totp_secret, code)
+}
+
 export async function adoptOrphanSurveys(db, userId) {
   const { changes } = await db.run(
     'UPDATE surveys SET owner_id = ? WHERE owner_id IS NULL',

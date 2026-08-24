@@ -30,6 +30,7 @@ export default function SignIn({
   const [code, setCode] = useState('')
   const [challengeId, setChallengeId] = useState('')
   const [phoneHint, setPhoneHint] = useState<string | null>(null)
+  const [method, setMethod] = useState<'sms' | 'totp'>('sms')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -66,6 +67,7 @@ export default function SignIn({
       if (result.twoFactor && result.challengeId) {
         setChallengeId(result.challengeId)
         setPhoneHint(result.phoneHint ?? null)
+        setMethod(result.method === 'totp' ? 'totp' : 'sms')
         setCode('')
         setMode('code')
         return
@@ -120,8 +122,9 @@ export default function SignIn({
           {mode === 'code' ? (
             <>
               <p className="text-sm text-body">
-                We texted a six-digit code{phoneHint ? ` to ${phoneHint}` : ''}. It expires in ten
-                minutes.
+                {method === 'totp'
+                  ? 'Open your authenticator app and enter the six-digit code it is showing.'
+                  : `We texted a six-digit code${phoneHint ? ` to ${phoneHint}` : ''}. It expires in ten minutes.`}
               </p>
               <label className="block">
                 <span className="label">Code</span>

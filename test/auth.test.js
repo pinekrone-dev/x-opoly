@@ -405,6 +405,137 @@ describe('the second factor', () => {
     }
   })
 
+  test('an authenticator can be enrolled and then satisfies the login', async () => {
+    const { currentCode } = await import('../app/lib/totp.js')
+
+    // No Twilio anywhere in this flow — that is the point of TOTP.
+    const scratch = useTempData()
+    const server = await createServer({
+      DATA_DIR: scratch.directory,
+      DB_FILE: `${scratch.directory}/totp.db`,
+    })
+
+    let jar = null
+    const hit = async (path, init = {}) => {
+      const headers = { ...(init.headers || {}) }
+      if (jar) headers.cookie = jar
+      const response = await server.fetch(new Request(BASE + path, { ...init, headers }))
+      const setCookie = response.headers.get('set-cookie')
+      if (setCookie) jar = setCookie.split(';')[0]
+      const text = await response.text()
+      return { status: response.status, body: text ? JSON.parse(text) : null, setCookie }
+    }
+
+    try {
+      await hit(
+        '/api/auth/register',
+        asJson({ email: 'totp@example.com', password: 'a-long-enough-secret' }),
+      )
+
+      const setup = await hit(
+        '/api/auth/totp/setup',
+        asJson({ password: 'a-long-enough-secret' }),
+      )
+      assert.equal(setup.status, 200)
+      assert.match(setup.body.uri, /^otpauth:\/\/totp\//)
+      assert.ok(setup.body.secret)
+
+      // Not on yet: a secret nobody has proved they hold would be a lockout.
+      const beforeConfirm = await hit('/api/auth/me')
+      assert.equal(beforeConfirm.body.user.totp, false)
+
+      const confirmed = await hit(
+        '/api/auth/totp/confirm',
+        asJson({ code: await currentCode(setup.body.secret) }),
+      )
+      assert.equal(confirmed.status, 200)
+      assert.equal(confirmed.body.user.totp, true)
+      assert.equal(confirmed.body.user.secondFactor, 'totp')
+
+      jar = null
+      const password = await hit(
+        '/api/auth/login',
+        asJson({ email: 'totp@example.com', password: 'a-long-enough-secret' }),
+      )
+      assert.equal(password.body.twoFactor, true)
+      assert.equal(password.body.method, 'totp')
+      assert.equal(password.setCookie, null, 'the password step must not set a session')
+
+      const wrong = await hit(
+        '/api/auth/verify',
+        asJson({ challengeId: password.body.challengeId, code: '000000' }),
+      )
+      assert.equal(wrong.status, 401)
+
+      const verified = await hit(
+        '/api/auth/verify',
+        asJson({
+          challengeId: password.body.challengeId,
+          code: await currentCode(setup.body.secret),
+        }),
+      )
+      assert.equal(verified.status, 200)
+      assert.ok(verified.setCookie, 'the authenticator code is what issues the session')
+    } finally {
+      scratch.cleanup()
+    }
+  })
+
+  test('an authenticator is preferred over a text when both are on', async () => {
+    const { currentCode } = await import('../app/lib/totp.js')
+
+    const scratch = useTempData()
+    const server = await createServer({
+      DATA_DIR: scratch.directory,
+      DB_FILE: `${scratch.directory}/both.db`,
+      TWILIO_ACCOUNT_SID: 'AC-test',
+      TWILIO_AUTH_TOKEN: 'token',
+      TWILIO_FROM_NUMBER: '+15125550000',
+    })
+
+    const realFetch = globalThis.fetch
+    let textsSent = 0
+    globalThis.fetch = async () => {
+      textsSent += 1
+      return new Response(JSON.stringify({ sid: 'SM1' }), { status: 201 })
+    }
+
+    let jar = null
+    const hit = async (path, init = {}) => {
+      const headers = { ...(init.headers || {}) }
+      if (jar) headers.cookie = jar
+      const response = await server.fetch(new Request(BASE + path, { ...init, headers }))
+      const setCookie = response.headers.get('set-cookie')
+      if (setCookie) jar = setCookie.split(';')[0]
+      const text = await response.text()
+      return { status: response.status, body: text ? JSON.parse(text) : null }
+    }
+
+    try {
+      await hit(
+        '/api/auth/register',
+        asJson({ email: 'both@example.com', password: 'a-long-enough-secret', phone: '2145550122' }),
+      )
+      await hit('/api/auth/2fa', asJson({ enabled: true, password: 'a-long-enough-secret' }))
+
+      const setup = await hit('/api/auth/totp/setup', asJson({ password: 'a-long-enough-secret' }))
+      await hit('/api/auth/totp/confirm', asJson({ code: await currentCode(setup.body.secret) }))
+
+      jar = null
+      const password = await hit(
+        '/api/auth/login',
+        asJson({ email: 'both@example.com', password: 'a-long-enough-secret' }),
+      )
+
+      // Nothing should have been sent: no carrier, no cost, no SIM to swap.
+      assert.equal(password.body.method, 'totp')
+      assert.equal(textsSent, 0, 'a text must not be sent when an authenticator is enrolled')
+    } finally {
+      globalThis.fetch = realFetch
+      scratch.cleanup()
+    }
+  })
+
   test('a code is good once, and wrong codes run out', async () => {
     const { createChallenge, verifyChallenge } = await import('../app/lib/auth.js')
     const { nodeAdapter } = await import('../app/lib/sql.js')

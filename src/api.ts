@@ -44,10 +44,20 @@ export const api = {
   register: (input: { email: string; password: string; name?: string; phone?: string; inviteToken?: string }) =>
     request<{ user: Account; adoptedSurveys: number }>('/api/auth/register', json(input)),
   signIn: (input: { email: string; password: string }) =>
-    request<{ user?: Account; twoFactor: boolean; challengeId?: string; phoneHint?: string }>(
-      '/api/auth/login',
-      json(input),
-    ),
+    request<{
+      user?: Account
+      twoFactor: boolean
+      challengeId?: string
+      phoneHint?: string
+      method?: 'sms' | 'totp'
+    }>('/api/auth/login', json(input)),
+
+  startTotp: (password: string) =>
+    request<{ secret: string; uri: string }>('/api/auth/totp/setup', json({ password })),
+  confirmTotp: (code: string) =>
+    request<{ user: Account }>('/api/auth/totp/confirm', json({ code })),
+  disableTotp: (password: string) =>
+    request<{ user: Account }>('/api/auth/totp/disable', json({ password })),
   verifyCode: (input: { challengeId: string; code: string }) =>
     request<{ user: Account }>('/api/auth/verify', json(input)),
   signOut: () => request<void>('/api/auth/logout', { method: 'POST' }),

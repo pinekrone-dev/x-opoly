@@ -45,6 +45,10 @@ import {
   MIN_PASSWORD_LENGTH,
   adoptOrphanSurveys,
   authenticate,
+  beginTotpEnrollment,
+  confirmTotpEnrollment,
+  createTotpChallenge,
+  disableTotp,
   countUsers,
   createChallenge,
   createSession,
@@ -305,6 +309,14 @@ export function createApp({ db, storage, env = {} }) {
     if (result.error) return c.json({ error: result.error }, result.locked ? 429 : 401)
 
     // With 2FA on, the password alone must not produce a session.
+    //
+    // TOTP is preferred when both are set up: nothing has to be sent, so there
+    // is no carrier to be down, no cost per sign-in, and no SIM to swap.
+    if (result.row.totp_enabled) {
+      const { challengeId } = await createTotpChallenge(db, result.row.id)
+      return c.json({ challengeId, twoFactor: true, method: 'totp' })
+    }
+
     if (result.row.sms_2fa && result.row.phone) {
       const { challengeId, code } = await createChallenge(db, result.row.id)
       try {
@@ -315,7 +327,7 @@ export function createApp({ db, storage, env = {} }) {
         }
         throw error
       }
-      return c.json({ challengeId, phoneHint: result.user.phoneHint, twoFactor: true })
+      return c.json({ challengeId, phoneHint: result.user.phoneHint, twoFactor: true, method: 'sms' })
     }
 
     const token = await createSession(db, result.row.id)
@@ -374,6 +386,45 @@ export function createApp({ db, storage, env = {} }) {
       enable ? 1 : 0,
       user.id,
     ])
+    return c.json({ user: await getUser(db, user.id) })
+  })
+
+  /**
+   * Starts authenticator enrollment: mints a secret and returns the otpauth
+   * URI to scan. Not switched on until a code proves the phone holds it, so a
+   * mistyped setup cannot lock anyone out.
+   */
+  app.post('/api/auth/totp/setup', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const check = await authenticate(db, user.email, body?.password)
+    if (check.error) return c.json({ error: 'That password is not right.' }, 403)
+
+    return c.json(await beginTotpEnrollment(db, user))
+  })
+
+  app.post('/api/auth/totp/confirm', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const result = await confirmTotpEnrollment(db, user.id, body?.code)
+    if (result.error) return c.json({ error: result.error }, 400)
+
+    return c.json({ user: await getUser(db, user.id) })
+  })
+
+  app.post('/api/auth/totp/disable', async (c) => {
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const body = await c.req.json().catch(() => ({}))
+    const check = await authenticate(db, user.email, body?.password)
+    if (check.error) return c.json({ error: 'That password is not right.' }, 403)
+
+    await disableTotp(db, user.id)
     return c.json({ user: await getUser(db, user.id) })
   })
 

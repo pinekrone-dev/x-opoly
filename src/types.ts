@@ -6,6 +6,8 @@ export interface Account {
   phoneHint: string | null
   hasPhone: boolean
   sms2fa: boolean
+  totp: boolean
+  secondFactor: 'sms' | 'totp' | null
   createdAt: string
   lastLoginAt: string | null
 }

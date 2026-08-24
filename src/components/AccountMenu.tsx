@@ -27,6 +27,60 @@ export default function AccountMenu({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [enrolment, setEnrolment] = useState<{ secret: string; uri: string; qr: string } | null>(null)
+  const [totpCode, setTotpCode] = useState('')
+
+  /** Mints a secret and renders it as a QR for the authenticator to scan. */
+  const startTotp = async () => {
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const { secret, uri } = await api.startTotp(password)
+      const QRCode = (await import('qrcode')).default
+      setEnrolment({
+        secret,
+        uri,
+        qr: await QRCode.toDataURL(uri, { width: 200, margin: 1 }),
+      })
+      setPassword('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Setup could not be started.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const confirmTotp = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { user } = await api.confirmTotp(totpCode)
+      onChange(user)
+      setEnrolment(null)
+      setTotpCode('')
+      setNotice('Your authenticator is set up.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That code was not accepted.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const turnOffTotp = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { user } = await api.disableTotp(password)
+      onChange(user)
+      setPassword('')
+      setNotice('Authenticator codes are off.')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That could not be changed.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const toggleTwoFactor = async (enabled: boolean) => {
     setBusy(true)
@@ -77,6 +131,88 @@ export default function AccountMenu({
         <div className="panel absolute right-0 z-20 mt-2 w-72 p-4 text-left">
           <p className="truncate text-sm font-semibold text-ink">{account.name || 'Signed in'}</p>
           <p className="truncate text-xs text-muted">{account.email}</p>
+
+          <div className="mt-4 border-t border-line pt-3">
+            <p className="label mb-2">Authenticator app</p>
+
+            {account.totp ? (
+              <>
+                <p className="text-xs text-body">On. Codes come from your authenticator app.</p>
+                <input
+                  className="field mt-2"
+                  type="password"
+                  placeholder="Current password"
+                  aria-label="Current password to turn off the authenticator"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary mt-2 w-full text-xs"
+                  disabled={busy || !password}
+                  onClick={() => void turnOffTotp()}
+                >
+                  Turn off
+                </button>
+              </>
+            ) : enrolment ? (
+              <>
+                <p className="text-xs text-body">
+                  Scan this with your authenticator, then type the code it shows.
+                </p>
+                <img
+                  src={enrolment.qr}
+                  alt="Scan to add this account to your authenticator"
+                  className="mx-auto mt-2 rounded-lg border border-line"
+                  width={160}
+                  height={160}
+                />
+                <p className="mt-1 break-all text-center font-mono text-[10px] text-muted">
+                  {enrolment.secret}
+                </p>
+                <input
+                  className="field mt-2 text-center tracking-[0.3em]"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="000000"
+                  aria-label="Code from your authenticator"
+                  value={totpCode}
+                  onChange={(event) => setTotpCode(event.target.value.replace(/\D/g, ''))}
+                />
+                <button
+                  type="button"
+                  className="btn-primary mt-2 w-full text-xs"
+                  disabled={busy || totpCode.length !== 6}
+                  onClick={() => void confirmTotp()}
+                >
+                  {busy ? 'Checking…' : 'Confirm'}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-body">
+                  Codes from an app on your phone. Nothing is sent, so it works without signal and
+                  costs nothing.
+                </p>
+                <input
+                  className="field mt-2"
+                  type="password"
+                  placeholder="Current password"
+                  aria-label="Current password to set up an authenticator"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn-primary mt-2 w-full text-xs"
+                  disabled={busy || !password}
+                  onClick={() => void startTotp()}
+                >
+                  {busy ? 'Working…' : 'Set up'}
+                </button>
+              </>
+            )}
+          </div>
 
           <div className="mt-4 border-t border-line pt-3">
             <p className="label mb-2">Two-factor by text</p>
