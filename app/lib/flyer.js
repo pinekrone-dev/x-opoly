@@ -12,9 +12,6 @@
  * silently written into the record.
  */
 
-import Anthropic from '@anthropic-ai/sdk'
-import { z } from 'zod'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { toBase64 } from './storage.js'
 
 const DEFAULT_MODEL = 'claude-opus-5'
@@ -30,7 +27,31 @@ export class FlyerExtractionError extends Error {
   }
 }
 
-const FlyerFields = z.object({
+/**
+ * The Anthropic SDK is loaded on demand.
+ *
+ * It used to be a top-level import, which meant every request — including
+ * serving the home page — evaluated the whole SDK. On Workers that also made
+ * the entire app depend on the SDK's Node compatibility shims loading
+ * correctly at startup, so one bad import took down routes that have nothing
+ * to do with reading flyers.
+ */
+let sdk = null
+
+async function loadSdk() {
+  if (sdk) return sdk
+
+  const [anthropic, zod, helpers] = await Promise.all([
+    import('@anthropic-ai/sdk'),
+    import('zod'),
+    import('@anthropic-ai/sdk/helpers/zod'),
+  ])
+
+  const z = zod.z
+  sdk = {
+    Anthropic: anthropic.default,
+    zodOutputFormat: helpers.zodOutputFormat,
+    schema: z.object({
   name: z.string().nullable().describe('Building or property name, e.g. "Parmer Business Park"'),
   address: z.string().nullable().describe('Street address only, without city or state'),
   city: z.string().nullable(),
@@ -48,8 +69,10 @@ const FlyerFields = z.object({
   listingBroker: z.string().nullable().describe('Listing broker or brokerage named on the flyer'),
   notes: z.string().nullable().describe('Other selling points worth keeping, one short paragraph'),
   confidence: z.enum(['high', 'medium', 'low']).describe('How legible and complete the flyer was'),
-  uncertainFields: z.array(z.string()).describe('Names of fields that were guessed or ambiguous, for the broker to confirm'),
-})
+  uncertainFields: z.array(z.string()).describe('Names of fields that were guessed or ambiguous, for the broker to confirm'),}),
+  }
+  return sdk
+}
 
 const SYSTEM_PROMPT = `You read commercial real estate listing flyers and pull out the facts a tenant rep broker records for a site survey.
 
@@ -93,15 +116,17 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
     throw new FlyerExtractionError(`That file is ${(bytes.length / 1e6).toFixed(1)} MB. Flyers must be under 10 MB.`)
   }
 
-  const anthropic =
-    client || (isConfigured(env) ? new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, authToken: env.ANTHROPIC_AUTH_TOKEN }) : null)
-  if (!anthropic) {
+  if (!client && !isConfigured(env)) {
     throw new FlyerExtractionError(
       'Reading flyers automatically needs an Anthropic API key. Set ANTHROPIC_API_KEY on the server, or enter the details by hand.',
       { configured: false },
     )
   }
 
+  // Only reached when a flyer is actually being read.
+  const { Anthropic, zodOutputFormat, schema } = await loadSdk()
+  const anthropic =
+    client || new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, authToken: env.ANTHROPIC_AUTH_TOKEN })
   const block = contentBlockFor(bytes, mimeType)
 
   try {
@@ -111,7 +136,7 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
       system: SYSTEM_PROMPT,
       output_config: {
         effort: 'medium',
-        format: zodOutputFormat(FlyerFields),
+        format: zodOutputFormat(schema),
       },
       messages: [
         {
@@ -129,13 +154,15 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
     return { fields: response.parsed_output, model: response.model }
   } catch (error) {
     if (error instanceof FlyerExtractionError) throw error
-    if (error instanceof Anthropic.AuthenticationError) {
+
+    // Classified by status so this path never needs the SDK itself.
+    if (error?.status === 401 || error?.status === 403) {
       throw new FlyerExtractionError('The Anthropic API key was rejected. Check ANTHROPIC_API_KEY on the server.', { configured: false })
     }
-    if (error instanceof Anthropic.RateLimitError) {
+    if (error?.status === 429) {
       throw new FlyerExtractionError('The API is rate limiting us right now. Try that flyer again in a moment.')
     }
-    if (error instanceof Anthropic.APIError) {
+    if (error?.status) {
       throw new FlyerExtractionError(`The extraction service returned an error (${error.status}). ${error.message}`)
     }
     throw new FlyerExtractionError(`The flyer could not be processed: ${error.message}`)

@@ -1,9 +1,13 @@
-# Matches the Worker the Cloudflare Git integration created, which takes its
-# name from the repository. Renaming the repo does not rename the Worker; to
-# change it, rename the Worker in the dashboard and update this line together.
+# Named after the Worker the Cloudflare Git integration created, which takes
+# its name from the repository. To rename, change it in the dashboard and here
+# together — otherwise a deploy creates a second Worker beside the running one.
 name = "x-opoly"
 main = "worker/index.js"
 compatibility_date = "2026-06-01"
+
+# The Anthropic SDK relies on Node compatibility shims. It is imported lazily
+# so the rest of the app never depends on it, but reading a flyer does.
+compatibility_flags = ["nodejs_compat"]
 
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.
@@ -15,10 +19,7 @@ not_found_handling = "single-page-application"
 # Provisioned in the Cloudflare account, region ENAM. Tables already created.
 [[d1_databases]]
 binding = "DB"
-database_# Matches the Worker the Cloudflare Git integration created, which takes its
-# name from the repository. Renaming the repo does not rename the Worker; to
-# change it, rename the Worker in the dashboard and update this line together.
-name = "x-opoly"
+database_name = "sitesurvey-cre"
 database_id = "40bf42da-08df-46bb-ad73-de084621ebc4"
 migrations_dir = "migrations"
 
@@ -31,6 +32,6 @@ bucket_name = "sitesurvey-cre-uploads"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark.
 TILE_PROVIDER = "osm"
 
-# Secrets are NOT set here — they would end up in git. Use:
+# Secrets are NOT set here — they would end up in git. Set them in the
+# dashboard under Settings -> Variables and Secrets, or with:
 #   npx wrangler secret put ANTHROPIC_API_KEY
-#   npx wrangler secret put TILE_KEY          (only for a keyed basemap)
