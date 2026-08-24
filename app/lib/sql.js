@@ -10,7 +10,34 @@
  * async and the callers have to be written for the stricter of the two.
  */
 
-import { SCHEMA_STATEMENTS } from './schema.js'
+import { COLUMN_ADDITIONS, SCHEMA_STATEMENTS } from './schema.js'
+
+
+/**
+ * Apply the schema to whichever database is behind `adapter`.
+ *
+ * Creating tables is idempotent on its own. Adding a column to a table that
+ * already exists is not — SQLite has no `ADD COLUMN IF NOT EXISTS` — so each
+ * table is inspected first and only the genuinely missing columns are added.
+ * That makes this safe to run on every boot against a database with live rows.
+ */
+async function applySchema(adapter) {
+  for (const statement of SCHEMA_STATEMENTS) {
+    await adapter.run(statement)
+  }
+
+  const seen = new Map()
+  for (const [table, column, definition] of COLUMN_ADDITIONS) {
+    if (!seen.has(table)) {
+      const info = await adapter.all(`PRAGMA table_info(${table})`)
+      seen.set(table, new Set(info.map((row) => row.name)))
+    }
+    const columns = seen.get(table)
+    if (columns.has(column)) continue
+    await adapter.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+    columns.add(column)
+  }
+}
 
 /**
  * @param {import('node:sqlite').DatabaseSync} database
@@ -47,7 +74,7 @@ export function nodeAdapter(database) {
     },
 
     async migrate() {
-      for (const statement of SCHEMA_STATEMENTS) database.exec(statement)
+      await applySchema(this)
     },
   }
 }
@@ -84,9 +111,7 @@ export function d1Adapter(d1) {
     },
 
     async migrate() {
-      for (const statement of SCHEMA_STATEMENTS) {
-        await d1.prepare(statement).run()
-      }
+      await applySchema(this)
     },
   }
 }

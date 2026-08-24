@@ -7,6 +7,7 @@
  */
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
+import { fieldsBySurvey, listPropertyFields, seedStages } from './stages.js'
 
 export const STAGES = ['prospect', 'touring', 'loi', 'under_contract', 'passed']
 
@@ -38,6 +39,10 @@ const PROPERTY_FIELDS = {
   year_built: (v) => integer(v, 1600, 2100),
   availability: (v) => text(v, 120),
   listing_broker: (v) => text(v, 200),
+  broker_email: (v) => text(v, 200),
+  broker_phone: (v) => text(v, 60),
+  stage_id: (v) => text(v, 40),
+  tour_minutes: (v) => integer(v, 0, 600),
   notes: (v) => text(v, 5000),
   flyer_path: (v) => text(v, 500),
   flyer_name: (v) => text(v, 300),
@@ -54,6 +59,14 @@ const SURVEY_FIELDS = {
   center_lat: (v) => number(v, -90, 90),
   center_lng: (v) => number(v, -180, 180),
   zoom: (v) => integer(v, 1, 20),
+  tour_start_time: (v) => text(v, 20),
+  tour_stop_minutes: (v) => integer(v, 0, 600),
+  tour_start_address: (v) => text(v, 300),
+  tour_start_lat: (v) => number(v, -90, 90),
+  tour_start_lng: (v) => number(v, -180, 180),
+  tour_end_address: (v) => text(v, 300),
+  tour_end_lat: (v) => number(v, -90, 90),
+  tour_end_lng: (v) => number(v, -180, 180),
 }
 
 function text(value, max) {
@@ -98,11 +111,16 @@ function mapProperty(row) {
     yearBuilt: row.year_built,
     availability: row.availability,
     listingBroker: row.listing_broker,
+    brokerEmail: row.broker_email,
+    brokerPhone: row.broker_phone,
+    stageId: row.stage_id,
+    tourMinutes: row.tour_minutes,
     notes: row.notes,
     flyerUrl: row.flyer_path ? `/api/files/${row.flyer_path}` : null,
     flyerName: row.flyer_name,
     photoUrl: row.photo_path ? `/api/files/${row.photo_path}` : null,
     tourOrder: row.tour_order,
+    fields: [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -124,6 +142,18 @@ function mapSurvey(row) {
       enabled: toBool(row.share_enabled),
       expiresAt: row.share_expires_at,
       url: row.share_token ? `/s/${row.share_token}` : null,
+    },
+    tour: {
+      startTime: row.tour_start_time || '10:00',
+      stopMinutes: row.tour_stop_minutes ?? 20,
+      start:
+        row.tour_start_lat != null && row.tour_start_lng != null
+          ? { address: row.tour_start_address, lat: row.tour_start_lat, lng: row.tour_start_lng }
+          : null,
+      end:
+        row.tour_end_lat != null && row.tour_end_lng != null
+          ? { address: row.tour_end_address, lat: row.tour_end_lat, lng: row.tour_end_lng }
+          : null,
     },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -173,6 +203,7 @@ export async function createSurvey(db, input = {}) {
       timestamp,
     ],
   )
+  await seedStages(db, id)
   return getSurvey(db, id)
 }
 
@@ -204,11 +235,14 @@ export async function listProperties(db, surveyId) {
      ORDER BY CASE WHEN tour_order IS NULL THEN 1 ELSE 0 END, tour_order, created_at`,
     [surveyId],
   )
-  return rows.map(mapProperty)
+  const fields = await fieldsBySurvey(db, surveyId)
+  return rows.map((row) => ({ ...mapProperty(row), fields: fields.get(row.id) ?? [] }))
 }
 
 export async function getProperty(db, id) {
-  return mapProperty(await db.get('SELECT * FROM properties WHERE id = ?', [id]))
+  const property = mapProperty(await db.get('SELECT * FROM properties WHERE id = ?', [id]))
+  if (!property) return null
+  return { ...property, fields: await listPropertyFields(db, id) }
 }
 
 export async function createProperty(db, surveyId, input = {}) {

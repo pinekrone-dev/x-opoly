@@ -26,6 +26,14 @@ import {
   updateShare,
   updateSurvey,
 } from './lib/surveys.js'
+import {
+  createStage,
+  deleteStage,
+  listStages,
+  reorderStages,
+  setPropertyFields,
+  updateStage,
+} from './lib/stages.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
@@ -145,7 +153,11 @@ export function createApp({ db, storage, env = {} }) {
   app.get('/api/surveys/:id', async (c) => {
     const { survey, error } = await requireSurvey(c)
     if (error) return error
-    return c.json({ survey, properties: await listProperties(db, survey.id) })
+    return c.json({
+      survey,
+      properties: await listProperties(db, survey.id),
+      stages: await listStages(db, survey.id),
+    })
   })
 
   app.patch('/api/surveys/:id', async (c) => {
@@ -166,18 +178,60 @@ export function createApp({ db, storage, env = {} }) {
     const { survey, error } = await requireSurvey(c)
     if (error) return error
     const body = await c.req.json().catch(() => ({}))
-    return c.json({ property: await createProperty(db, survey.id, body) }, 201)
+    const property = await createProperty(db, survey.id, body)
+    if (Array.isArray(body?.fields)) await setPropertyFields(db, property.id, body.fields)
+    return c.json({ property: await getProperty(db, property.id) }, 201)
   })
 
   app.patch('/api/properties/:id', async (c) => {
-    if (!(await getProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
+    const id = c.req.param('id')
+    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
     const body = await c.req.json().catch(() => ({}))
-    return c.json({ property: await updateProperty(db, c.req.param('id'), body) })
+    await updateProperty(db, id, body)
+    if (Array.isArray(body?.fields)) await setPropertyFields(db, id, body.fields)
+    return c.json({ property: await getProperty(db, id) })
   })
 
   app.delete('/api/properties/:id', async (c) => {
     if (!(await deleteProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
     return c.body(null, 204)
+  })
+
+  // --- stages --------------------------------------------------------------
+
+  app.get('/api/surveys/:id/stages', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+    return c.json({ stages: await listStages(db, survey.id) })
+  })
+
+  app.post('/api/surveys/:id/stages', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+    const body = await c.req.json().catch(() => ({}))
+    const result = await createStage(db, survey.id, body)
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ stage: result.stage }, 201)
+  })
+
+  app.patch('/api/stages/:id', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const result = await updateStage(db, c.req.param('id'), body)
+    if (result.error) return c.json({ error: result.error }, result.stage ? 400 : 404)
+    return c.json({ stage: result.stage })
+  })
+
+  app.delete('/api/stages/:id', async (c) => {
+    if (!(await deleteStage(db, c.req.param('id')))) return notFound(c, 'That stage does not exist.')
+    return c.body(null, 204)
+  })
+
+  app.put('/api/surveys/:id/stages', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+    const body = await c.req.json().catch(() => ({}))
+    const order = Array.isArray(body?.order) ? body.order.map(String) : []
+    return c.json({ stages: await reorderStages(db, survey.id, order) })
   })
 
   // --- tour ----------------------------------------------------------------
