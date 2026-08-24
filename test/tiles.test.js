@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict'
 import test, { describe } from 'node:test'
 
-import { TILE_PRESETS, placeholderTile, resolveTiles } from '../server/lib/tiles.js'
+import { DEFAULT_PROVIDER, TILE_PRESETS, availableBasemaps, placeholderTile, resolveTiles } from '../server/lib/tiles.js'
 
 describe('basemap selection', () => {
-  test('defaults to a provider that needs no key or billing account', () => {
+  test('defaults to a keyless basemap with real streets', () => {
     const tiles = resolveTiles({})
-    assert.equal(tiles.provider, 'osm')
-    assert.ok(tiles.url.includes('{z}/{x}/{y}'))
-    assert.equal(tiles.placeholder, false)
+    assert.equal(tiles.provider, DEFAULT_PROVIDER)
+    assert.ok(tiles.url.includes('{z}'))
+    assert.equal(tiles.placeholder, false, 'the default is a real basemap, not the placeholder grid')
+    assert.equal(TILE_PRESETS[DEFAULT_PROVIDER].keyRequired, false, 'the default needs no API key')
+  })
+
+  test('the default is dark natively rather than a filtered light basemap', () => {
+    // Inverting a light basemap to force it dark also inverts the street
+    // labels, which is the one thing that has to stay readable.
+    assert.equal(resolveTiles({}).darkNative, true)
   })
 
   test('substitutes the key and style into a keyed provider', () => {
@@ -24,7 +31,7 @@ describe('basemap selection', () => {
 
   test('falls back rather than serving a broken keyed provider', () => {
     const tiles = resolveTiles({ TILE_PROVIDER: 'mapbox' })
-    assert.equal(tiles.provider, 'osm', 'no key means no Mapbox')
+    assert.equal(tiles.provider, DEFAULT_PROVIDER, 'no key means no Mapbox')
     assert.match(tiles.notice, /needs an API key/)
     assert.ok(!tiles.url.includes('{key}'), 'never leaves an unfilled key placeholder in the URL')
   })
@@ -36,13 +43,19 @@ describe('basemap selection', () => {
   })
 
   test('an unknown provider name falls back instead of failing', () => {
-    assert.equal(resolveTiles({ TILE_PROVIDER: 'not-a-provider' }).provider, 'osm')
+    assert.equal(resolveTiles({ TILE_PROVIDER: 'not-a-provider' }).provider, DEFAULT_PROVIDER)
   })
 
-  test('natively dark basemaps are flagged so the UI does not invert them twice', () => {
-    assert.equal(resolveTiles({}).darkNative, false, 'standard OSM is light and gets inverted')
+  test('reports which basemaps are dark, so the UI never has to guess', () => {
+    assert.equal(resolveTiles({ TILE_PROVIDER: 'osm' }).darkNative, false)
     assert.equal(resolveTiles({ TILE_PROVIDER: 'carto-dark' }).darkNative, true)
     assert.equal(resolveTiles({ TILE_PROVIDER: 'here', TILE_KEY: 'k' }).darkNative, true)
+  })
+
+  test('every preset carries a human label for the switcher', () => {
+    for (const [name, preset] of Object.entries(TILE_PRESETS)) {
+      assert.ok(preset.label && preset.label.length > 0, `${name} has no label`)
+    }
   })
 
   test('every preset is a usable template', () => {
@@ -67,5 +80,34 @@ describe('placeholder tiles', () => {
   test('says plainly that no basemap is configured', () => {
     assert.match(TILE_PRESETS.offline.attribution, /no basemap/i)
     assert.equal(TILE_PRESETS.offline.placeholder, true)
+  })
+})
+
+describe('the basemap switcher', () => {
+  test('offers only basemaps this deployment can actually load', () => {
+    const keyless = availableBasemaps({})
+    assert.ok(keyless.length >= 3, 'several keyless street basemaps are offered')
+    assert.ok(keyless.every((option) => !option.url.includes('{key}')), 'no option has an unfilled key')
+    assert.ok(!keyless.some((option) => option.provider === 'mapbox'), 'a keyed provider is hidden without a key')
+    assert.ok(!keyless.some((option) => option.placeholder), 'the placeholder grid is not offered as a real basemap')
+  })
+
+  test('adds the keyed providers once a key is configured', () => {
+    const withKey = availableBasemaps({ TILE_KEY: 'pk.test' })
+    const ids = withKey.map((option) => option.provider)
+    for (const provider of ['mapbox', 'here', 'maptiler', 'stadia']) {
+      assert.ok(ids.includes(provider), `${provider} should be selectable with a key`)
+    }
+    assert.ok(withKey.every((option) => !option.url.includes('{key}')))
+  })
+
+  test('a self-hosted basemap is offered first', () => {
+    const options = availableBasemaps({ TILE_URL: 'http://tiles.internal/{z}/{x}/{y}.png' })
+    assert.equal(options[0].provider, 'custom')
+  })
+
+  test('the placeholder grid is only offered when it was asked for', () => {
+    const options = availableBasemaps({ TILE_PROVIDER: 'offline' })
+    assert.ok(options.some((option) => option.provider === 'offline'))
   })
 })

@@ -216,6 +216,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 onSelect={setSelectedId}
                 onMapClick={dropPin ? (lat, lng) => void addAt(lat, lng) : undefined}
                 tiles={features.tiles}
+                basemaps={features.basemaps}
                 rings={competition ? { ...competition.center, miles: competition.rings.map((ring) => ring.miles) } : null}
                 competitors={competition?.results}
                 fitKey={fitKey}
@@ -256,6 +257,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 tiles={features.tiles}
+                basemaps={features.basemaps}
                 routeIds={tourOrder}
                 routeColor={survey.brandColor}
                 fitKey={`tour-${properties.length}`}

@@ -1,10 +1,12 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 
 interface Props {
   tiles: TileConfig
+  /** Basemaps the viewer may switch between. Omit to hide the switcher. */
+  basemaps?: TileConfig[]
   properties: Property[]
   selectedId?: string | null
   onSelect?: (id: string) => void
@@ -35,8 +37,20 @@ function pinIcon(property: Property, index: number | null, selected: boolean): L
   })
 }
 
+const BASEMAP_STORAGE_KEY = 'sitesurvey.basemap'
+
+/** Remembers the viewer's basemap choice across sessions. */
+function storedBasemap(): string | null {
+  try {
+    return window.localStorage.getItem(BASEMAP_STORAGE_KEY)
+  } catch {
+    return null
+  }
+}
+
 export default function MapCanvas({
   tiles,
+  basemaps,
   properties,
   selectedId,
   onSelect,
@@ -50,6 +64,12 @@ export default function MapCanvas({
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
+  const tileLayer = useRef<L.TileLayer | null>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [activeId, setActiveId] = useState(() => storedBasemap() || tiles.provider)
+
+  const options = basemaps && basemaps.length > 1 ? basemaps : null
+  const active = options?.find((entry) => entry.provider === activeId) || tiles
   const markers = useRef<Map<string, L.Marker>>(new Map())
   const route = useRef<L.Polyline | null>(null)
   const ringLayer = useRef<L.LayerGroup | null>(null)
@@ -65,14 +85,6 @@ export default function MapCanvas({
     if (!container.current || map.current) return
 
     const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(FALLBACK_CENTER, 11)
-    L.tileLayer(tiles.url, {
-      attribution: tiles.attribution,
-      maxZoom: tiles.maxZoom || 19,
-      // Light basemaps are inverted by CSS to sit in a dark UI; a basemap that
-      // is already dark must be left alone or it comes back out white.
-      className: tiles.darkNative ? 'tile-native-dark' : '',
-      subdomains: tiles.url.includes('{s}') ? ['a', 'b', 'c'] : [],
-    }).addTo(instance)
     instance.on('click', (event: L.LeafletMouseEvent) => clickHandler.current?.(event.latlng.lat, event.latlng.lng))
     map.current = instance
 
@@ -84,9 +96,26 @@ export default function MapCanvas({
       resize.disconnect()
       instance.remove()
       map.current = null
+      tileLayer.current = null
       markers.current.clear()
     }
-  }, [tiles.url, tiles.attribution, tiles.maxZoom, tiles.darkNative])
+  }, [])
+
+  // The basemap is its own layer so it can be swapped without tearing down the
+  // map, which would drop every pin and reset the viewport.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    tileLayer.current?.remove()
+    tileLayer.current = L.tileLayer(active.url, {
+      attribution: active.attribution,
+      maxZoom: active.maxZoom || 19,
+      subdomains: active.url.includes('{s}') ? ['a', 'b', 'c'] : [],
+      // Keep the basemap beneath the rings, routes and pins.
+      zIndex: 1,
+    }).addTo(instance)
+  }, [active.url, active.attribution, active.maxZoom])
 
   // Sync pins with the property list.
   useEffect(() => {
@@ -227,5 +256,55 @@ export default function MapCanvas({
     instance.panTo([property.lat, property.lng], { animate: true })
   }, [selectedId])
 
-  return <div ref={container} className={className} role="application" aria-label="Property map" />
+  const chooseBasemap = (id: string) => {
+    setActiveId(id)
+    setPickerOpen(false)
+    try {
+      window.localStorage.setItem(BASEMAP_STORAGE_KEY, id)
+    } catch {
+      /* a viewer with storage disabled just loses the preference */
+    }
+  }
+
+  return (
+    <div className="relative h-full w-full">
+      <div ref={container} className={className} role="application" aria-label="Property map" />
+
+      {options && (
+        <div className="absolute right-3 top-3 z-[500]">
+          <button
+            type="button"
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-ink-900/90 px-2.5 py-1.5 text-xs font-medium text-slate-200 shadow-lg backdrop-blur hover:border-white/25"
+            aria-expanded={pickerOpen}
+            aria-label="Change basemap"
+            onClick={() => setPickerOpen((open) => !open)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="m12 3 9 5-9 5-9-5 9-5ZM3 13l9 5 9-5M3 17l9 5 9-5" />
+            </svg>
+            {active.label || 'Basemap'}
+          </button>
+
+          {pickerOpen && (
+            <ul className="animate-fade-in mt-1 w-48 overflow-hidden rounded-lg border border-white/10 bg-ink-900/95 shadow-xl backdrop-blur">
+              {options.map((option) => (
+                <li key={option.provider}>
+                  <button
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs hover:bg-white/5 ${
+                      option.provider === active.provider ? 'text-brand' : 'text-slate-300'
+                    }`}
+                    onClick={() => chooseBasemap(option.provider)}
+                  >
+                    {option.label || option.provider}
+                    {option.provider === active.provider && <span aria-hidden>✓</span>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }

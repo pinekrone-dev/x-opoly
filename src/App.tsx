@@ -6,20 +6,23 @@ import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
 import type { AppFeatures } from './types'
 
-const OSM_TILES = {
-  provider: 'osm',
-  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  attribution: '© OpenStreetMap contributors',
-  maxZoom: 19,
-  darkNative: false,
+/** Used only if /api/health cannot be reached; keyless and dark-native. */
+const FALLBACK_TILES = {
+  provider: 'carto-dark',
+  label: 'Dark streets',
+  url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  attribution: '© OpenStreetMap contributors, © CARTO',
+  maxZoom: 20,
+  darkNative: true,
   placeholder: false,
 }
 
 const FALLBACK_FEATURES: AppFeatures = {
   flyerExtraction: false,
-  tiles: OSM_TILES,
-  tileUrl: OSM_TILES.url,
-  tileAttribution: OSM_TILES.attribution,
+  tiles: FALLBACK_TILES,
+  basemaps: [FALLBACK_TILES],
+  tileUrl: FALLBACK_TILES.url,
+  tileAttribution: FALLBACK_TILES.attribution,
 }
 
 export default function App() {

@@ -76,17 +76,28 @@ parts that need an outside service.
 
 | Value | Provider | Key needed |
 | --- | --- | --- |
-| `osm` *(default)* | OpenStreetMap standard | no |
-| `carto-dark`, `carto-light` | Carto basemaps | no |
+| `carto-dark` *(default)* | Dark street basemap, OSM data rendered by CARTO | no |
+| `carto-light` | The same, light | no |
+| `osm` | OpenStreetMap standard | no |
 | `mapbox` | Mapbox styles (`TILE_STYLE`, default `dark-v11`) | yes |
 | `here` | HERE explore.night | yes |
 | `maptiler` | MapTiler (`TILE_STYLE`) | yes |
 | `stadia` | Stadia Alidade Smooth Dark | yes |
 | `offline` | Placeholder grid served by this app | no |
 
-A keyed provider with no `TILE_KEY` falls back to OpenStreetMap and says so, rather than
-rendering a map of broken tiles. Light basemaps are inverted by CSS to sit in the dark UI;
-providers that are already dark are flagged `darkNative` and left alone.
+A keyed provider with no `TILE_KEY` falls back to the keyless default and says so, rather
+than rendering a map of broken tiles. Whichever basemaps a deployment can actually load
+are offered in a switcher on the map itself, and the viewer's choice is remembered.
+
+Basemaps are never colour-filtered. An earlier version forced a light basemap dark with a
+CSS invert, which also inverted the street labels — the one thing on a basemap that has to
+stay readable. The default is dark natively instead.
+
+**Before going to production**, check the current usage terms of whichever basemap you
+point this at. The free public endpoints — OpenStreetMap's especially — publish usage
+policies that are generally not intended for commercial products at volume, and expect
+you to move to a provider plan or your own tile server. That is a licensing decision, not
+a technical one: the code switches with one variable.
 
 `offline` serves a neutral labelled grid from `/api/tiles/{z}/{x}/{y}.svg`. It exists for
 development, air-gapped installs, and networks that filter outbound traffic — the pins

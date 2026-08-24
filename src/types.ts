@@ -71,6 +71,7 @@ export interface Demographics {
 
 export interface TileConfig {
   provider: string
+  label?: string
   url: string
   attribution: string
   maxZoom: number
@@ -82,6 +83,7 @@ export interface TileConfig {
 export interface AppFeatures {
   flyerExtraction: boolean
   tiles: TileConfig
+  basemaps: TileConfig[]
   tileUrl: string
   tileAttribution: string
 }

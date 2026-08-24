@@ -124,17 +124,10 @@
 }
 
 /*
- * Light basemaps (OSM standard) are inverted to sit inside a dark UI.
- * A basemap that ships dark already opts out via .tile-native-dark, otherwise
- * inverting it a second time returns it to white.
+ * Basemaps are never colour-filtered. Inverting a light basemap to force it
+ * dark also inverts the street labels, and street names are the one thing on
+ * the basemap that has to stay readable. Pick a dark-native basemap instead.
  */
-.leaflet-tile-pane {
-  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9) saturate(0.7);
-}
-
-.leaflet-tile-pane:has(.tile-native-dark) {
-  filter: none;
-}
 
 .leaflet-control-zoom a {
   background-color: #161d27 !important;

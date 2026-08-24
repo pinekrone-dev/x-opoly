@@ -33,7 +33,7 @@ import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
 import { legs, planTour } from './lib/tour.js'
-import { placeholderTile, resolveTiles } from './lib/tiles.js'
+import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -83,6 +83,7 @@ export function createServer() {
       features: {
         flyerExtraction: isConfigured(),
         tiles,
+        basemaps: availableBasemaps(),
         // Kept for older clients that read the flat fields.
         tileUrl: tiles.url,
         tileAttribution: tiles.attribution,

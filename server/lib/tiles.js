@@ -9,7 +9,23 @@
  * air-gapped deployments, and anywhere outbound traffic is filtered.
  */
 
+/**
+ * A dark-native street basemap by default: real streets and labels, rendered
+ * for a dark interface, and no API key. Forcing a light basemap dark with a CSS
+ * filter inverts the label text too, which is the one thing on a basemap a
+ * broker actually has to read.
+ */
+export const DEFAULT_PROVIDER = 'carto-dark'
+
 export const TILE_PRESETS = {
+  'carto-dark': {
+    label: 'Dark streets',
+    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+    attribution: '© OpenStreetMap contributors, © CARTO',
+    maxZoom: 20,
+    keyRequired: false,
+    darkNative: true,
+  },
   osm: {
     label: 'OpenStreetMap',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
@@ -17,17 +33,8 @@ export const TILE_PRESETS = {
     maxZoom: 19,
     keyRequired: false,
   },
-  'carto-dark': {
-    label: 'Carto Dark Matter',
-    url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-    attribution: '© OpenStreetMap contributors, © CARTO',
-    maxZoom: 20,
-    keyRequired: false,
-    // Already dark, so the UI must not invert it a second time.
-    darkNative: true,
-  },
   'carto-light': {
-    label: 'Carto Positron',
+    label: 'Light streets',
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
     attribution: '© OpenStreetMap contributors, © CARTO',
     maxZoom: 20,
@@ -97,30 +104,60 @@ export function resolveTiles(env = process.env) {
     }
   }
 
-  const requested = (env.TILE_PROVIDER || 'osm').toLowerCase()
+  const requested = (env.TILE_PROVIDER || DEFAULT_PROVIDER).toLowerCase()
   const preset = TILE_PRESETS[requested] || TILE_PRESETS.osm
   const key = env.TILE_KEY || ''
 
   if (preset.keyRequired && !key) {
     return {
-      ...toConfig('osm', TILE_PRESETS.osm, ''),
-      notice: `${preset.label} needs an API key. Set TILE_KEY, or leave TILE_PROVIDER unset to use OpenStreetMap.`,
+      ...toConfig(DEFAULT_PROVIDER, TILE_PRESETS[DEFAULT_PROVIDER], ''),
+      notice: `${preset.label} needs an API key. Set TILE_KEY, or leave TILE_PROVIDER unset for the keyless default.`,
     }
   }
 
-  return toConfig(requested in TILE_PRESETS ? requested : 'osm', preset, key, env)
+  return toConfig(requested in TILE_PRESETS ? requested : DEFAULT_PROVIDER, preset, key, env)
 }
 
 function toConfig(provider, preset, key, env = {}) {
   const style = env.TILE_STYLE || preset.defaultStyle || ''
   return {
     provider,
+    label: preset.label,
     url: preset.url.replace('{key}', key).replace('{style}', style),
     attribution: preset.attribution,
     maxZoom: preset.maxZoom,
     darkNative: Boolean(preset.darkNative),
     placeholder: Boolean(preset.placeholder),
   }
+}
+
+/**
+ * The basemaps a viewer can switch between right now — the keyless ones, plus
+ * any keyed provider this deployment actually has a key for.
+ */
+export function availableBasemaps(env = process.env) {
+  const key = env.TILE_KEY || ''
+  const options = []
+
+  for (const [id, preset] of Object.entries(TILE_PRESETS)) {
+    if (preset.keyRequired && !key) continue
+    if (preset.placeholder && env.TILE_PROVIDER !== 'offline') continue
+    options.push(toConfig(id, preset, key, env))
+  }
+
+  if (env.TILE_URL) {
+    options.unshift({
+      provider: 'custom',
+      label: 'Configured basemap',
+      url: env.TILE_URL,
+      attribution: env.TILE_ATTRIBUTION || '',
+      maxZoom: Number(env.TILE_MAX_ZOOM) || 19,
+      darkNative: env.TILE_DARK === '1',
+      placeholder: false,
+    })
+  }
+
+  return options
 }
 
 /**
