@@ -14,6 +14,7 @@
  */
 
 import { haversineMiles } from './tour.js'
+import { googleRoute, hasGoogleKey } from './google.js'
 
 const OSRM_BASE = 'https://router.project-osrm.org/route/v1/driving'
 
@@ -39,9 +40,24 @@ export class RoutingUnavailable extends Error {
  * @param {object} options
  * @returns {Promise<{legs: Array<{miles:number,minutes:number}>, geometry: Array<[number,number]>, source: string}>}
  */
-export async function routeLegs(points, { fetchImpl = fetch, timeoutMs = 8000 } = {}) {
+export async function routeLegs(points, { fetchImpl = fetch, timeoutMs = 8000, env = {} } = {}) {
   if (points.length < 2) {
     return { legs: [], geometry: points.map((point) => [point.lat, point.lng]), source: 'none' }
+  }
+
+  // Google first when a key is configured — it is the only one of the three
+  // that accounts for traffic, which is the whole reason to pay for it.
+  if (hasGoogleKey(env)) {
+    try {
+      return await googleRoute(points, {
+        apiKey: env.GOOGLE_MAPS_API_KEY,
+        fetchImpl,
+        timeout: timeoutMs,
+      })
+    } catch {
+      // Fall through. A key that is misconfigured, over quota, or rejected
+      // should degrade to the free router rather than break the tour.
+    }
   }
 
   try {

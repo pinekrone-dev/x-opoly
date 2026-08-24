@@ -268,7 +268,7 @@ export function createApp({ db, storage, env = {} }) {
     const end = anchor(body?.end ?? survey.tour?.end)
     const points = [...(start ? [start] : []), ...plan.stops, ...(end ? [end] : [])]
 
-    const routed = await routeLegs(points, { fetchImpl: fetch })
+    const routed = await routeLegs(points, { fetchImpl: fetch, env })
 
     // Align drive times with stops: with a start anchor every stop has an
     // inbound leg; without one the first stop is where the day begins.

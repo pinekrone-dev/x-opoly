@@ -15,17 +15,26 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'Base URL to test'
+        description: 'Base URL to test (blank tests both public addresses)'
         required: false
-        default: 'https://x-opoly.shiny-butterfly-2b90.workers.dev'
+        default: ''
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 12
 
+    # Both public addresses reach the same Worker, but only testing one would
+    # miss a custom domain whose route or certificate has not come up.
+    strategy:
+      fail-fast: false
+      matrix:
+        url:
+          - https://survey.realestateaistudio.com
+          - https://x-opoly.shiny-butterfly-2b90.workers.dev
+
     env:
-      SMOKE_URL: ${{ github.event.inputs.url || 'https://x-opoly.shiny-butterfly-2b90.workers.dev' }}
+      SMOKE_URL: ${{ github.event.inputs.url || matrix.url }}
 
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +76,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: smoke-map
+          name: smoke-map-${{ strategy.job-index }}
           path: smoke-map.png
           if-no-files-found: warn

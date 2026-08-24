@@ -11,6 +11,7 @@
  */
 
 import { haversineMiles } from './tour.js'
+import { googleNearby, hasGoogleKey } from './google.js'
 
 const DEFAULT_OVERPASS = 'https://overpass-api.de/api/interpreter'
 
@@ -151,6 +152,45 @@ export async function nearbyBusinesses({
   }
 
   const radius = Math.min(Math.max(Number(radiusMiles) || 5, 0.25), 10)
+
+  // Google knows about far more small tenants than OSM does, so it leads when
+  // a key is configured. A failure falls through to Overpass rather than
+  // returning nothing — an empty competitor list reads as "no competition",
+  // which is a materially wrong thing to tell a broker.
+  if (hasGoogleKey(env)) {
+    try {
+      const places = await googleNearby({
+        lat,
+        lng,
+        category,
+        keyword,
+        radiusMiles: radius,
+        apiKey: env.GOOGLE_MAPS_API_KEY,
+        fetchImpl,
+        timeout,
+      })
+      const results = places
+        .map((place) => {
+          const miles = haversineMiles({ lat, lng }, { lat: place.lat, lng: place.lng })
+          return {
+            ...place,
+            miles: Math.round(miles * 100) / 100,
+            ring: RING_MILES.find((ring) => miles <= ring) ?? null,
+          }
+        })
+        .sort((a, b) => a.miles - b.miles)
+
+      return {
+        results,
+        rings: summarize(results),
+        radiusMiles: radius,
+        source: 'Google Places',
+      }
+    } catch {
+      // Fall through to the free directory below.
+    }
+  }
+
   const query = buildQuery({ lat, lng, radiusMeters: Math.round(radius * 1609.34), category, keyword })
   const endpoint = env.OVERPASS_URL || DEFAULT_OVERPASS
 
