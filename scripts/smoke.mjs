@@ -197,6 +197,35 @@ try {
   check('the route reports its source', ['osrm', 'estimate'].includes(tour.body?.routeSource),
     String(tour.body?.routeSource))
 
+  // Census demographics, against the real ACS. The API is keyless for light
+  // use, so this is expected to work with or without CENSUS_API_KEY; the key
+  // only raises the rate limit. Reported either way so adding it later is
+  // visibly confirmed rather than assumed.
+  const integrations = health.body?.features?.integrations ?? {}
+  check('health reports which integrations are configured',
+    typeof integrations.census === 'boolean',
+    JSON.stringify(integrations))
+
+  const demographics = await api(`/api/demographics?lat=${PINS[0].lat}&lng=${PINS[0].lng}`)
+  if (demographics.status === 200) {
+    const rings = demographics.body?.radii ?? []
+    check('census demographics come back for three rings', rings.length === 3,
+      `${rings.length} rings${integrations.census ? ' (keyed)' : ' (keyless)'}`)
+    check('the rings carry a population figure',
+      rings.every((ring) => Number.isFinite(ring?.metrics?.population)),
+      JSON.stringify(rings.map((ring) => ring?.metrics?.population)))
+    check('rings grow outward, as a trade area does',
+      rings.length === 3 && rings[0].metrics.population <= rings[2].metrics.population,
+      JSON.stringify(rings.map((ring) => `${ring.miles}mi:${ring.metrics.population}`)))
+    check('the figures name their source', typeof demographics.body?.source === 'string',
+      String(demographics.body?.source))
+  } else {
+    // A census outage should not fail the build, but it must be visible
+    // rather than quietly skipped.
+    check('census demographics are reachable', false,
+      `status ${demographics.status}: ${JSON.stringify(demographics.body).slice(0, 200)}`)
+  }
+
   // Flyer and images: what the tour book is built out of.
   const flyerAttached = await upload(
     `/api/properties/${createdIds[0]}/flyer`,

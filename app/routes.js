@@ -160,6 +160,22 @@ export function createApp({ db, storage, env = {} }) {
           basemaps: availableBasemaps(env),
           tileUrl: tiles.url,
           tileAttribution: tiles.attribution,
+          /*
+           * Which optional integrations are wired up.
+           *
+           * Booleans only — never the values. The point is to answer "did my
+           * key land?" without anyone having to guess from behaviour, or read
+           * a secret back out of a running deployment to check.
+           *
+           * Census is the odd one: the ACS is free and keyless for light use,
+           * so `false` here means "rate-limited", not "broken".
+           */
+          integrations: {
+            census: Boolean(env.CENSUS_API_KEY),
+            google: Boolean(env.GOOGLE_MAPS_API_KEY),
+            sms: smsConfigured(env),
+            anthropic: isConfigured(env),
+          },
         },
       },
       ok ? 200 : 503,
