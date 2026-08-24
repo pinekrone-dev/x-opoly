@@ -14,7 +14,31 @@ import {
   aggregate,
   demographicsFor,
   fetchBlockGroups,
+  resetLayerCache,
 } from '../app/lib/demographics.js'
+
+/** TIGERweb's service metadata, which names the block group layer. */
+const LAYERS = {
+  layers: [
+    { id: 4, name: 'Counties' },
+    { id: 8, name: 'Census Tracts' },
+    { id: 12, name: 'Census Block Groups' },
+  ],
+}
+
+/**
+ * Answers the layer-metadata request first, then whatever the test supplies.
+ * Layer discovery replaced a hardcoded id that was wrong.
+ */
+function withLayerLookup(...responses) {
+  let call = 0
+  return async (url) => {
+    call += 1
+    if (call === 1) return { ok: true, status: 200, json: async () => LAYERS }
+    const next = responses[call - 2] ?? responses[responses.length - 1]
+    return typeof next === 'function' ? next(url) : next
+  }
+}
 
 const AUSTIN = { lat: 30.2672, lng: -97.7431 }
 
@@ -109,7 +133,8 @@ describe('aggregating block groups into a ring', () => {
 
 describe('finding block groups', () => {
   test('reads centroids and measures them from the site', async () => {
-    const fetchImpl = async () => ({
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({
       ok: true,
       status: 200,
       json: async () => ({
@@ -137,25 +162,129 @@ describe('finding block groups', () => {
     assert.ok(groups[0].miles < 1, 'a centroid a few hundred metres away is under a mile')
   })
 
-  test('drops a feature with no usable centroid', async () => {
-    const fetchImpl = async () => ({
+  test('a feature with no centroid and no geometry is a reported failure', async () => {
+    // Silently returning [] here is what made a real outage look like "this
+    // address has no census coverage".
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({
       ok: true,
       status: 200,
       json: async () => ({
         features: [{ properties: { GEOID: 'x', CENTLAT: '', CENTLON: '' }, geometry: null }],
       }),
     })
-    assert.deepEqual(await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl }), [])
+    await assert.rejects(
+      () => fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl }),
+      /none carried a usable location/,
+    )
+  })
+
+  test('esriJSON is read as readily as GeoJSON', async () => {
+    // ArcGIS answers `attributes`, not `properties`. Reading only one shape
+    // dropped every feature and looked identical to empty coverage.
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        features: [
+          {
+            attributes: {
+              GEOID: '484530011001',
+              STATE: '48',
+              COUNTY: '453',
+              TRACT: '001100',
+              BLKGRP: '1',
+              CENTLAT: '30.2700',
+              CENTLON: '-97.7400',
+            },
+            geometry: { rings: [[[-97.74, 30.27], [-97.73, 30.27], [-97.73, 30.28]]] },
+          },
+        ],
+      }),
+    })
+
+    const groups = await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.equal(groups.length, 1)
+    assert.equal(groups[0].geoid, '484530011001')
+  })
+
+  test('a missing centroid falls back to the polygon rather than being dropped', async () => {
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        features: [
+          {
+            properties: { GEOID: '1', STATE: '48', COUNTY: '453', TRACT: '1', BLKGRP: '1' },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[-97.75, 30.26], [-97.73, 30.26], [-97.73, 30.28], [-97.75, 30.28]]],
+            },
+          },
+        ],
+      }),
+    })
+
+    const groups = await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.equal(groups.length, 1)
+    assert.ok(Math.abs(groups[0].lat - 30.27) < 0.01, `got ${groups[0].lat}`)
+    assert.ok(Math.abs(groups[0].lng - -97.74) < 0.01, `got ${groups[0].lng}`)
+  })
+
+  test('an empty answer says the service returned nothing', async () => {
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({ ok: true, status: 200, json: async () => ({ features: [] }) })
+    await assert.rejects(
+      () => fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl }),
+      /returned no block groups/,
+    )
+  })
+
+  test('the block group layer is discovered, not guessed', async () => {
+    resetLayerCache()
+    const seen = []
+    const fetchImpl = async (url) => {
+      seen.push(String(url))
+      if (seen.length === 1) return { ok: true, status: 200, json: async () => LAYERS }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          features: [
+            {
+              properties: { GEOID: '1', CENTLAT: '30.27', CENTLON: '-97.74' },
+              geometry: null,
+            },
+          ],
+        }),
+      }
+    }
+
+    await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    // 12 is the block group layer in the stubbed metadata, not the 10 that was
+    // originally hardcoded.
+    assert.match(seen[1], /MapServer\/12\/query/)
   })
 })
 
 describe('rings end to end', () => {
-  /** TIGERweb then ACS, in the order the module calls them. */
+  /**
+   * Layer metadata, then TIGERweb, then ACS — the order the module calls them.
+   *
+   * Answering the metadata request explicitly matters: these tests previously
+   * passed only because an earlier test in the file had populated the
+   * module-level layer cache, so run on their own they failed.
+   */
   function stubCensus() {
     let call = 0
     return async () => {
       call += 1
       if (call === 1) {
+        return { ok: true, status: 200, json: async () => LAYERS }
+      }
+      if (call === 2) {
         return {
           ok: true,
           status: 200,
@@ -197,6 +326,7 @@ describe('rings end to end', () => {
   }
 
   test('each ring only counts what falls inside it', async () => {
+    resetLayerCache()
     const result = await demographicsFor(AUSTIN.lat, AUSTIN.lng, { fetchImpl: stubCensus() })
 
     const [one, three, five] = result.radii
@@ -207,12 +337,14 @@ describe('rings end to end', () => {
   })
 
   test('rings are cumulative, as a trade area is', async () => {
+    resetLayerCache()
     const { radii } = await demographicsFor(AUSTIN.lat, AUSTIN.lng, { fetchImpl: stubCensus() })
     assert.ok(radii[0].metrics.population <= radii[1].metrics.population)
     assert.ok(radii[1].metrics.population <= radii[2].metrics.population)
   })
 
   test('block groups come back for the map to colour', async () => {
+    resetLayerCache()
     const { areas } = await demographicsFor(AUSTIN.lat, AUSTIN.lng, { fetchImpl: stubCensus() })
     assert.equal(areas.length, 3)
     assert.ok(areas[0].geometry, 'geometry is included so the choropleth can draw')
@@ -220,6 +352,7 @@ describe('rings end to end', () => {
   })
 
   test('geometry can be left out when only the numbers are wanted', async () => {
+    resetLayerCache()
     const { areas } = await demographicsFor(AUSTIN.lat, AUSTIN.lng, {
       fetchImpl: stubCensus(),
       includeGeometry: false,
@@ -228,6 +361,7 @@ describe('rings end to end', () => {
   })
 
   test('an unreachable service says so rather than inventing figures', async () => {
+    resetLayerCache()
     const fetchImpl = async () => ({ ok: false, status: 500, json: async () => ({}) })
     await assert.rejects(
       () => demographicsFor(AUSTIN.lat, AUSTIN.lng, { fetchImpl }),
@@ -236,6 +370,7 @@ describe('rings end to end', () => {
   })
 
   test('a site with no location is rejected before any request', async () => {
+    resetLayerCache()
     await assert.rejects(
       () => demographicsFor(null, null, { fetchImpl: stubCensus() }),
       (error) => error instanceof DemographicsUnavailable,

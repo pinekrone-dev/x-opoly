@@ -20,8 +20,40 @@ import { haversineMiles } from './tour.js'
 const ACS_BASE = 'https://api.census.gov/data/2022/acs/acs5'
 const ACS_VINTAGE = 'US Census ACS 5-year (2022)'
 
-const TIGERWEB =
-  'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer/10/query'
+const TIGERWEB_SERVICE =
+  'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/tigerWMS_ACS2022/MapServer'
+
+/**
+ * Which MapServer layer holds block groups.
+ *
+ * Hardcoding a number was a guess, and a wrong one: layer ids shift between
+ * TIGERweb vintages, and a query against the wrong layer returns zero features
+ * rather than an error — which surfaced as "no census block groups cover that
+ * point" over downtown Dallas. The id is discovered from the service's own
+ * metadata instead, and cached for the life of the isolate.
+ */
+let blockGroupLayer = null
+
+/** Clears the cached layer id. Exists so tests do not leak state between them. */
+export function resetLayerCache() {
+  blockGroupLayer = null
+}
+
+async function findBlockGroupLayer(fetchImpl, timeout) {
+  if (blockGroupLayer != null) return blockGroupLayer
+
+  const body = await withTimeout(fetchImpl, `${TIGERWEB_SERVICE}?f=json`, timeout, 'TIGERweb')
+  const layers = Array.isArray(body?.layers) ? body.layers : []
+
+  // "Census Block Groups" in current vintages; matched loosely so a rename
+  // does not break it again.
+  const match =
+    layers.find((layer) => /block\s*group/i.test(String(layer?.name ?? ''))) ?? null
+  if (!match) throw new Error('TIGERweb has no block group layer in this service')
+
+  blockGroupLayer = match.id
+  return blockGroupLayer
+}
 
 /** Rings the panel offers, in miles. */
 export const RADII = [1, 3, 5]
@@ -111,41 +143,90 @@ export async function fetchBlockGroups(lat, lng, miles, { fetchImpl = fetch, tim
   const latSpan = miles / MILES_PER_DEGREE
   const lngSpan = miles / (MILES_PER_DEGREE * Math.max(0.01, Math.cos((lat * Math.PI) / 180)))
 
-  const url = new URL(TIGERWEB)
+  const layer = await findBlockGroupLayer(fetchImpl, timeout)
+
+  const url = new URL(`${TIGERWEB_SERVICE}/${layer}/query`)
   url.searchParams.set('geometry', `${lng - lngSpan},${lat - latSpan},${lng + lngSpan},${lat + latSpan}`)
   url.searchParams.set('geometryType', 'esriGeometryEnvelope')
   url.searchParams.set('inSR', '4326')
   url.searchParams.set('outSR', '4326')
   url.searchParams.set('spatialRel', 'esriSpatialRelIntersects')
-  url.searchParams.set('outFields', 'GEOID,STATE,COUNTY,TRACT,BLKGRP,CENTLAT,CENTLON')
+  url.searchParams.set('outFields', '*')
   url.searchParams.set('returnGeometry', 'true')
   url.searchParams.set('f', 'geojson')
 
   const body = await withTimeout(fetchImpl, url.toString(), timeout, 'TIGERweb')
   const features = Array.isArray(body?.features) ? body.features : []
+  if (features.length === 0) throw new Error('TIGERweb returned no block groups for that area')
 
-  return features
+  const groups = features
     .map((feature) => {
-      const props = feature?.properties ?? {}
-      // Number('') is 0, not NaN, so a blank centroid would otherwise pass the
-      // finite check and place a block group at null island — filtered out of
-      // the rings by distance, but drawn on the map.
-      const centroidLat = coordinate(props.CENTLAT)
-      const centroidLng = coordinate(props.CENTLON)
-      if (centroidLat == null || centroidLng == null) return null
+      // ArcGIS answers GeoJSON as `properties` and esriJSON as `attributes`.
+      // Reading only one of them drops every feature silently, which is
+      // indistinguishable from an area genuinely having no block groups.
+      const props = feature?.properties ?? feature?.attributes ?? {}
+
+      const centroid = centroidOf(feature, props)
+      if (!centroid) return null
+
       return {
-        geoid: String(props.GEOID ?? ''),
-        state: String(props.STATE ?? ''),
-        county: String(props.COUNTY ?? ''),
-        tract: String(props.TRACT ?? ''),
-        blockGroup: String(props.BLKGRP ?? ''),
-        lat: centroidLat,
-        lng: centroidLng,
-        miles: haversineMiles({ lat, lng }, { lat: centroidLat, lng: centroidLng }),
+        geoid: String(props.GEOID ?? props.geoid ?? ''),
+        state: String(props.STATE ?? props.state ?? ''),
+        county: String(props.COUNTY ?? props.county ?? ''),
+        tract: String(props.TRACT ?? props.tract ?? ''),
+        blockGroup: String(props.BLKGRP ?? props.blkgrp ?? ''),
+        lat: centroid.lat,
+        lng: centroid.lng,
+        miles: haversineMiles({ lat, lng }, centroid),
         geometry: feature.geometry ?? null,
       }
     })
     .filter(Boolean)
+
+  if (groups.length === 0) {
+    throw new Error(
+      `TIGERweb returned ${features.length} block groups but none carried a usable location`,
+    )
+  }
+  return groups
+}
+
+/**
+ * Where a block group sits.
+ *
+ * Prefers the published centroid, and falls back to averaging the polygon's
+ * vertices when the layer does not carry one — accurate enough to decide which
+ * ring a block group falls in, and far better than discarding it.
+ */
+function centroidOf(feature, props) {
+  const publishedLat = coordinate(props.CENTLAT ?? props.INTPTLAT ?? props.centlat)
+  const publishedLng = coordinate(props.CENTLON ?? props.INTPTLON ?? props.centlon)
+  if (publishedLat != null && publishedLng != null) {
+    return { lat: publishedLat, lng: publishedLng }
+  }
+
+  // GeoJSON polygons nest as coordinates; esriJSON uses rings. Both bottom out
+  // in [x, y] pairs, so flattening handles either.
+  const rings = feature?.geometry?.coordinates ?? feature?.geometry?.rings ?? null
+  if (!rings) return null
+
+  let sumLat = 0
+  let sumLng = 0
+  let count = 0
+  const walk = (node) => {
+    if (!Array.isArray(node)) return
+    if (typeof node[0] === 'number' && typeof node[1] === 'number') {
+      sumLng += node[0]
+      sumLat += node[1]
+      count += 1
+      return
+    }
+    for (const child of node) walk(child)
+  }
+  walk(rings)
+
+  if (count === 0) return null
+  return { lat: sumLat / count, lng: sumLng / count }
 }
 
 /** ACS rows for the given block groups, one request per state/county pair. */
