@@ -1,28 +1,35 @@
 {
-  "name": "x-opoly",
+  "name": "sitemapforge",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Crawl any website and build XML, TXT, CSV and HTML sitemaps with a visual site tree and SEO audit.",
   "type": "module",
   "engines": {
     "node": "22.x"
   },
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "node --watch server/index.js",
+    "dev:web": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview",
-    "start": "serve -s dist -l tcp://0.0.0.0:${PORT:-8080}"
+    "preview": "npm run build && npm start",
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "serve": "^14.2.4"
+    "cheerio": "^1.0.0",
+    "express": "^4.21.2"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.0",
     "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.14",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"

@@ -1,25 +1,36 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
       colors: {
-        navy: {
-          900: "#03050f",
-          800: "#050a1c",
-          700: "#0f1b3a",
-          600: "#1a2245"
+        ink: {
+          950: '#070b16',
+          900: '#0b1020',
+          850: '#0e1428',
+          800: '#131a30',
+          700: '#1c2440',
+          600: '#293353',
+          500: '#3a4569',
         },
-        gold: {
-          DEFAULT: "#d4af37",
-          light: "#f5e3a0"
-        }
+        accent: {
+          DEFAULT: '#4cc2ff',
+          soft: '#8bd8ff',
+          deep: '#1b6fa8',
+        },
       },
       fontFamily: {
-        display: ["'Playfair Display'", "Georgia", "serif"],
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"]
-      }
-    }
+        sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+      },
+      keyframes: {
+        'fade-in': { from: { opacity: '0', transform: 'translateY(4px)' }, to: { opacity: '1', transform: 'none' } },
+        'pulse-bar': { '0%,100%': { opacity: '0.4' }, '50%': { opacity: '1' } },
+      },
+      animation: {
+        'fade-in': 'fade-in .25s ease-out both',
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 }
