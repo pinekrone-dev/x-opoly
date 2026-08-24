@@ -1,8 +1,8 @@
 {
-  "name": "sitemapforge",
+  "name": "sitesurvey-cre",
   "private": true,
   "version": "1.0.0",
-  "description": "Crawl any website and build XML, TXT, CSV and HTML sitemaps with a visual site tree and SEO audit.",
+  "description": "Site survey and deal mapping for tenant rep brokers — map candidate properties, track deal stages, plan tours, and share a branded client link.",
   "type": "module",
   "engines": {
     "node": "22.x"
@@ -17,12 +17,16 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "cheerio": "^1.0.0",
     "d3-hierarchy": "^3.1.2",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "leaflet": "^1.9.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/d3-hierarchy": "^3.1.7",
+    "@types/leaflet": "^1.9.22",
     "@types/node": "^26.2.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

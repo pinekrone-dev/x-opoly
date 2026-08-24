@@ -5,31 +5,35 @@ export default {
     extend: {
       colors: {
         ink: {
-          950: '#070b16',
-          900: '#0b1020',
-          850: '#0e1428',
-          800: '#131a30',
-          700: '#1c2440',
-          600: '#293353',
-          500: '#3a4569',
+          950: '#080b0f',
+          900: '#0d1117',
+          850: '#11171f',
+          800: '#161d27',
+          700: '#1f2833',
+          600: '#2c3743',
+          500: '#3d4a58',
         },
-        accent: {
-          DEFAULT: '#4cc2ff',
-          soft: '#8bd8ff',
-          deep: '#1b6fa8',
+        brand: {
+          DEFAULT: '#14b8a6',
+          soft: '#5eead4',
+          deep: '#0f766e',
+        },
+        stage: {
+          prospect: '#94a3b8',
+          touring: '#38bdf8',
+          loi: '#fbbf24',
+          contract: '#34d399',
+          passed: '#64748b',
         },
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
-        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       keyframes: {
         'fade-in': { from: { opacity: '0', transform: 'translateY(4px)' }, to: { opacity: '1', transform: 'none' } },
-        'pulse-bar': { '0%,100%': { opacity: '0.4' }, '50%': { opacity: '1' } },
       },
-      animation: {
-        'fade-in': 'fade-in .25s ease-out both',
-      },
+      animation: { 'fade-in': 'fade-in .2s ease-out both' },
     },
   },
   plugins: [],

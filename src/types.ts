@@ -1,128 +1,90 @@
-export interface Page {
-  url: string
-  depth: number
-  parent: string | null
-  discoveredVia: 'seed' | 'link' | 'sitemap' | 'redirect'
-  status: number
-  ok: boolean
-  error: string | null
-  redirectTo: string | null
-  title: string | null
-  description: string | null
-  canonical: string | null
-  noindex: boolean
-  nofollow: boolean
-  contentType: string | null
-  lastModified: string | null
-  bytes: number
-  responseMs: number
-  wordCount: number
-  h1: string | null
-  lang: string | null
-  alternates: { hreflang: string; href: string }[]
-  internalLinks: number
-  externalLinks: number
-  images: { loc: string; caption: string | null }[]
-  isDocument: boolean
-  rendered?: boolean
-}
+export type Stage = 'prospect' | 'touring' | 'loi' | 'under_contract' | 'passed'
 
-export interface CrawlOptions {
-  maxPages: number
-  maxDepth: number
-  concurrency: number
-  delayMs: number
-  timeoutMs: number
-  respectRobots: boolean
-  includeSubdomains: boolean
-  includeDocuments: boolean
-  stripQuery: boolean
-  seedFromSitemap: boolean
-  checkExternalLinks: boolean
-  renderJs: boolean
-  includePatterns: string
-  excludePatterns: string
-}
-
-export type CrawlStatus = 'queued' | 'running' | 'stopping' | 'stopped' | 'complete' | 'error'
-
-export interface CrawlSummary {
+export interface Property {
   id: string
-  rootUrl: string
-  status: CrawlStatus
-  error: string | null
-  startedAt: string | null
-  finishedAt: string | null
-  crawled: number
-  queued: number
-  active: number
-  maxPages: number
-  current: string[]
-  robots: { available: boolean; blocked: number; crawlDelay: number | null; sitemaps: string[] }
-  warnings: string[]
-  rendering: boolean
+  surveyId?: string
+  name: string | null
+  address: string | null
+  city: string | null
+  state: string | null
+  zip: string | null
+  lat: number | null
+  lng: number | null
+  stage: Stage
+  rentRate: number | null
+  rentUnit: string | null
+  nnn: number | null
+  sizeSqft: number | null
+  acreage: number | null
+  parkingSpaces: number | null
+  zoning: string | null
+  yearBuilt: number | null
+  availability: string | null
+  listingBroker: string | null
+  notes?: string | null
+  flyerUrl: string | null
+  flyerName: string | null
+  photoUrl: string | null
+  tourOrder: number | null
+  createdAt: string
+  updatedAt: string
 }
 
-export interface IssueUrl {
-  url: string
-  detail?: string
-  from?: string | null
-}
-
-export interface Issue {
+export interface Survey {
   id: string
-  severity: 'error' | 'warning' | 'info'
+  name: string
+  clientName: string | null
+  brokerName: string | null
+  companyName: string | null
+  brandColor: string
+  center: { lat: number; lng: number } | null
+  zoom: number
+  share: { token: string | null; enabled: boolean; expiresAt: string | null; url: string | null }
+  pinCount?: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TourPlan {
+  stops: Property[]
+  unlocated: Property[]
+  miles: number
+  minutes: number
+  legs: { fromId: string; toId: string; miles: number }[]
+}
+
+export interface GeocodeResult {
   label: string
-  description: string
-  count: number
-  urls: IssueUrl[]
+  lat: number
+  lng: number
+  address: string | null
+  city: string | null
+  state: string | null
+  zip: string | null
 }
 
-export interface CrawlStats {
-  total: number
-  indexable: number
-  ok: number
-  redirects: number
-  broken: number
-  noindex: number
-  documents: number
-  externalLinks: number
-  maxDepth: number
-  avgWords: number
-  avgResponseMs: number
+export interface Demographics {
+  source: string
+  area: string
+  metrics: Record<string, number | null>
 }
 
-export interface ExternalLink {
-  url: string
-  count: number
-  status: number | null
-  from: string[]
+export interface AppFeatures {
+  flyerExtraction: boolean
+  tileUrl: string
+  tileAttribution: string
 }
 
-export interface CrawlResult extends CrawlSummary {
-  options: CrawlOptions
-  pages: Page[]
-  externalLinks: ExternalLink[]
-  redirects: { from: string; to: string | null; status: number }[]
-  audit: { issues: Issue[]; stats: CrawlStats }
-}
-
-export interface ExportSettings {
-  priorityMode: 'depth' | 'fixed' | 'none'
-  fixedPriority: number
-  changefreqMode: 'depth' | 'fixed' | 'none'
-  fixedChangefreq: string
-  includeLastmod: boolean
-  includeAlternates: boolean
-  includeImages: boolean
-  gzip: boolean
-}
-
-export type ExportFormat = 'xml' | 'txt' | 'csv' | 'html'
-
-export interface ExportResponse {
-  format: ExportFormat
-  count: number
-  robotsLine: string
-  files: { name: string; content: string; encoding?: 'base64' }[]
+export interface SharePayload {
+  survey: {
+    name: string
+    clientName: string | null
+    brokerName: string | null
+    companyName: string | null
+    brandColor: string
+    center: { lat: number; lng: number } | null
+    zoom: number
+    expiresAt: string | null
+  }
+  properties: Property[]
 }

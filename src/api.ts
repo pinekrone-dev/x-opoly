@@ -1,93 +1,67 @@
-import type { CrawlOptions, CrawlResult, CrawlSummary, ExportFormat, ExportResponse, ExportSettings } from './types'
+import type { AppFeatures, Demographics, GeocodeResult, Property, SharePayload, Survey, TourPlan } from './types'
 
-async function readError(response: Response): Promise<string> {
-  try {
-    const body = await response.json()
-    return body?.error || `Request failed with status ${response.status}.`
-  } catch {
-    return `Request failed with status ${response.status}.`
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init)
+  if (response.status === 204) return undefined as T
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    const error = new Error(body?.error || `Request failed with status ${response.status}`)
+    Object.assign(error, { status: response.status, body })
+    throw error
   }
+  return body as T
 }
 
-export async function startCrawl(url: string, options: Partial<CrawlOptions>): Promise<{ id: string; rootUrl: string }> {
-  const response = await fetch('/api/crawl', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ url, options }),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json()
-}
+const json = (payload: unknown): RequestInit => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(payload),
+})
 
-export async function fetchResult(id: string): Promise<CrawlResult> {
-  const response = await fetch(`/api/crawl/${id}/result`)
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json()
-}
+export const api = {
+  health: () => request<{ features: AppFeatures }>('/api/health'),
 
-export async function stopCrawl(id: string): Promise<CrawlSummary> {
-  const response = await fetch(`/api/crawl/${id}/stop`, { method: 'POST' })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json()
-}
+  listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
+  createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string }) =>
+    request<{ survey: Survey }>('/api/surveys', json(input)),
+  getSurvey: (id: string) => request<{ survey: Survey; properties: Property[] }>(`/api/surveys/${id}`),
+  updateSurvey: (id: string, patch: Partial<Survey> & Record<string, unknown>) =>
+    request<{ survey: Survey }>(`/api/surveys/${id}`, { ...json(patch), method: 'PATCH' }),
+  deleteSurvey: (id: string) => request<void>(`/api/surveys/${id}`, { method: 'DELETE' }),
 
-export async function requestExport(
-  id: string,
-  format: ExportFormat,
-  urls: string[],
-  settings: ExportSettings,
-): Promise<ExportResponse> {
-  const response = await fetch(`/api/crawl/${id}/export`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ format, urls, settings }),
-  })
-  if (!response.ok) throw new Error(await readError(response))
-  return response.json()
-}
+  addProperty: (surveyId: string, input: Partial<Property>) =>
+    request<{ property: Property }>(`/api/surveys/${surveyId}/properties`, json(input)),
+  updateProperty: (id: string, patch: Partial<Property>) =>
+    request<{ property: Property }>(`/api/properties/${id}`, { ...json(patch), method: 'PATCH' }),
+  deleteProperty: (id: string) => request<void>(`/api/properties/${id}`, { method: 'DELETE' }),
 
-/**
- * Subscribes to crawl progress. Returns an unsubscribe function.
- * Falls back to nothing if the browser cannot open the stream — the caller
- * still polls the result endpoint when the stream closes.
- */
-export function subscribeToCrawl(
-  id: string,
-  handlers: { onProgress: (summary: CrawlSummary) => void; onDone: (summary: CrawlSummary) => void; onError: () => void },
-): () => void {
-  const source = new EventSource(`/api/crawl/${id}/stream`)
+  planTour: (surveyId: string, startId?: string | null) =>
+    request<TourPlan>(`/api/surveys/${surveyId}/tour`, json({ startId: startId ?? null })),
+  saveTourOrder: (surveyId: string, order: string[]) =>
+    request<{ properties: Property[] }>(`/api/surveys/${surveyId}/tour`, { ...json({ order }), method: 'PUT' }),
 
-  source.addEventListener('progress', (event) => {
-    handlers.onProgress(JSON.parse((event as MessageEvent).data))
-  })
-  source.addEventListener('done', (event) => {
-    handlers.onDone(JSON.parse((event as MessageEvent).data))
-    source.close()
-  })
-  source.onerror = () => {
-    source.close()
-    handlers.onError()
-  }
+  updateShare: (surveyId: string, input: { enabled?: boolean; expiresAt?: string | null; regenerate?: boolean }) =>
+    request<{ survey: Survey }>(`/api/surveys/${surveyId}/share`, json(input)),
+  getShared: (token: string) => request<SharePayload>(`/api/share/${token}`),
 
-  return () => source.close()
-}
+  geocode: (query: string) => request<{ results: GeocodeResult[] }>(`/api/geocode?q=${encodeURIComponent(query)}`),
+  demographics: (lat: number, lng: number) => request<Demographics>(`/api/demographics?lat=${lat}&lng=${lng}`),
 
-export function downloadFile(name: string, content: string, mime: string, encoding?: 'base64'): void {
-  let blob: Blob
-  if (encoding === 'base64') {
-    const binary = atob(content)
-    const bytes = new Uint8Array(binary.length)
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-    blob = new Blob([bytes], { type: 'application/gzip' })
-  } else {
-    blob = new Blob([content], { type: mime })
-  }
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = name
-  document.body.append(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(url)
+  /** Uploads the raw file body; the filename travels in a header. */
+  uploadFlyer: (surveyId: string, file: File) =>
+    request<{ property: Property; extraction: { model: string; confidence: string; uncertainFields: string[] } }>(
+      `/api/surveys/${surveyId}/flyer`,
+      {
+        method: 'POST',
+        headers: { 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) },
+        body: file,
+      },
+    ),
+
+  uploadPhoto: (propertyId: string, file: File) =>
+    request<{ property: Property }>(`/api/properties/${propertyId}/photo`, {
+      method: 'POST',
+      headers: { 'content-type': file.type, 'x-filename': encodeURIComponent(file.name) },
+      body: file,
+    }),
 }

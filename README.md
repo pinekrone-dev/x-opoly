@@ -1,16 +1,8 @@
-# SitemapForge
+# SiteSurvey CRE
 
-Crawl a website, see the structure it actually has, and export the sitemap you need.
-
-Point it at a domain and it walks the site breadth-first from the home page, obeying
-`robots.txt`, following internal links, and reading any sitemap the site already
-publishes. What comes back is a pan-and-zoom diagram of the site structure (exportable as
-SVG or PNG), a filterable table of every URL with its response and on-page metadata, a
-list of what needs fixing, and downloadable `sitemap.xml`, `sitemap.txt`, `sitemap.html`
-and `crawl-report.csv` files.
-
-Pages that build themselves in the browser can be crawled with JavaScript rendering
-switched on, so single-page apps map correctly instead of coming back as one empty shell.
+A site survey and deal mapping tool for tenant rep brokers. One survey per client
+requirement: map the candidate properties, keep each one moving through the deal stages,
+plan the tour you will drive, and send the client a branded read-only link.
 
 ## Running it
 
@@ -19,127 +11,94 @@ npm install
 npm run dev      # API on :8080, UI on :5173 with /api proxied
 ```
 
-For a production-style run:
-
 ```bash
-npm run build    # type-check and bundle the UI into dist/
-npm start        # one process serving the API and the built UI on $PORT (default 8080)
+npm run build && npm start   # one process serving the API and the built UI on $PORT
+npm test                     # 45 tests, no network required
 ```
 
-```bash
-npm test         # crawler, audit and export tests against a local fixture site
-```
+Data lives in `./data` — a SQLite file plus the uploaded flyers and photos. Point
+`DATA_DIR` somewhere persistent before deploying.
 
-The tests crawl a fixture server on `127.0.0.1`, which the SSRF guard blocks by default,
-so they run with `ALLOW_PRIVATE_HOSTS=1` set for you by the test script.
+## What it does
 
-## What the crawler does
+**Surveys.** A survey is one client's search. It holds the candidate sites, the client's
+name for the header, and the share settings.
 
-| Behaviour | Detail |
+**Properties.** Each site carries what a broker actually records: address and coordinates,
+deal stage, asking rate and unit, NNN, size, acreage, parking, zoning, year built,
+availability, listing broker, a photo, the flyer, and private notes.
+
+**Stages.** Prospect → touring → LOI out → under contract, plus passed. The stage drives
+the pin colour on the map and the filters in the list.
+
+**Flyer intake.** Drop a listing flyer in as a PDF or a screenshot and the fields are read
+out of it into a new site record. This calls Claude with a structured output schema, so
+what comes back is typed rather than parsed out of prose. Fields the flyer does not state
+come back `null` — the prompt forbids inferring them — and anything ambiguous is listed in
+`uncertainFields` for the broker to confirm. If extraction is unavailable the flyer is
+still filed against a stub record, so the upload is never lost.
+
+**Tour planning.** Orders the stops into a sensible drive and draws the route on the map,
+with per-leg mileage and a time estimate. This runs entirely on the server with no routing
+API: straight-line distances, nearest-neighbour from every candidate start, then 2-opt to
+remove crossings. Pinning a start is honoured even when it costs distance.
+
+**Client link.** A token URL at `/s/<token>` that opens a read-only map with the broker's
+name on it and no sign-in. Sharing is off until switched on, the link can carry an expiry
+date, and reissuing it breaks the old one wherever it was forwarded. The client payload is
+built separately from the internal one: private notes and internal ids are never in it.
+
+## Configuration
+
+Everything below is optional. The tool runs without any of it — these only switch on the
+parts that need an outside service.
+
+| Variable | Effect |
 | --- | --- |
-| Scope | Same host by default; subdomains optional. Assets (images, CSS, JS) are never fetched. |
-| robots.txt | Group selection, `Allow`/`Disallow` with `*` and `$`, longest-match-wins, `Crawl-delay`, and `Sitemap:` discovery. |
-| Redirects | A redirecting URL is recorded as its own `301`/`302` row; the destination is crawled separately. |
-| Existing sitemaps | `/sitemap.xml` and any sitemap named in robots.txt are read and used as extra seeds, including sitemap indexes. URLs found only there are flagged as unlinked. |
-| Per page | Status, title, meta description, H1, canonical, `noindex`/`nofollow` (meta and `X-Robots-Tag`), `hreflang` alternates, word count, link counts, `Last-Modified`, response time and size. |
-| Images | `img` (including `srcset` and lazy `data-src`), `picture > source` and `og:image`, for optional `<image:image>` sitemap entries. |
-| JavaScript | Off by default. When on, pages load in headless Chromium and the DOM is read after scripts run, so client-rendered links are followed. |
-| Limits | Page count, depth, parallel requests, per-request delay and timeout, plus include/exclude URL patterns. |
+| `ANTHROPIC_API_KEY` | Enables reading flyers automatically. Without it the upload still files, and fields are entered by hand. |
+| `ANTHROPIC_MODEL` | Overrides the extraction model (default `claude-opus-5`). |
+| `TILE_URL`, `TILE_ATTRIBUTION` | Map tiles. Defaults to OpenStreetMap, which needs no key. Swap in your own tile server or a paid provider. |
+| `GEOCODER_URL`, `GEOCODER_KEY` | Address search. Defaults to Nominatim, which needs no key. |
+| `CENSUS_API_KEY` | Raises the rate limit on trade-area demographics (US Census ACS, free and keyless for light use). |
+| `DATA_DIR`, `DB_FILE`, `PORT` | Where data lives and which port to serve. |
 
-## What lands in the sitemap
-
-A URL is selected by default when it returned a `2xx`, is not a redirect, is not
-`noindex`, and either has no canonical or is its own canonical. Every URL can be ticked
-or unticked by hand in the tree or the table, and the XML preview is generated by the
-same endpoint that produces the download, so what you see is what you ship.
-
-`<priority>` and `<changefreq>` can be derived from page depth, pinned to one value, or
-left out entirely. `<lastmod>` comes from each page's `Last-Modified` header. Image
-entries and `hreflang` alternates are opt-in, and the download can be gzipped to
-`sitemap.xml.gz`, which search engines accept as-is. Past 50,000 URLs the export becomes a
-sitemap index plus numbered parts.
-
-## JavaScript rendering
-
-Rendering is an optional extra, not a hard requirement. `playwright-core` is an
-`optionalDependency` and no browser is downloaded during install, so the tool runs fine
-without either. When the "Render JavaScript" option is on, the crawler looks for Chromium
-in this order:
-
-1. `CHROMIUM_PATH` — a full path to a browser binary
-2. `PLAYWRIGHT_BROWSERS_PATH` — a Playwright browser directory, full Chromium preferred
-   over the headless shell
-
-If neither turns up a usable browser the crawl still runs over plain HTTP and the result
-carries a warning explaining what was missing — it never fails outright. Rendering caps
-parallel requests lower than the HTTP path, because a browser page costs far more than a
-socket.
-
-## Google APIs — the last mile
-
-Nothing here talks to Google yet, deliberately: everything above works with no account,
-no key and no quota. These are the places where a Google integration slots in when you
-want one, roughly in order of value for effort.
-
-| Integration | What it adds | What it needs |
-| --- | --- | --- |
-| PageSpeed Insights API | Core Web Vitals and a performance score per URL, shown beside the crawl data | An API key (`GOOGLE_PSI_API_KEY`); works keyless but is rate-limited hard |
-| Search Console API | Real impressions, clicks and index coverage per crawled URL, and sitemap submission | OAuth, plus a verified property |
-| Indexing API | Direct "this URL changed" pings | A service account; officially scoped to job posting and livestream pages |
-| IndexNow (Bing, Yandex, Seznam) | The same ping idea, and not a Google product | A key file hosted at the site root — no OAuth at all |
-
-The seam is the same in every case: a crawl produces a list of URLs, and each integration
-decorates those URLs with extra fields or submits them somewhere. That means it belongs in
-`server/lib/` next to `audit.js`, reading its credentials from the environment and staying
-inert when they are absent — the same shape `renderer.js` already uses for the browser.
-
-Note that Google retired its sitemap ping endpoint, so "submit the sitemap" today means
-Search Console (Google) or IndexNow (everyone else) rather than a simple unauthenticated
-GET.
+Two deliberate choices about outside services. The map keeps a visible grid ground when
+tiles cannot load, so a firewalled or offline deployment still shows its pins rather than a
+blank void. And nothing here estimates: if the geocoder is unreachable the UI says so and
+offers manual entry, and if census data cannot be fetched the panel says that too. A pin in
+the wrong place, or a demographic figure a broker repeats to a client, is worse than an
+honest gap.
 
 ## Layout
 
 ```
 server/
-  index.js              Express app: crawl, stream, export, static UI
-  lib/crawler.js        the crawl engine (BFS, worker pool, HTML parsing)
-  lib/robots.js         robots.txt parser and matcher
-  lib/sitemap-parser.js reads existing sitemaps and sitemap indexes
-  lib/exporters.js      XML / TXT / CSV / HTML output
-  lib/audit.js          the findings shown in the Findings tab
-  lib/renderer.js       optional headless-Chromium rendering for client-side apps
-  lib/safety.js         refuses private and loopback targets (SSRF guard)
-  lib/urls.js           URL normalization and scope rules
-  lib/store.js          in-memory job registry with a TTL
-src/                    React + Tailwind UI
-  components/SitemapDiagram.tsx   pan/zoom node diagram, SVG and PNG export
-test/                   node:test suites and the fixture site they crawl
+  index.js              Express app: surveys, properties, tour, sharing, uploads
+  lib/db.js             SQLite schema and connection (node:sqlite, no dependency)
+  lib/surveys.js        survey/property records, stages, share tokens
+  lib/tour.js           route optimisation — haversine, multi-start NN, 2-opt
+  lib/flyer.js          flyer → structured fields via Claude
+  lib/geocode.js        address lookup provider
+  lib/demographics.js   census trade-area lookup
+src/
+  views/                survey list, broker workspace, client share view
+  components/           map canvas, property panel, table, tour planner, share settings
+test/                   45 tests over storage, sharing, routing, providers and the API
 ```
 
-## API
+## Notes on the API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/crawl` | `{ url, options }` — starts a crawl, returns its id |
-| `GET /api/crawl/:id` | current progress summary |
-| `GET /api/crawl/:id/stream` | server-sent progress events until the crawl ends |
-| `GET /api/crawl/:id/result` | full page list, external links and audit |
-| `POST /api/crawl/:id/stop` | stop early and keep what has been found |
-| `POST /api/crawl/:id/export` | `{ format, urls, settings }` — returns the generated files |
+| `GET/POST /api/surveys` | list and create surveys |
+| `GET/PATCH/DELETE /api/surveys/:id` | one survey and its properties |
+| `POST /api/surveys/:id/properties` | add a site |
+| `PATCH/DELETE /api/properties/:id` | edit or remove a site |
+| `POST /api/surveys/:id/flyer` | upload a flyer and extract its fields |
+| `POST /api/surveys/:id/tour` | plan a route; `PUT` the same path saves an order |
+| `POST /api/surveys/:id/share` | enable, expire or reissue the client link |
+| `GET /api/share/:token` | the read-only client payload |
 
-Results are held in memory for 30 minutes and are not written to disk.
-
-## Notes
-
-Crawl only sites you own or have permission to scan. Requests identify themselves as
-`SitemapForgeBot/1.0`, and the default settings (5 parallel requests, no delay, 250 page
-cap) are deliberately modest — raise them only against your own infrastructure.
-
-By default the server refuses to crawl loopback, link-local and private addresses so a
-public deployment cannot be used to reach its own network. Set `ALLOW_PRIVATE_HOSTS=1`
-to crawl a site on your own machine.
-
-The diagram layout uses [`d3-hierarchy`](https://github.com/d3/d3-hierarchy) (ISC) and the
-optional renderer uses [`playwright-core`](https://playwright.dev) (Apache-2.0); the
-crawler, robots parser, sitemap parser and exporters are implemented here rather than
-pulled in, so their behaviour stays under this project's own tests.
+Uploads are sent as a raw body with the filename in an `X-Filename` header, which avoids a
+multipart dependency. Stored files are given generated names and served only from the
+uploads directory.
