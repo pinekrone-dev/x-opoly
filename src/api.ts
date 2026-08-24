@@ -6,6 +6,7 @@ import type {
   GeocodeResult,
   PlaceCategory,
   Property,
+  PropertyImage,
   SharePayload,
   Survey,
   TourPlan,
@@ -56,6 +57,49 @@ export const api = {
   deleteStage: (id: string) => request<void>(`/api/stages/${id}`, { method: 'DELETE' }),
   reorderStages: (surveyId: string, order: string[]) =>
     request<{ stages: DealStage[] }>(`/api/surveys/${surveyId}/stages`, { ...json({ order }), method: 'PUT' }),
+
+  listImages: (propertyId: string) =>
+    request<{ images: PropertyImage[] }>(`/api/properties/${propertyId}/images`),
+
+  /**
+   * Stores an image against a property.
+   *
+   * Sent as raw bytes with the type in the header rather than as multipart:
+   * the body is already a Blob the canvas produced, and there is nothing else
+   * to send alongside it.
+   */
+  addImage: (
+    propertyId: string,
+    blob: Blob,
+    meta: { caption?: string; source?: 'flyer-crop' | 'upload' } = {},
+  ) =>
+    request<{ image: PropertyImage; property: Property }>(`/api/properties/${propertyId}/images`, {
+      method: 'POST',
+      headers: {
+        'content-type': blob.type || 'image/png',
+        ...(meta.caption ? { 'x-caption': encodeURIComponent(meta.caption) } : {}),
+        ...(meta.source ? { 'x-source': meta.source } : {}),
+      },
+      body: blob,
+    }),
+  updateImage: (id: string, patch: { caption?: string | null }) =>
+    request<{ image: PropertyImage }>(`/api/images/${id}`, { ...json(patch), method: 'PATCH' }),
+  deleteImage: (id: string) => request<void>(`/api/images/${id}`, { method: 'DELETE' }),
+  reorderImages: (propertyId: string, order: string[]) =>
+    request<{ images: PropertyImage[] }>(`/api/properties/${propertyId}/images`, {
+      ...json({ order }),
+      method: 'PUT',
+    }),
+  /** Attaches a flyer to a property that already exists, with no extraction. */
+  attachFlyer: (propertyId: string, file: File) =>
+    request<{ property: Property }>(`/api/properties/${propertyId}/flyer`, {
+      method: 'POST',
+      headers: {
+        'content-type': file.type || 'application/pdf',
+        'x-filename': encodeURIComponent(file.name),
+      },
+      body: file,
+    }),
 
   planTour: (surveyId: string, options: TourRequest = {}) =>
     request<TourPlan>(`/api/surveys/${surveyId}/tour`, json(options)),

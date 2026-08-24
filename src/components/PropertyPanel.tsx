@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { CompetitionResult, CustomField, Demographics, Property, Stage } from '../types'
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 import CompetitionPanel from './CompetitionPanel'
 import CustomFields from './CustomFields'
 import DemographicsPanel from './DemographicsPanel'
+
+/**
+ * pdf.js is over a megabyte, and most sessions never open a flyer. Loading it
+ * only when the flyer tab is first opened keeps that weight off the map, which
+ * is the page everyone actually lands on.
+ */
+const FlyerViewer = lazy(() => import('./FlyerViewer'))
 import { StageSelect } from './StageBadge'
 
 interface Props {
@@ -59,6 +66,7 @@ export default function PropertyPanel({
   const [colorBy, setColorBy] = useState('population')
   const [radius, setRadius] = useState(3)
   const photoInput = useRef<HTMLInputElement>(null)
+  const flyerInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setEditing(false)
@@ -320,24 +328,66 @@ export default function PropertyPanel({
         )}
 
         {tab === 'flyer' && (
-          <div className="p-4">
+          <div className="flex min-h-0 flex-1 flex-col">
             {property.flyerUrl ? (
-              <div className="grid gap-3">
-                <a className="btn-secondary justify-between" href={property.flyerUrl} target="_blank" rel="noreferrer noopener">
-                  <span className="truncate">{property.flyerName || 'Listing flyer'}</span>
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                    <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-                  </svg>
-                </a>
-                <object data={property.flyerUrl} type="application/pdf" className="h-96 w-full rounded-lg border border-white/10 bg-ink-850">
-                  <img src={property.flyerUrl} alt="Listing flyer" className="w-full rounded-lg" />
-                </object>
-              </div>
+              <>
+                <div className="flex items-center gap-2 border-b border-white/5 px-3 py-2">
+                  <a
+                    className="truncate text-xs text-slate-400 hover:text-teal-300"
+                    href={property.flyerUrl}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    {property.flyerName || 'Listing flyer'}
+                  </a>
+                  {!readOnly ? (
+                    <button
+                      type="button"
+                      className="btn-secondary ml-auto px-2 py-1 text-xs"
+                      onClick={() => flyerInput.current?.click()}
+                    >
+                      Replace
+                    </button>
+                  ) : null}
+                </div>
+                <div className="min-h-0 flex-1">
+                  <Suspense
+                    fallback={<p className="p-4 text-xs text-slate-500">Loading the PDF viewer…</p>}
+                  >
+                    <FlyerViewer property={property} onChange={onChange} />
+                  </Suspense>
+                </div>
+              </>
             ) : (
-              <p className="rounded-lg border border-dashed border-white/10 p-6 text-center text-xs text-slate-500">
-                No flyer attached to this site.
-              </p>
+              <div className="p-4">
+                <p className="rounded-lg border border-dashed border-white/10 p-6 text-center text-xs text-slate-500">
+                  No flyer attached to this site.
+                </p>
+                {!readOnly ? (
+                  <button
+                    type="button"
+                    className="btn-secondary mt-3 w-full text-xs"
+                    onClick={() => flyerInput.current?.click()}
+                  >
+                    Attach a PDF flyer
+                  </button>
+                ) : null}
+              </div>
             )}
+
+            <input
+              ref={flyerInput}
+              type="file"
+              accept="application/pdf,image/*"
+              className="hidden"
+              onChange={async (event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                const { property: updated } = await api.attachFlyer(property.id, file)
+                onChange?.(updated)
+              }}
+            />
           </div>
         )}
 

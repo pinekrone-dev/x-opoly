@@ -10,6 +10,18 @@ export interface DealStage {
   hidden: boolean
 }
 
+/** A stored photo. Either uploaded whole or cut out of a rendered flyer page. */
+export interface PropertyImage {
+  id: string
+  propertyId?: string
+  url: string
+  path?: string
+  caption: string | null
+  position: number
+  source: 'flyer-crop' | 'upload' | null
+  createdAt?: string
+}
+
 /** One arbitrary row on a site card — "Available SF", "Lease Rate". */
 export interface CustomField {
   label: string
@@ -42,6 +54,8 @@ export interface Property {
   stageId: string | null
   tourMinutes: number | null
   fields: CustomField[]
+  images: PropertyImage[]
+  coverImageId: string | null
   notes?: string | null
   flyerUrl: string | null
   flyerName: string | null
