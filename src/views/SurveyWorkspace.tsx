@@ -6,7 +6,7 @@ import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
-import type { AppFeatures, Property, Survey } from '../types'
+import type { AppFeatures, CompetitionResult, Property, Survey } from '../types'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 
@@ -30,6 +30,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [error, setError] = useState<string | null>(null)
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
+  const [competition, setCompetition] = useState<(CompetitionResult & { center: { lat: number; lng: number } }) | null>(null)
 
   useEffect(() => {
     api
@@ -97,6 +98,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       onChange={upsert}
       onDelete={(propertyId) => void remove(propertyId)}
       onClose={() => setSelectedId(null)}
+      onCompetition={setCompetition}
     />
   ) : (
     <ul className="divide-y divide-white/5">
@@ -213,8 +215,9 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onMapClick={dropPin ? (lat, lng) => void addAt(lat, lng) : undefined}
-                tileUrl={features.tileUrl}
-                tileAttribution={features.tileAttribution}
+                tiles={features.tiles}
+                rings={competition ? { ...competition.center, miles: competition.rings.map((ring) => ring.miles) } : null}
+                competitors={competition?.results}
                 fitKey={fitKey}
               />
             </div>
@@ -231,6 +234,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                   onChange={upsert}
                   onDelete={(propertyId) => void remove(propertyId)}
                   onClose={() => setSelectedId(null)}
+                  onCompetition={setCompetition}
                 />
               </div>
             )}
@@ -251,8 +255,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 properties={properties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                tileUrl={features.tileUrl}
-                tileAttribution={features.tileAttribution}
+                tiles={features.tiles}
                 routeIds={tourOrder}
                 routeColor={survey.brandColor}
                 fitKey={`tour-${properties.length}`}

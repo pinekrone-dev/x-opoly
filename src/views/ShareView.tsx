@@ -114,8 +114,7 @@ export default function ShareView({ token, features }: { token: string; features
           properties={properties as Property[]}
           selectedId={selectedId}
           onSelect={setSelectedId}
-          tileUrl={features.tileUrl}
-          tileAttribution={features.tileAttribution}
+          tiles={features.tiles}
           fitKey={properties.length}
         />
       </div>

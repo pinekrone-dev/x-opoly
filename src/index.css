@@ -123,9 +123,17 @@
   font-family: inherit;
 }
 
-/* OSM tiles are bright; dim them to sit inside a dark UI. */
+/*
+ * Light basemaps (OSM standard) are inverted to sit inside a dark UI.
+ * A basemap that ships dark already opts out via .tile-native-dark, otherwise
+ * inverting it a second time returns it to white.
+ */
 .leaflet-tile-pane {
   filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9) saturate(0.7);
+}
+
+.leaflet-tile-pane:has(.tile-native-dark) {
+  filter: none;
 }
 
 .leaflet-control-zoom a {

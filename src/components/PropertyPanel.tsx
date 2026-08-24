@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { Demographics, Property, Stage } from '../types'
+import type { CompetitionResult, Demographics, Property, Stage } from '../types'
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
+import CompetitionPanel from './CompetitionPanel'
 import { StageSelect } from './StageBadge'
 
 interface Props {
@@ -10,9 +11,10 @@ interface Props {
   onChange?: (property: Property) => void
   onDelete?: (id: string) => void
   onClose?: () => void
+  onCompetition?: (result: (CompetitionResult & { center: { lat: number; lng: number } }) | null) => void
 }
 
-type Tab = 'details' | 'flyer' | 'demographics'
+type Tab = 'details' | 'flyer' | 'demographics' | 'competition'
 
 const EDITABLE: { key: keyof Property; label: string; type?: string; suffix?: string }[] = [
   { key: 'name', label: 'Property name' },
@@ -32,7 +34,7 @@ const EDITABLE: { key: keyof Property; label: string; type?: string; suffix?: st
   { key: 'listingBroker', label: 'Listing broker' },
 ]
 
-export default function PropertyPanel({ property, readOnly = false, onChange, onDelete, onClose }: Props) {
+export default function PropertyPanel({ property, readOnly = false, onChange, onDelete, onClose, onCompetition }: Props) {
   const [tab, setTab] = useState<Tab>('details')
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Partial<Property>>({})
@@ -159,11 +161,11 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
         </div>
 
         <nav className="flex gap-1 border-b border-white/5 px-3 py-2" aria-label="Property sections">
-          {(['details', 'flyer', 'demographics'] as Tab[]).map((entry) => (
+          {((readOnly ? ['details', 'flyer', 'demographics'] : ['details', 'flyer', 'demographics', 'competition']) as Tab[]).map((entry) => (
             <button
               key={entry}
               type="button"
-              className={`tab px-2.5 py-1 text-xs capitalize ${tab === entry ? 'tab-active' : ''}`}
+              className={`tab px-2 py-1 text-xs capitalize ${tab === entry ? 'tab-active' : ''}`}
               onClick={() => {
                 setTab(entry)
                 if (entry === 'demographics' && !demographics && !demoError) void loadDemographics()
@@ -275,6 +277,10 @@ export default function PropertyPanel({ property, readOnly = false, onChange, on
               </p>
             )}
           </div>
+        )}
+
+        {tab === 'competition' && onCompetition && (
+          <CompetitionPanel property={property} onResult={onCompetition} />
         )}
 
         {tab === 'demographics' && (

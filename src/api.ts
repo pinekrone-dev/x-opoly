@@ -1,4 +1,14 @@
-import type { AppFeatures, Demographics, GeocodeResult, Property, SharePayload, Survey, TourPlan } from './types'
+import type {
+  AppFeatures,
+  CompetitionResult,
+  Demographics,
+  GeocodeResult,
+  PlaceCategory,
+  Property,
+  SharePayload,
+  Survey,
+  TourPlan,
+} from './types'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -45,6 +55,19 @@ export const api = {
   getShared: (token: string) => request<SharePayload>(`/api/share/${token}`),
 
   geocode: (query: string) => request<{ results: GeocodeResult[] }>(`/api/geocode?q=${encodeURIComponent(query)}`),
+  placeCategories: () => request<{ categories: PlaceCategory[]; rings: number[] }>('/api/places/categories'),
+
+  nearby: (params: { lat: number; lng: number; category?: string; keyword?: string; radius: number }) => {
+    const query = new URLSearchParams({
+      lat: String(params.lat),
+      lng: String(params.lng),
+      radius: String(params.radius),
+    })
+    if (params.category) query.set('category', params.category)
+    if (params.keyword) query.set('keyword', params.keyword)
+    return request<CompetitionResult>(`/api/places/nearby?${query.toString()}`)
+  },
+
   demographics: (lat: number, lng: number) => request<Demographics>(`/api/demographics?lat=${lat}&lng=${lng}`),
 
   /** Uploads the raw file body; the filename travels in a header. */

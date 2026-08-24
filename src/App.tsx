@@ -6,10 +6,20 @@ import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
 import type { AppFeatures } from './types'
 
+const OSM_TILES = {
+  provider: 'osm',
+  url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: '© OpenStreetMap contributors',
+  maxZoom: 19,
+  darkNative: false,
+  placeholder: false,
+}
+
 const FALLBACK_FEATURES: AppFeatures = {
   flyerExtraction: false,
-  tileUrl: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-  tileAttribution: '© OpenStreetMap contributors',
+  tiles: OSM_TILES,
+  tileUrl: OSM_TILES.url,
+  tileAttribution: OSM_TILES.attribution,
 }
 
 export default function App() {

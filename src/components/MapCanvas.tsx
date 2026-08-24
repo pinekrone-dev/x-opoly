@@ -1,18 +1,21 @@
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
-import type { Property } from '../types'
+import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 
 interface Props {
+  tiles: TileConfig
   properties: Property[]
   selectedId?: string | null
   onSelect?: (id: string) => void
   onMapClick?: (lat: number, lng: number) => void
-  tileUrl: string
-  tileAttribution: string
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
   routeColor?: string
+  /** Rings drawn around a point, in miles. */
+  rings?: { lat: number; lng: number; miles: number[] } | null
+  /** Nearby businesses plotted as small secondary markers. */
+  competitors?: { id: string; name: string; lat: number; lng: number; miles: number }[]
   /** Changing this refits the view to the current pins. */
   fitKey?: string | number
   className?: string
@@ -33,14 +36,15 @@ function pinIcon(property: Property, index: number | null, selected: boolean): L
 }
 
 export default function MapCanvas({
+  tiles,
   properties,
   selectedId,
   onSelect,
   onMapClick,
-  tileUrl,
-  tileAttribution,
   routeIds,
   routeColor = '#14b8a6',
+  rings = null,
+  competitors,
   fitKey,
   className = 'h-full w-full',
 }: Props) {
@@ -48,6 +52,8 @@ export default function MapCanvas({
   const map = useRef<L.Map | null>(null)
   const markers = useRef<Map<string, L.Marker>>(new Map())
   const route = useRef<L.Polyline | null>(null)
+  const ringLayer = useRef<L.LayerGroup | null>(null)
+  const competitorLayer = useRef<L.LayerGroup | null>(null)
   const clickHandler = useRef(onMapClick)
   const selectHandler = useRef(onSelect)
 
@@ -59,7 +65,14 @@ export default function MapCanvas({
     if (!container.current || map.current) return
 
     const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(FALLBACK_CENTER, 11)
-    L.tileLayer(tileUrl, { attribution: tileAttribution, maxZoom: 19 }).addTo(instance)
+    L.tileLayer(tiles.url, {
+      attribution: tiles.attribution,
+      maxZoom: tiles.maxZoom || 19,
+      // Light basemaps are inverted by CSS to sit in a dark UI; a basemap that
+      // is already dark must be left alone or it comes back out white.
+      className: tiles.darkNative ? 'tile-native-dark' : '',
+      subdomains: tiles.url.includes('{s}') ? ['a', 'b', 'c'] : [],
+    }).addTo(instance)
     instance.on('click', (event: L.LeafletMouseEvent) => clickHandler.current?.(event.latlng.lat, event.latlng.lng))
     map.current = instance
 
@@ -73,7 +86,7 @@ export default function MapCanvas({
       map.current = null
       markers.current.clear()
     }
-  }, [tileUrl, tileAttribution])
+  }, [tiles.url, tiles.attribution, tiles.maxZoom, tiles.darkNative])
 
   // Sync pins with the property list.
   useEffect(() => {
@@ -133,6 +146,60 @@ export default function MapCanvas({
       route.current = L.polyline(points, { color: routeColor, weight: 3, opacity: 0.85, dashArray: '7 7' }).addTo(instance)
     }
   }, [routeIds, properties, routeColor])
+
+  // Radius rings around the site being scoped.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    ringLayer.current?.remove()
+    ringLayer.current = null
+    if (!rings || rings.miles.length === 0) return
+
+    const group = L.layerGroup()
+    // Largest first so the smaller rings draw on top of the bigger fills.
+    for (const miles of [...rings.miles].sort((a, b) => b - a)) {
+      L.circle([rings.lat, rings.lng], {
+        radius: miles * 1609.34,
+        color: '#14b8a6',
+        weight: 1.2,
+        opacity: 0.55,
+        fillColor: '#14b8a6',
+        fillOpacity: 0.05,
+        dashArray: '5 6',
+        interactive: false,
+      })
+        .bindTooltip(`${miles} mile${miles === 1 ? '' : 's'}`, { permanent: false, direction: 'top' })
+        .addTo(group)
+    }
+    group.addTo(instance)
+    ringLayer.current = group
+  }, [rings])
+
+  // Nearby businesses, drawn smaller than the survey's own pins.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    competitorLayer.current?.remove()
+    competitorLayer.current = null
+    if (!competitors || competitors.length === 0) return
+
+    const group = L.layerGroup()
+    for (const business of competitors) {
+      L.circleMarker([business.lat, business.lng], {
+        radius: 5,
+        color: '#0f172a',
+        weight: 1.5,
+        fillColor: '#f97316',
+        fillOpacity: 0.95,
+      })
+        .bindTooltip(`<strong>${business.name}</strong><br>${business.miles} mi away`, { direction: 'top' })
+        .addTo(group)
+    }
+    group.addTo(instance)
+    competitorLayer.current = group
+  }, [competitors])
 
   // Fit the view to the pins when the caller asks.
   useEffect(() => {

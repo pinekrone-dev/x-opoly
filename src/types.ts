@@ -69,8 +69,19 @@ export interface Demographics {
   metrics: Record<string, number | null>
 }
 
+export interface TileConfig {
+  provider: string
+  url: string
+  attribution: string
+  maxZoom: number
+  darkNative: boolean
+  placeholder: boolean
+  notice?: string
+}
+
 export interface AppFeatures {
   flyerExtraction: boolean
+  tiles: TileConfig
   tileUrl: string
   tileAttribution: string
 }
@@ -87,4 +98,29 @@ export interface SharePayload {
     expiresAt: string | null
   }
   properties: Property[]
+}
+
+export interface NearbyBusiness {
+  id: string
+  name: string
+  category: string | null
+  address: string | null
+  brand: string | null
+  website: string | null
+  lat: number
+  lng: number
+  miles: number
+  ring: number | null
+}
+
+export interface CompetitionResult {
+  results: NearbyBusiness[]
+  rings: { miles: number; count: number }[]
+  radiusMiles: number
+  source: string
+}
+
+export interface PlaceCategory {
+  id: string
+  label: string
 }

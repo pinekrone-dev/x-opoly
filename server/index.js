@@ -33,6 +33,8 @@ import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import { FlyerExtractionError, extractFromFlyer, isConfigured, toPropertyInput } from './lib/flyer.js'
 import { legs, planTour } from './lib/tour.js'
+import { placeholderTile, resolveTiles } from './lib/tiles.js'
+import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(__dirname, '..', 'dist')
@@ -74,15 +76,37 @@ export function createServer() {
   app.use(express.json({ limit: '2mb' }))
 
   app.get('/api/health', (_request, response) => {
+    const tiles = resolveTiles()
     response.json({
       ok: true,
       stages: STAGES.map((id) => ({ id, label: STAGE_LABELS[id] })),
       features: {
         flyerExtraction: isConfigured(),
-        tileUrl: process.env.TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-        tileAttribution: process.env.TILE_ATTRIBUTION || '© OpenStreetMap contributors',
+        tiles,
+        // Kept for older clients that read the flat fields.
+        tileUrl: tiles.url,
+        tileAttribution: tiles.attribution,
       },
     })
+  })
+
+  /**
+   * Placeholder basemap tiles, served when no external provider is reachable.
+   * A neutral grid — never invented geography.
+   */
+  app.get('/api/tiles/:z/:x/:y.svg', (request, response) => {
+    const z = Number(request.params.z)
+    const x = Number(request.params.x)
+    const y = Number(request.params.y)
+
+    if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > 22) {
+      response.status(400).json({ error: 'Bad tile coordinates.' })
+      return
+    }
+
+    response.type('image/svg+xml')
+    response.set('cache-control', 'public, max-age=86400')
+    response.send(placeholderTile(z, x, y))
   })
 
   // --- surveys -------------------------------------------------------------
@@ -199,6 +223,34 @@ export function createServer() {
       response.json(data)
     } catch (error) {
       if (error instanceof DemographicsUnavailable) {
+        response.status(503).json({ error: error.message })
+        return
+      }
+      throw error
+    }
+  }))
+
+  // --- competition ---------------------------------------------------------
+
+  app.get('/api/places/categories', (_request, response) => {
+    response.json({
+      categories: Object.entries(CATEGORIES).map(([id, entry]) => ({ id, label: entry.label })),
+      rings: RING_MILES,
+    })
+  })
+
+  app.get('/api/places/nearby', route(async (request, response) => {
+    try {
+      const data = await nearbyBusinesses({
+        lat: Number(request.query.lat),
+        lng: Number(request.query.lng),
+        category: request.query.category || null,
+        keyword: request.query.keyword || null,
+        radiusMiles: Number(request.query.radius) || 5,
+      })
+      response.json(data)
+    } catch (error) {
+      if (error instanceof PlacesUnavailable) {
         response.status(503).json({ error: error.message })
         return
       }
