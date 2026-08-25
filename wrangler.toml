@@ -33,11 +33,17 @@ custom_domain = true
 # and query. Nothing else in the app changes: every link it builds —
 # verification emails, Stripe return URLs, client share links — is derived
 # from the host the request arrived on.
-# HELD BACK: landquotient.com is registered in a different Cloudflare account
-# (pinekrone) than the one running this Worker. A custom domain can only name a
-# zone the Worker's own account holds, so enabling these before the domain and
-# the Worker live in the same account fails the deploy — which would block
-# every future update. Re-enable once they are together.
+# HELD BACK: landquotient.com is registered through Cloudflare Registrar in a
+# different account (pinekrone@gmail.com) than the one running this Worker. A
+# custom domain can only name a zone its own account holds, so enabling these
+# now fails the Cloudflare build and the site keeps serving the previous
+# deployment — silently, because a wrangler.toml-only change leaves the bundle
+# hash untouched and the smoke test's rollout check has nothing to notice.
+#
+# The fix is an inter-account registrar transfer, which Cloudflare only allows
+# once the domain is more than 10 days old. Registered 2026-08-25, so eligible
+# from about 2026-09-04. Leave DNSSEC off until then — it blocks the move.
+# Re-enable both blocks once the zone and this Worker are in one account.
 #
 # [[routes]]
 # pattern = "landquotient.com"
