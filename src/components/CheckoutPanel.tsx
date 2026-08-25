@@ -26,16 +26,38 @@ export default function CheckoutPanel({
     let checkout: { destroy: () => void } | null = null
     let cancelled = false
 
+    /**
+     * The redirect flow, asked for by name.
+     *
+     * An embedded session carries no URL of its own, so when the form cannot
+     * mount there is nothing to fall back to until the server mints a hosted
+     * session. Without this a blocked Stripe script is a dead end.
+     */
+    const hostedFallback = async () => {
+      const session = await api.startCheckout({ hosted: true })
+      if (cancelled) return
+      if (!session.url) throw new Error('Checkout could not be started. Try again in a moment.')
+      setHostedUrl(session.url)
+      setLoading(false)
+    }
+
     const start = async () => {
       try {
         const session = await api.startCheckout()
         if (cancelled) return
 
         if (session.embedded && session.clientSecret && publishableKey && frame.current) {
-          checkout = await mountEmbeddedCheckout(publishableKey, session.clientSecret, frame.current)
-          if (cancelled) checkout.destroy()
-          else setLoading(false)
-          return
+          try {
+            checkout = await mountEmbeddedCheckout(publishableKey, session.clientSecret, frame.current)
+            if (cancelled) checkout.destroy()
+            else setLoading(false)
+            return
+          } catch {
+            // Stripe's script is blocked or failed to load. The sale is still
+            // available on their hosted page, so go there rather than stop.
+            await hostedFallback()
+            return
+          }
         }
 
         if (session.url) {

@@ -161,7 +161,7 @@ function constantTimeEquals(a, b) {
  * The issuer appears twice by convention — in the label and as a parameter —
  * because apps disagree about which one they read.
  */
-export function otpauthUri(secretBase32, { account, issuer = 'SiteSurvey CRE' } = {}) {
+export function otpauthUri(secretBase32, { account, issuer = 'Land Quotient' } = {}) {
   const label = encodeURIComponent(`${issuer}:${account}`)
   const params = new URLSearchParams({
     secret: secretBase32,

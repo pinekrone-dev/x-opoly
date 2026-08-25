@@ -16,12 +16,36 @@ workers_dev = true
 
 # The public address. `custom_domain` makes the deploy provision the DNS record
 # and certificate itself, so nothing has to be created in the dashboard — but
-# it requires realestateaistudio.com to be a zone in this same Cloudflare
-# account. If a deploy ever fails naming this route, that is what to check.
-# The *.workers.dev address above keeps working either way.
+# it requires the domain to be a zone in this same Cloudflare account. If a
+# deploy ever fails naming a route, that is what to check. The *.workers.dev
+# address above keeps working either way.
 [[routes]]
 pattern = "survey.realestateaistudio.com"
 custom_domain = true
+
+# The new canonical home. Commented out until landquotient.com is a zone in
+# this Cloudflare account — naming a route for a zone Cloudflare does not hold
+# fails the deploy, which would stop the running site from being updated.
+#
+# To switch it on, in order:
+#   1. Cloudflare dashboard -> Add a site -> landquotient.com, and move the
+#      nameservers at the registrar to the two Cloudflare gives you.
+#   2. Wait for the zone to read "Active" (usually minutes, up to 24 hours).
+#   3. Uncomment both blocks below and push. The deploy creates the DNS
+#      records and certificates on its own.
+#
+# The app itself needs no other change: every link it builds — verification
+# emails, Stripe return URLs, client share links — is derived from the host
+# the request arrived on, and the worker already 301s any www.* to the bare
+# name, keeping path and query.
+#
+# [[routes]]
+# pattern = "landquotient.com"
+# custom_domain = true
+#
+# [[routes]]
+# pattern = "www.landquotient.com"
+# custom_domain = true
 
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.

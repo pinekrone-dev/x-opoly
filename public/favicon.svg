@@ -1,6 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#0d1117"/>
-  <path d="M16 6c-3.9 0-7 3.1-7 7 0 5.2 7 13 7 13s7-7.8 7-13c0-3.9-3.1-7-7-7Z"
-        fill="none" stroke="#14b8a6" stroke-width="2.2"/>
-  <circle cx="16" cy="13" r="2.6" fill="#14b8a6"/>
+  <defs>
+    <clipPath id="pin">
+      <path d="M16 31 3.6 16.4A12.6 12.6 0 1 1 28.4 16.4Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#pin)">
+    <rect width="32" height="32" fill="#1B3668"/>
+    <path d="M2 15.2Q16 21.6 30 15.2L30 32 2 32Z" fill="#12AEB6"/>
+  </g>
 </svg>

@@ -29,10 +29,10 @@ export class EmailError extends Error {
  * opening signup.
  */
 function sender(env) {
-  const raw = String(env.EMAIL_FROM || 'SiteSurvey CRE <noreply@realestateaistudio.com>')
+  const raw = String(env.EMAIL_FROM || 'Land Quotient <noreply@landquotient.com>')
   const match = raw.match(/^\s*(.*?)\s*<([^>]+)>\s*$/)
-  if (match) return { name: match[1] || 'SiteSurvey CRE', email: match[2].trim() }
-  return { name: 'SiteSurvey CRE', email: raw.trim() }
+  if (match) return { name: match[1] || 'Land Quotient', email: match[2].trim() }
+  return { name: 'Land Quotient', email: raw.trim() }
 }
 
 /** One fetch, with a network failure translated into the survivable error. */
@@ -99,14 +99,15 @@ export async function sendEmail(env, message, { fetchImpl = fetch } = {}) {
 export function verificationEmail({ name, url }) {
   const greeting = name ? `Hi ${name},` : 'Hi,'
   return {
-    subject: 'Confirm your email — SiteSurvey CRE',
-    text: `${greeting}\n\nConfirm your email address to finish creating your SiteSurvey CRE account:\n\n${url}\n\nThe link works once and expires in 24 hours. If you did not sign up, ignore this email and nothing happens.`,
+    subject: 'Confirm your email — Land Quotient',
+    text: `${greeting}\n\nConfirm your email address to finish creating your Land Quotient account:\n\n${url}\n\nThe link works once and expires in 24 hours. If you did not sign up, ignore this email and nothing happens.`,
     html: `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
+  <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
   <h2 style="margin:0 0 12px;font-size:18px">Confirm your email</h2>
-  <p style="margin:0 0 16px;line-height:1.5">${greeting} Confirm your email address to finish creating your SiteSurvey CRE account.</p>
-  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#0d9488;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Confirm email</a></p>
+  <p style="margin:0 0 16px;line-height:1.5">${greeting} Confirm your email address to finish creating your Land Quotient account.</p>
+  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Confirm email</a></p>
   <p style="margin:0 0 6px;font-size:13px;color:#475569">Or paste this link into your browser:</p>
-  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${url}" style="color:#0d9488">${url}</a></p>
+  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${url}" style="color:#12AEB6">${url}</a></p>
   <p style="margin:0;font-size:12px;color:#64748b">The link works once and expires in 24 hours. If you did not sign up, ignore this email and nothing happens.</p>
 </div>`,
   }

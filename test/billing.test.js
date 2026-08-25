@@ -123,6 +123,27 @@ describe('creating a checkout', () => {
     assert.ok(decodeURIComponent(fetchImpl.calls[0].init.body).includes('ui_mode=embedded'))
   })
 
+  test('asking for hosted overrides the embedded form, so a blocked script is not a dead end', async () => {
+    const fetchImpl = stubFetch({ body: { url: 'https://checkout.stripe.com/pay/cs_hosted' } })
+    const result = await createCheckout(db, ENV, {
+      teamId: 'team-1',
+      email: 'buyer@example.com',
+      origin: 'https://landquotient.com',
+      hosted: true,
+      fetchImpl,
+    })
+
+    assert.equal(result.embedded, false)
+    assert.equal(result.url, 'https://checkout.stripe.com/pay/cs_hosted')
+
+    const body = decodeURIComponent(fetchImpl.calls[0].init.body)
+    assert.ok(!body.includes('ui_mode=embedded'), 'a redirect session, not an embedded one')
+    assert.ok(body.includes('success_url=https://landquotient.com/billing/return?session_id={CHECKOUT_SESSION_ID}'))
+    assert.ok(body.includes('cancel_url=https://landquotient.com/'))
+    // The whole point of the fallback is that the promo code still works.
+    assert.ok(body.includes('allow_promotion_codes=true'))
+  })
+
   test('a configured price id replaces the inline price', async () => {
     const fetchImpl = stubFetch({ body: {} })
     await createCheckout(db, { ...ENV, STRIPE_PRICE_ID: 'price_123' }, {

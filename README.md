@@ -1,4 +1,4 @@
-# SiteSurvey CRE
+# Land Quotient
 
 A site survey and deal mapping tool for tenant rep brokers. One survey per client
 requirement: map the candidate properties, keep each one moving through the deal stages,
@@ -86,6 +86,31 @@ npm run deploy
 **GitHub Pages cannot host this.** It serves static files only, and this needs a database,
 file storage, and a server-side API key. GitHub is the right home for the code and CI; the
 running app needs Cloudflare or another host that runs code.
+
+### Moving to landquotient.com
+
+The app builds every outbound link — verification emails, Stripe return URLs, client share
+links — from the host the request arrived on, so it follows a new domain on its own. What
+does not follow automatically, in the order it has to happen:
+
+1. **Cloudflare.** Add landquotient.com as a site and move the registrar's nameservers to
+   the two Cloudflare gives you. Wait for the zone to read *Active*.
+2. **Routes.** Uncomment the two `[[routes]]` blocks in `wrangler.toml` and push. The deploy
+   provisions the DNS records and certificates itself. Leaving them commented until the zone
+   exists is deliberate: naming a route Cloudflare does not hold fails the deploy, which
+   would stop the running site from being updated.
+3. **SendGrid.** Authenticate landquotient.com under Sender Authentication, add the DNS
+   records it prints, then set the `EMAIL_FROM` secret to
+   `Land Quotient <support@landquotient.com>`. Until the domain is authenticated, sends are
+   refused and signup reports that the email could not be sent.
+4. **Google Maps key.** Add `https://landquotient.com/*` to the key's website restrictions,
+   and set the `GOOGLE_REFERER` secret to `https://landquotient.com/`. The Worker sends that
+   header on every Google call because a server-side request carries no referer of its own;
+   miss this and routing silently falls back to OSRM.
+5. **Smoke test.** Point the matrix in `.github/workflows/smoke.yml` at the new host.
+
+The old address keeps working throughout — its route stays in `wrangler.toml` — so nothing
+breaks mid-move. Any `www.` variant 301s to the bare name, keeping path and query.
 
 ## What it does
 

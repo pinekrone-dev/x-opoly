@@ -96,7 +96,7 @@ async function osrmRoute(points, { fetchImpl, timeoutMs }) {
       // ourselves and the road geometry comes back instead of a refusal.
       headers: {
         accept: 'application/json',
-        'user-agent': 'SiteSurveyCRE/1.0 (+https://survey.realestateaistudio.com)',
+        'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)',
       },
     })
   } finally {

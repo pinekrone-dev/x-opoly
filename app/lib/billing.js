@@ -93,7 +93,7 @@ function lineItem(env) {
       currency: 'usd',
       unit_amount: 2900,
       recurring: { interval: 'month' },
-      product_data: { name: 'SiteSurvey CRE' },
+      product_data: { name: 'Land Quotient' },
     },
   }
 }
@@ -105,9 +105,12 @@ function lineItem(env) {
  * redirect otherwise. Either way the return path carries the session id so
  * activation is verified server-side, not assumed from a redirect.
  */
-export async function createCheckout(db, env, { teamId, email, origin, fetchImpl = fetch }) {
+export async function createCheckout(db, env, { teamId, email, origin, hosted = false, fetchImpl = fetch }) {
   const existing = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [teamId])
-  const embedded = Boolean(publishableKey(env))
+  // `hosted` is the client saying the embedded form could not mount — a
+  // blocked script, an extension. Stripe gives an embedded session no URL to
+  // fall back to, so the redirect version has to be asked for explicitly.
+  const embedded = !hosted && Boolean(publishableKey(env))
 
   const params = {
     mode: 'subscription',

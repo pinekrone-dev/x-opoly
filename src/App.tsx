@@ -5,6 +5,7 @@ import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
 import Landing from './views/Landing'
+import Welcome from './views/Welcome'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
@@ -55,6 +56,10 @@ export default function App() {
   // instance. `null` while unknown; bumping `billingVersion` re-checks.
   const [billing, setBilling] = useState<BillingStatus | null>(null)
   const [billingVersion, setBillingVersion] = useState(0)
+
+  // Set only by a redeemed email link. Confirming is a milestone, and the
+  // person deserves to be told it worked before anything is asked of them.
+  const [welcoming, setWelcoming] = useState(false)
 
   useEffect(() => {
     api
@@ -136,6 +141,10 @@ export default function App() {
         selfServe={session.billing.selfServe}
         startMode={door === 'signUp' ? 'signUp' : 'signIn'}
         onSignedIn={signedIn}
+        onVerified={(user) => {
+          setWelcoming(true)
+          signedIn(user)
+        }}
         onBack={session.billing.configured && !session.setupRequired && !hasLinkToken ? () => setDoor('landing') : undefined}
       />
     )
@@ -144,6 +153,27 @@ export default function App() {
   /* Back from Stripe: confirm the checkout session, then into the app. */
   if (route.view === 'billingReturn') {
     return <BillingReturn onDone={() => setBillingVersion((version) => version + 1)} />
+  }
+
+  /*
+   * Just confirmed: say so, then let them move on. Shown ahead of the
+   * subscription gate so the first thing a new account meets is a welcome and
+   * not a payment form.
+   */
+  if (welcoming) {
+    return (
+      <Welcome
+        account={session.user}
+        needsSubscription={session.billing.configured && !billing?.active}
+        priceLabel={billing?.priceLabel}
+        onContinue={() => setWelcoming(false)}
+        onSignedOut={() => {
+          setWelcoming(false)
+          setSession({ ...session, user: null, setupRequired: false })
+          setDoor('signIn')
+        }}
+      />
+    )
   }
 
   /*

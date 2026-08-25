@@ -173,7 +173,7 @@ async function nominatimGeocode(search, { env = {}, fetchImpl = fetch, timeout =
       signal: controller.signal,
       headers: {
         // Nominatim's usage policy requires an identifying User-Agent.
-        'user-agent': env.GEOCODER_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
+        'user-agent': env.GEOCODER_UA || 'LandQuotient/1.0 (self-hosted deal mapping tool)',
         accept: 'application/json',
       },
     })

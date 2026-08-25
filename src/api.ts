@@ -60,10 +60,12 @@ export const api = {
 
   // --- billing --------------------------------------------------------------
   billingStatus: () => request<BillingStatus>('/api/billing'),
-  startCheckout: () =>
-    request<{ clientSecret: string | null; url: string | null; embedded: boolean }>('/api/billing/checkout', {
-      method: 'POST',
-    }),
+  /** `hosted` asks for the redirect flow, for when the embedded form cannot mount. */
+  startCheckout: (options: { hosted?: boolean } = {}) =>
+    request<{ clientSecret: string | null; url: string | null; embedded: boolean }>(
+      '/api/billing/checkout',
+      json(options),
+    ),
   confirmCheckout: (sessionId: string) =>
     request<{ active: boolean; status: string }>(`/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`),
   billingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),

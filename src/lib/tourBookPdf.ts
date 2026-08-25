@@ -108,7 +108,7 @@ export async function exportTourBook({ survey, stops, stages, times, summary, in
   doc.setProperties({
     title: `${survey.name || 'Tour book'} — site tour`,
     subject: survey.clientName ? `Prepared for ${survey.clientName}` : 'Site tour',
-    author: survey.brokerName || survey.companyName || 'SiteSurvey CRE',
+    author: survey.brokerName || survey.companyName || 'Land Quotient',
   })
 
   // Everything asynchronous happens up front, in parallel, so page layout is

@@ -122,13 +122,13 @@ describe('enrolling a phone', () => {
   })
 
   test('the otpauth URI carries what an authenticator needs', () => {
-    const uri = otpauthUri('ABCDEFGH', { account: 'broker@example.com', issuer: 'SiteSurvey CRE' })
+    const uri = otpauthUri('ABCDEFGH', { account: 'broker@example.com', issuer: 'Land Quotient' })
     assert.match(uri, /^otpauth:\/\/totp\//)
     assert.match(uri, /secret=ABCDEFGH/)
-    assert.match(uri, /issuer=SiteSurvey\+CRE/)
+    assert.match(uri, /issuer=Land\+Quotient/)
     assert.match(uri, /period=30/)
     // The issuer appears in the label too, because apps disagree about which
     // one they read.
-    assert.match(decodeURIComponent(uri), /SiteSurvey CRE:broker@example\.com/)
+    assert.match(decodeURIComponent(uri), /Land Quotient:broker@example\.com/)
   })
 })

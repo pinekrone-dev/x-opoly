@@ -34,7 +34,7 @@ describe('configuration', () => {
 describe('SendGrid', () => {
   test('sends through the v3 API with plain text before html', async () => {
     const fetchImpl = stubFetch({ status: 202, body: {} })
-    await sendEmail({ SENDGRID_API_KEY: 'SG.test', EMAIL_FROM: 'SiteSurvey CRE <noreply@example.com>' }, MESSAGE, {
+    await sendEmail({ SENDGRID_API_KEY: 'SG.test', EMAIL_FROM: 'Land Quotient <noreply@example.com>' }, MESSAGE, {
       fetchImpl,
     })
 
@@ -43,7 +43,7 @@ describe('SendGrid', () => {
     assert.equal(init.headers.authorization, 'Bearer SG.test')
     const body = JSON.parse(init.body)
     assert.deepEqual(body.personalizations, [{ to: [{ email: 'broker@example.com' }] }])
-    assert.deepEqual(body.from, { name: 'SiteSurvey CRE', email: 'noreply@example.com' })
+    assert.deepEqual(body.from, { name: 'Land Quotient', email: 'noreply@example.com' })
     assert.equal(body.content[0].type, 'text/plain', 'SendGrid rejects html-first content')
     assert.equal(body.content[1].type, 'text/html')
   })
@@ -52,7 +52,7 @@ describe('SendGrid', () => {
     const fetchImpl = stubFetch({ status: 202 })
     await sendEmail({ SENDGRID_API_KEY: 'SG.test', EMAIL_FROM: 'hello@example.com' }, MESSAGE, { fetchImpl })
     assert.deepEqual(JSON.parse(fetchImpl.calls[0].init.body).from, {
-      name: 'SiteSurvey CRE',
+      name: 'Land Quotient',
       email: 'hello@example.com',
     })
   })
@@ -69,12 +69,12 @@ describe('SendGrid', () => {
 describe('Resend', () => {
   test('sends with the combined from line', async () => {
     const fetchImpl = stubFetch({ body: { id: 'email_1' } })
-    const id = await sendEmail({ RESEND_API_KEY: 're_test', EMAIL_FROM: 'SiteSurvey CRE <noreply@example.com>' }, MESSAGE, {
+    const id = await sendEmail({ RESEND_API_KEY: 're_test', EMAIL_FROM: 'Land Quotient <noreply@example.com>' }, MESSAGE, {
       fetchImpl,
     })
     assert.equal(id, 'email_1')
     assert.equal(fetchImpl.calls[0].url, 'https://api.resend.com/emails')
-    assert.equal(JSON.parse(fetchImpl.calls[0].init.body).from, 'SiteSurvey CRE <noreply@example.com>')
+    assert.equal(JSON.parse(fetchImpl.calls[0].init.body).from, 'Land Quotient <noreply@example.com>')
   })
 
   test('SendGrid wins when both keys exist', async () => {

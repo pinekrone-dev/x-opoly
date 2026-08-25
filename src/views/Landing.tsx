@@ -1,3 +1,5 @@
+import { BrandPin } from '../components/BrandMark'
+
 /**
  * The public face of the product.
  *
@@ -50,13 +52,7 @@ const INCLUDED = [
 ]
 
 function Logo() {
-  return (
-    <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white" aria-hidden>
-      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
-      </svg>
-    </span>
-  )
+  return <BrandPin size={36} />
 }
 
 export default function Landing({
@@ -75,7 +71,7 @@ export default function Landing({
       <header className="sticky top-0 z-20 border-b border-line bg-paper/90 backdrop-blur">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-3">
           <Logo />
-          <p className="text-sm font-semibold text-ink">SiteSurvey CRE</p>
+          <p className="text-sm font-semibold text-ink">Land Quotient</p>
           <nav className="ml-auto flex items-center gap-1.5 text-sm">
             <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="#features">
               Features
@@ -146,7 +142,7 @@ export default function Landing({
             <div className="mx-auto mt-8 max-w-sm">
               <div className="panel overflow-hidden">
                 <div className="border-b border-line bg-brand-tint/60 p-6 text-center">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-deep">SiteSurvey CRE</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-brand-deep">Land Quotient</p>
                   <p className="mt-2 text-4xl font-bold text-ink">
                     $29<span className="text-base font-medium text-muted"> / month</span>
                   </p>
@@ -201,7 +197,7 @@ export default function Landing({
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-6 text-xs text-faint">
           <Logo />
-          <span>SiteSurvey CRE — site surveys for tenant rep brokers.</span>
+          <span>Land Quotient — site surveys for tenant rep brokers.</span>
           <button type="button" className="ml-auto underline hover:text-body" onClick={onSignIn}>
             Sign in
           </button>

@@ -203,7 +203,7 @@ export async function nearbyBusinesses({
       signal: controller.signal,
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
-        'user-agent': env.PLACES_UA || 'SiteSurveyCRE/1.0 (self-hosted deal mapping tool)',
+        'user-agent': env.PLACES_UA || 'LandQuotient/1.0 (self-hosted deal mapping tool)',
       },
       body: `data=${encodeURIComponent(query)}`,
     })

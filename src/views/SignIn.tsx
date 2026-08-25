@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { BrandPin } from '../components/BrandMark'
 import type { Account } from '../types'
 
 /**
@@ -20,6 +21,7 @@ export default function SignIn({
   selfServe = false,
   startMode,
   onSignedIn,
+  onVerified,
   onBack,
 }: {
   setupRequired: boolean
@@ -27,6 +29,8 @@ export default function SignIn({
   selfServe?: boolean
   startMode?: 'signIn' | 'signUp'
   onSignedIn: (account: Account) => void
+  /** A redeemed email link: signed in, and owed a welcome rather than a form. */
+  onVerified?: (account: Account) => void
   onBack?: () => void
 }) {
   const [mode, setMode] = useState<Mode>(setupRequired ? 'setup' : startMode === 'signUp' && selfServe ? 'signUp' : 'signIn')
@@ -60,8 +64,12 @@ export default function SignIn({
       setBusy(true)
       api
         .verifyEmail(verifyToken)
-        .then(({ user }) => onSignedIn(user))
+        .then(({ user }) => (onVerified ?? onSignedIn)(user))
         .catch((cause) => {
+          // A dead link must not strand them on a bare form: offer the resend
+          // that fixes it, addressed to whoever they are.
+          setMode('checkEmail')
+          setUnverifiedEmail(null)
           setError(cause instanceof Error ? cause.message : 'This verification link is not valid.')
         })
         .finally(() => setBusy(false))
@@ -168,13 +176,9 @@ export default function SignIn({
     <div className="grid min-h-full place-items-center bg-paper p-6">
       <div className="panel w-full max-w-sm p-7">
         <div className="mb-6 flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white" aria-hidden>
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
-            </svg>
-          </span>
+          <BrandPin size={36} />
           <div>
-            <p className="text-sm font-semibold text-ink">SiteSurvey CRE</p>
+            <p className="text-sm font-semibold text-ink">Land Quotient</p>
             <p className="text-xs text-muted">
               {mode === 'setup'
                 ? 'Claim this workspace'
@@ -185,7 +189,9 @@ export default function SignIn({
                     : mode === 'code'
                       ? 'Confirm it is you'
                       : mode === 'checkEmail'
-                        ? 'Check your email'
+                        ? unverifiedEmail || email
+                          ? 'Check your email'
+                          : 'Get a new link'
                         : 'Sign in to your surveys'}
             </p>
           </div>
@@ -214,19 +220,46 @@ export default function SignIn({
 
         {mode === 'checkEmail' ? (
           <div className="space-y-3">
-            <p className="text-sm leading-relaxed text-body">
-              We sent a confirmation link to{' '}
-              <strong className="text-ink">{unverifiedEmail ?? email}</strong>. Open it on this device
-              and you will be signed straight in.
-            </p>
-            <p className="text-xs leading-relaxed text-muted">
-              The link lasts 24 hours. Nothing in your spam folder either? Send a fresh one:
-            </p>
+            {unverifiedEmail || email ? (
+              <>
+                <p className="text-sm leading-relaxed text-body">
+                  We sent a confirmation link to{' '}
+                  <strong className="text-ink">{unverifiedEmail ?? email}</strong>. Open it on this device
+                  and you will be signed straight in.
+                </p>
+                <p className="text-xs leading-relaxed text-muted">
+                  The link lasts 24 hours. Nothing in your spam folder either? Send a fresh one:
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm leading-relaxed text-body">
+                  That link cannot be used again — links work once and last 24 hours.
+                </p>
+                <p className="text-xs leading-relaxed text-muted">
+                  Type the address you signed up with and a fresh link is on its way.
+                </p>
+                <input
+                  className="field"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@company.com"
+                  aria-label="Email address"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                />
+              </>
+            )}
             {error ? (
               <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
             ) : null}
             {notice ? <p className="rounded-lg border border-brand/30 bg-brand-tint p-2.5 text-xs text-body">{notice}</p> : null}
-            <button type="button" className="btn-primary w-full" disabled={busy} onClick={() => void resend()}>
+            <button
+              type="button"
+              className="btn-primary w-full"
+              disabled={busy || !(unverifiedEmail ?? email)}
+              onClick={() => void resend()}
+            >
               {busy ? 'Working…' : 'Send it again'}
             </button>
             <button

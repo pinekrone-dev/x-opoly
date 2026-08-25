@@ -1049,7 +1049,15 @@ export function createApp({ db, storage, env = {} }) {
     if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
     try {
       const origin = new URL(c.req.url).origin
-      return c.json(await createCheckout(db, env, { teamId: user.teamId, email: user.email, origin }))
+      const body = await c.req.json().catch(() => ({}))
+      return c.json(
+        await createCheckout(db, env, {
+          teamId: user.teamId,
+          email: user.email,
+          origin,
+          hosted: Boolean(body?.hosted),
+        }),
+      )
     } catch (error) {
       if (error instanceof BillingError) return c.json({ error: error.message }, 502)
       throw error

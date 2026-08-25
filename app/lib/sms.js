@@ -84,6 +84,6 @@ export async function sendSms(to, body, { env = {}, fetchImpl = fetch, timeout =
 }
 
 /** The message a person actually receives. */
-export function codeMessage(code, appName = 'SiteSurvey CRE') {
+export function codeMessage(code, appName = 'Land Quotient') {
   return `${code} is your ${appName} sign-in code. It expires in 10 minutes. If you did not try to sign in, change your password.`
 }

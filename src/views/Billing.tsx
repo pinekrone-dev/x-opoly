@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import CheckoutPanel from '../components/CheckoutPanel'
+import { BrandPin } from '../components/BrandMark'
 import { navigate } from '../lib/router'
 import type { Account, BillingStatus } from '../types'
 
@@ -17,12 +18,8 @@ function Frame({ children }: { children: React.ReactNode }) {
     <div className="grid min-h-full place-items-center overflow-y-auto bg-paper p-6">
       <div className="panel w-full max-w-lg p-7">
         <div className="mb-5 flex items-center gap-2.5">
-          <span className="grid h-9 w-9 place-items-center rounded-lg bg-brand text-white" aria-hidden>
-            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
-            </svg>
-          </span>
-          <p className="text-sm font-semibold text-ink">SiteSurvey CRE</p>
+          <BrandPin size={36} />
+          <p className="text-sm font-semibold text-ink">Land Quotient</p>
         </div>
         {children}
       </div>
