@@ -56,10 +56,9 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     radius: number
   } | null>(null)
   /**
-   * The phone layout's picture-in-picture map. Below `lg` the pipeline and
-   * site details own the screen and the map rides the top-right corner as a
-   * thumbnail; tapping it — or arming any action that needs a map click —
-   * expands it to fill the tab. On desktop this state is inert.
+   * The phone layout's map. Below `lg` the pipeline and site details own the
+   * screen; the header's Map button — or arming any action that needs a map
+   * click — opens the map full-screen. On desktop this state is inert.
    */
   const [mapExpanded, setMapExpanded] = useState(false)
   /** Census pull for the legend's demographics control, cached per survey. */
@@ -370,6 +369,19 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 </button>
               ))}
             </nav>
+            {tab === 'map' || tab === 'tour' ? (
+              <button
+                type="button"
+                className="btn-secondary flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs lg:hidden"
+                aria-label="Open the map"
+                onClick={() => setMapExpanded(true)}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
+                </svg>
+                Map
+              </button>
+            ) : null}
             <button type="button" className="btn-primary shrink-0 py-1.5" onClick={() => setAdding(true)} aria-label="Add site">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
                 <path d="M12 5v14M5 12h14" />
@@ -402,14 +414,10 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
               {sidebar}
             </div>
 
-            {/* The map: the right column on desktop; on a phone a floating
-                thumbnail in the top-right that expands to fill the tab. */}
+            {/* The map: the right column on desktop; on a phone it lives
+                behind the header's Map button, opening full-screen. */}
             <div
-              className={`${
-                mapExpanded
-                  ? 'absolute inset-0 z-[750]'
-                  : 'absolute right-2 top-14 z-[650] h-40 w-36 overflow-hidden rounded-xl border border-line shadow-lg'
-              } bg-paper lg:static lg:z-auto lg:h-full lg:w-full lg:overflow-visible lg:rounded-none lg:border-0 lg:shadow-none ${
+              className={`${mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'} bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full ${
                 dropPin || placing || zoneMode === 'armed' ? 'cursor-crosshair' : ''
               }`}
             >
@@ -431,14 +439,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 )
                 return mapExpanded ? legend : <div className="hidden lg:block">{legend}</div>
               })()}
-              {!mapExpanded ? (
-                <button
-                  type="button"
-                  className="absolute inset-0 z-[500] lg:hidden"
-                  aria-label="Expand the map"
-                  onClick={() => setMapExpanded(true)}
-                />
-              ) : (
+              {mapExpanded ? (
                 <button
                   type="button"
                   className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
@@ -449,7 +450,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                   </svg>
                   Close map
                 </button>
-              )}
+              ) : null}
               <MapCanvas
                 stages={stages}
                 zones={zones}
@@ -503,8 +504,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
         {tab === 'tour' && (
           <div className="relative h-full min-h-0 lg:grid lg:grid-cols-[24rem_minmax(0,1fr)] lg:gap-4 lg:p-4">
-            {/* The planner is the phone's main surface; the route preview
-                floats top-right and expands on tap, as on the map tab. */}
+            {/* The planner is the phone's main surface; the route map lives
+                behind the header's Map button, as on the map tab. */}
             <div className="h-full min-h-0 overflow-y-auto lg:overflow-visible">
               <TourPlanner
                 surveyId={survey.id}
@@ -519,19 +520,10 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             </div>
             <div
               className={`${
-                mapExpanded
-                  ? 'absolute inset-0 z-[750]'
-                  : 'absolute right-2 top-14 z-[650] h-40 w-36 overflow-hidden rounded-xl border border-line shadow-lg'
-              } bg-paper lg:static lg:z-auto lg:h-full lg:w-full lg:overflow-hidden lg:rounded-xl lg:border lg:border-line lg:bg-surface lg:shadow-sm`}
+                mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'
+              } bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full lg:overflow-hidden lg:rounded-xl lg:border lg:border-line lg:bg-surface lg:shadow-sm`}
             >
-              {!mapExpanded ? (
-                <button
-                  type="button"
-                  className="absolute inset-0 z-[500] lg:hidden"
-                  aria-label="Expand the route map"
-                  onClick={() => setMapExpanded(true)}
-                />
-              ) : (
+              {mapExpanded ? (
                 <button
                   type="button"
                   className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
@@ -542,7 +534,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                   </svg>
                   Close map
                 </button>
-              )}
+              ) : null}
               <MapCanvas
                 stages={stages}
                 properties={visibleProperties}

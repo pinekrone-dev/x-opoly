@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
+import MapLegend from '../components/MapLegend'
 import PropertyPanel from '../components/PropertyPanel'
 import { api } from '../api'
 import type { AppFeatures, Demographics, Property, SharePayload } from '../types'
@@ -15,8 +16,10 @@ export default function ShareView({ token, features }: { token: string; features
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [demographics, setDemographics] = useState<Demographics | null>(null)
-  /** Phone-only: the map floats top-right as a thumbnail until tapped. */
+  /** Phone-only: the map opens full-screen from the header's Map view button. */
   const [mapExpanded, setMapExpanded] = useState(false)
+  /** Stage rows the client has toggled off in the legend — local, harmless. */
+  const [hiddenStageIds, setHiddenStageIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     api
@@ -78,6 +81,10 @@ export default function ShareView({ token, features }: { token: string; features
 
   const { survey, properties } = payload
   const stages = (payload.stages ?? []).map((stage) => ({ ...stage, position: 0, hidden: false }))
+  const stagesWithHidden = stages.map((stage) => ({ ...stage, hidden: hiddenStageIds.has(stage.id) }))
+  const visibleProperties = (properties as Property[]).filter(
+    (property) => !property.stageId || !hiddenStageIds.has(property.stageId),
+  )
   const zones = payload.zones ?? []
   const accent = survey.brandColor || '#14b8a6'
 
@@ -100,14 +107,29 @@ export default function ShareView({ token, features }: { token: string; features
             </p>
           </div>
         </div>
-        <p className="text-xs text-muted">
-          {properties.length} site{properties.length === 1 ? '' : 's'}
-          {survey.expiresAt && ` · link valid to ${shortDate(survey.expiresAt)}`}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="hidden text-xs text-muted sm:block">
+            {properties.length} site{properties.length === 1 ? '' : 's'}
+            {survey.expiresAt && ` · link valid to ${shortDate(survey.expiresAt)}`}
+          </p>
+          {/* The phone's door to the map: the panel reads full-width and the
+              map opens on demand, full-screen, legend and all. */}
+          <button
+            type="button"
+            className="btn-secondary flex items-center gap-1.5 px-3 py-1.5 text-xs lg:hidden"
+            onClick={() => setMapExpanded(true)}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+              <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
+            </svg>
+            Map view
+          </button>
+        </div>
       </header>
 
-      {/* On a phone the shortlist reads full-width and the map floats in the
-          top-right corner, expanding on tap; on desktop they share the row. */}
+      {/* On a phone the shortlist and site details read full-width; the map
+          lives behind the header's "Map view" button, opening full-screen
+          with the legend. On desktop they share the row. */}
       <div className="relative min-h-0 flex-1 lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]">
         <div className="scrollbar-thin h-full min-h-0 overflow-y-auto border-line bg-surface lg:border-r">
           {selected ? (
@@ -153,19 +175,10 @@ export default function ShareView({ token, features }: { token: string; features
 
         <div
           className={`${
-            mapExpanded
-              ? 'absolute inset-0 z-[750]'
-              : 'absolute right-2 top-2 z-[650] h-40 w-36 overflow-hidden rounded-xl border border-line shadow-lg'
-          } bg-paper lg:static lg:z-auto lg:h-full lg:w-full lg:overflow-visible lg:rounded-none lg:border-0 lg:shadow-none`}
+            mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'
+          } bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full`}
         >
-          {!mapExpanded ? (
-            <button
-              type="button"
-              className="absolute inset-0 z-[500] lg:hidden"
-              aria-label="Expand the map"
-              onClick={() => setMapExpanded(true)}
-            />
-          ) : (
+          {mapExpanded ? (
             <button
               type="button"
               className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
@@ -176,11 +189,26 @@ export default function ShareView({ token, features }: { token: string; features
               </svg>
               Close map
             </button>
-          )}
-          <MapCanvas
-            stages={stages}
-            zones={zones}
+          ) : null}
+          <MapLegend
+            stages={stagesWithHidden}
             properties={properties as Property[]}
+            zones={zones}
+            readOnly
+            onToggleStage={(stage) =>
+              setHiddenStageIds((current) => {
+                const next = new Set(current)
+                if (next.has(stage.id)) next.delete(stage.id)
+                else next.add(stage.id)
+                return next
+              })
+            }
+            onDeleteZone={() => undefined}
+          />
+          <MapCanvas
+            stages={stagesWithHidden}
+            zones={zones}
+            properties={visibleProperties}
             selectedId={selectedId}
             onSelect={(propertyId) => {
               setSelectedId(propertyId)

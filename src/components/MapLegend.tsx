@@ -19,6 +19,7 @@ export default function MapLegend({
   onDeleteZone,
   demographics,
   onDemographics,
+  readOnly = false,
 }: {
   stages: DealStage[]
   properties: Property[]
@@ -28,6 +29,8 @@ export default function MapLegend({
   /** The choropleth control: which metric shades the map, over what radius. */
   demographics?: { colorBy: string | null; radius: number; busy: boolean } | null
   onDemographics?: (colorBy: string | null, radius: number) => void
+  /** The client's legend: stage toggles work, but nothing can be removed. */
+  readOnly?: boolean
 }) {
   // Collapsed by default on a phone: an open legend covers half the map.
   const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024)
@@ -101,16 +104,18 @@ export default function MapLegend({
                 <span className="min-w-0 flex-1 truncate text-body">
                   {zone.label} · {zone.radiusMiles} mi
                 </span>
-                <button
-                  type="button"
-                  className="btn-ghost px-1 py-0.5 text-faint hover:text-rose-600"
-                  onClick={() => onDeleteZone(zone.id)}
-                  aria-label={`Remove the ${zone.label} zone`}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                    <path d="M18 6 6 18M6 6l12 12" />
-                  </svg>
-                </button>
+                {readOnly ? null : (
+                  <button
+                    type="button"
+                    className="btn-ghost px-1 py-0.5 text-faint hover:text-rose-600"
+                    onClick={() => onDeleteZone(zone.id)}
+                    aria-label={`Remove the ${zone.label} zone`}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
               </div>
             ))}
 
