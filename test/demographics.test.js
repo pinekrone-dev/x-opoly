@@ -179,6 +179,85 @@ describe('finding block groups', () => {
     )
   })
 
+  test('the polygon layer is picked over the labels layer of the same name', async () => {
+    // TIGERweb lists "Census Block Groups Labels" before "Census Block Groups",
+    // so a loose name match lands on the labels and the query comes back with
+    // nothing — which reads as "this area has no census coverage".
+    resetLayerCache()
+    let queried = null
+    const fetchImpl = async (url) => {
+      if (!url.includes('/query')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            layers: [
+              { id: 11, name: 'Census Block Groups Labels' },
+              { id: 12, name: 'Census Block Groups' },
+            ],
+          }),
+        }
+      }
+      queried = url
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          features: [
+            {
+              attributes: { GEOID: '1', STATE: '48', COUNTY: '453', CENTLAT: '30.27', CENTLON: '-97.74' },
+              geometry: null,
+            },
+          ],
+        }),
+      }
+    }
+
+    await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.match(queried, /MapServer\/12\/query/, 'the labels layer holds no polygons to return')
+  })
+
+  test('the geometry is asked for in the format every ArcGIS server speaks', async () => {
+    // `f=geojson` is optional, and this MapServer answers it with an error
+    // object and HTTP 200 — so `features` was simply absent and the failure
+    // surfaced as an empty area rather than a rejected request.
+    resetLayerCache()
+    let queried = null
+    const fetchImpl = withLayerLookup((url) => {
+      queried = url
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          features: [
+            {
+              attributes: { GEOID: '1', STATE: '48', COUNTY: '453', CENTLAT: '30.27', CENTLON: '-97.74' },
+            },
+          ],
+        }),
+      }
+    })
+
+    await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.match(queried, /[?&]f=json(&|$)/, 'esriJSON is the format that is always supported')
+  })
+
+  test('an ArcGIS error carried in a 200 is reported, not read as empty coverage', async () => {
+    resetLayerCache()
+    const fetchImpl = withLayerLookup({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        error: { code: 400, message: 'Unable to complete operation.', details: [] },
+      }),
+    })
+
+    await assert.rejects(
+      () => fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl }),
+      /Unable to complete operation/,
+    )
+  })
+
   test('esriJSON is read as readily as GeoJSON', async () => {
     // ArcGIS answers `attributes`, not `properties`. Reading only one shape
     // dropped every feature and looked identical to empty coverage.

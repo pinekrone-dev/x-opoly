@@ -34,6 +34,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The `secrets` context is not available in a step's `if`, so a condition
+      # written against it is a syntax error that kills the whole run before
+      # any job starts. Reduce the secret to a yes/no here — in a step that
+      # holds it and nothing else — and branch on that instead.
+      - name: Is a deploy token configured?
+        id: token
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -51,14 +66,14 @@ jobs:
       # tests every push; it just does not deploy, rather than failing red on
       # a secret that was never meant to exist.
       - name: Deploy the Worker
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+        if: steps.token.outputs.present == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Note that deploying was skipped
-        if: ${{ secrets.CLOUDFLARE_API_TOKEN == '' }}
+        if: steps.token.outputs.present == 'false'
         run: |
           echo "CLOUDFLARE_API_TOKEN is not set, so this run built and tested"
           echo "the app but did not deploy it."

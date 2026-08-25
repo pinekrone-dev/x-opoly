@@ -47,8 +47,14 @@ async function findBlockGroupLayer(fetchImpl, timeout) {
 
   // "Census Block Groups" in current vintages; matched loosely so a rename
   // does not break it again.
+  //
+  // Every TIGERweb theme ships twice — the polygons and a "… Labels" layer
+  // that carries the same names — and the labels come first in the list, so a
+  // loose match lands on them. Querying that layer returns nothing useful,
+  // which looks exactly like an area with no block groups in it.
+  const named = layers.filter((layer) => /block\s*group/i.test(String(layer?.name ?? '')))
   const match =
-    layers.find((layer) => /block\s*group/i.test(String(layer?.name ?? ''))) ?? null
+    named.find((layer) => !/label/i.test(String(layer?.name ?? ''))) ?? named[0] ?? null
   if (!match) throw new Error('TIGERweb has no block group layer in this service')
 
   blockGroupLayer = match.id
@@ -127,7 +133,16 @@ async function withTimeout(fetchImpl, url, timeout, label) {
       headers: { accept: 'application/json' },
     })
     if (!response.ok) throw new Error(`${label} HTTP ${response.status}`)
-    return await response.json()
+    const body = await response.json()
+
+    // ArcGIS reports its own failures in the body with HTTP 200. Left
+    // unchecked they arrive downstream as missing fields and get reported as
+    // "no data for that area", which sends you looking in the wrong place.
+    const failure = !Array.isArray(body) ? body?.error : null
+    if (failure) {
+      throw new Error(`${label}: ${failure.message ?? 'request rejected'}`)
+    }
+    return body
   } finally {
     if (timer) clearTimeout(timer)
   }
@@ -153,11 +168,18 @@ export async function fetchBlockGroups(lat, lng, miles, { fetchImpl = fetch, tim
   url.searchParams.set('spatialRel', 'esriSpatialRelIntersects')
   url.searchParams.set('outFields', '*')
   url.searchParams.set('returnGeometry', 'true')
-  url.searchParams.set('f', 'geojson')
+  // esriJSON, not GeoJSON. `f=geojson` is an optional output format that this
+  // MapServer answers with an error object and HTTP 200, so the features array
+  // simply came back missing — again indistinguishable from an empty area.
+  // `f=json` is the format every ArcGIS server supports, and the parser below
+  // already reads its `attributes` and `rings`.
+  url.searchParams.set('f', 'json')
 
   const body = await withTimeout(fetchImpl, url.toString(), timeout, 'TIGERweb')
   const features = Array.isArray(body?.features) ? body.features : []
-  if (features.length === 0) throw new Error('TIGERweb returned no block groups for that area')
+  if (features.length === 0) {
+    throw new Error(`TIGERweb layer ${layer} returned no block groups for that area`)
+  }
 
   const groups = features
     .map((feature) => {
