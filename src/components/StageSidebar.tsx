@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { DealStage, Property } from '../types'
+import { METRIC_DEFINITIONS } from './DemographicsPanel'
+import type { DealStage, Property, Zone } from '../types'
 
 /**
  * The pipeline sidebar: sites grouped under the stages the broker named.
@@ -13,6 +14,12 @@ import type { DealStage, Property } from '../types'
 interface Props {
   /** Arms click-to-place for a new zone; the map click opens the form. */
   onStartZone?: () => void
+  /** The survey's zones, listed in the data catalog below the pipeline. */
+  zones?: Zone[]
+  onDeleteZone?: (id: string) => void
+  /** The demographics layer control, part of the data catalog. */
+  demographics?: { colorBy: string | null; radius: number; busy: boolean } | null
+  onDemographics?: (colorBy: string | null, radius: number) => void
   /** Set once the map has been clicked; the zone form renders here. */
   pendingZone?: { lat: number; lng: number } | null
   onSaveZone?: (zone: { label: string; radiusMiles: number }) => void
@@ -37,6 +44,10 @@ export default function StageSidebar({
   onToggleHidden,
   onAddStage,
   onStartZone,
+  zones,
+  onDeleteZone,
+  demographics,
+  onDemographics,
   pendingZone = null,
   onSaveZone,
   onCancelZone,
@@ -312,6 +323,75 @@ export default function StageSidebar({
             ) : null}
           </ul>
         </section>
+
+        {/* The data catalog: everything drawn on the map beyond the pins. */}
+        {demographics || (zones && zones.length > 0) ? (
+          <section className="border-t border-line px-3 py-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted">Data layers</h3>
+
+            {demographics && onDemographics ? (
+              <div className="mt-2">
+                <p className="mb-1 text-[11px] font-medium text-body">Demographics</p>
+                <select
+                  className="field w-full px-2 py-1 text-xs"
+                  aria-label="Shade the map by a census metric"
+                  value={demographics.colorBy ?? ''}
+                  onChange={(event) => onDemographics(event.target.value || null, demographics.radius)}
+                >
+                  <option value="">Off</option>
+                  {METRIC_DEFINITIONS.map((metric) => (
+                    <option key={metric.key} value={metric.key}>
+                      {metric.label}
+                    </option>
+                  ))}
+                </select>
+                {demographics.colorBy ? (
+                  <div className="mt-1.5 flex gap-1">
+                    {[1, 3, 5].map((miles) => (
+                      <button
+                        key={miles}
+                        type="button"
+                        className={`tab px-2 py-0.5 text-xs ${demographics.radius === miles ? 'tab-active' : ''}`}
+                        onClick={() => onDemographics(demographics.colorBy, miles)}
+                      >
+                        {miles} mi
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {demographics.busy ? <p className="mt-1 text-[11px] text-faint">Loading census data…</p> : null}
+              </div>
+            ) : null}
+
+            {zones && zones.length > 0 ? (
+              <div className="mt-3">
+                <p className="mb-1 text-[11px] font-medium text-body">Zones</p>
+                {zones.map((zone) => (
+                  <div key={zone.id} className="flex items-center gap-2 py-1 text-xs">
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-dashed"
+                      style={{ borderColor: zone.color }}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 flex-1 truncate text-body">
+                      {zone.label} · {zone.radiusMiles} mi
+                    </span>
+                    {onDeleteZone ? (
+                      <button
+                        type="button"
+                        className="btn-ghost px-1 py-0.5 text-faint hover:text-rose-600"
+                        onClick={() => onDeleteZone(zone.id)}
+                        aria-label={`Remove the ${zone.label} zone`}
+                      >
+                        <Times />
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
       </div>
     </div>
   )

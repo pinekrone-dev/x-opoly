@@ -228,6 +228,11 @@ export const COLUMN_ADDITIONS = [
   ['surveys', 'share_demographics', 'INTEGER NOT NULL DEFAULT 0'],
   ['surveys', 'share_qr', 'INTEGER NOT NULL DEFAULT 1'],
 
+  // The last routed tour, as JSON: road geometry, legs, and the stop order.
+  // Saved so repeat views (and the client's shared link) reuse the routed
+  // path instead of calling the routing APIs again.
+  ['surveys', 'tour_plan', 'TEXT'],
+
   // Tour configuration lives on the survey: one planned tour per survey.
   ['surveys', 'tour_start_time', 'TEXT'],
   ['surveys', 'tour_stop_minutes', 'INTEGER'],

@@ -79,7 +79,7 @@ describe('configuration and exemptions', () => {
 })
 
 describe('creating a checkout', () => {
-  test('sends the $9/month inline price, the team id, and the embedded return url', async () => {
+  test('sends the $29/month inline price, the team id, and the embedded return url', async () => {
     const fetchImpl = stubFetch({ body: { client_secret: 'cs_secret', url: null } })
     const result = await createCheckout(db, ENV, {
       teamId: 'team-1',
@@ -97,7 +97,7 @@ describe('creating a checkout', () => {
 
     const body = decodeURIComponent(init.body)
     assert.ok(body.includes('mode=subscription'))
-    assert.ok(body.includes('line_items[0][price_data][unit_amount]=900'))
+    assert.ok(body.includes('line_items[0][price_data][unit_amount]=2900'))
     assert.ok(body.includes('line_items[0][price_data][recurring][interval]=month'))
     assert.ok(body.includes('client_reference_id=team-1'))
     assert.ok(body.includes('subscription_data[metadata][team_id]=team-1'))

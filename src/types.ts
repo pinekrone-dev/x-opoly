@@ -288,6 +288,8 @@ export interface SharePayload {
   stages?: { id: string; name: string; color: string }[]
   zones?: Zone[]
   properties: Property[]
+  /** The broker's saved tour: the routed path and the stop order, if planned. */
+  tourPlan?: { geometry: [number, number][]; stopIds: string[] } | null
 }
 
 export interface NearbyBusiness {

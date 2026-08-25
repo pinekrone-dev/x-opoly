@@ -12,6 +12,7 @@ import type { Demographics, MetricDefinition, Property } from '../types'
 
 export const METRIC_DEFINITIONS: MetricDefinition[] = [
   { key: 'population', label: 'Population', format: 'count' },
+  { key: 'populationDensity', label: 'Density /mi²', format: 'count' },
   { key: 'medianHouseholdIncome', label: 'Med. Income', format: 'money', approximate: true },
   { key: 'households', label: 'Households', format: 'count' },
   { key: 'renterShare', label: 'Renters', format: 'percent' },
@@ -19,6 +20,31 @@ export const METRIC_DEFINITIONS: MetricDefinition[] = [
   { key: 'educationShare', label: 'Bachelor’s+', format: 'percent' },
   { key: 'medianHomeValue', label: 'Home Value', format: 'money', approximate: true },
 ]
+
+/**
+ * A tapped block group's numbers, as popup HTML. The metric currently
+ * shading the map leads in bold; the rest follow for context.
+ */
+export function areaInfoHtml(
+  metrics: Record<string, number | null> | null | undefined,
+  highlightKey?: string,
+): string | null {
+  if (!metrics) return null
+  const ordered = [...METRIC_DEFINITIONS].sort((a, b) =>
+    a.key === highlightKey ? -1 : b.key === highlightKey ? 1 : 0,
+  )
+  const rows = ordered
+    .filter((definition) => metrics[definition.key] != null)
+    .map(
+      (definition) =>
+        `<div style="display:flex;justify-content:space-between;gap:12px${
+          definition.key === highlightKey ? ';font-weight:700' : ''
+        }"><span>${definition.label}</span><span>${formatMetric(metrics[definition.key], definition.format)}</span></div>`,
+    )
+    .join('')
+  if (!rows) return null
+  return `<div style="font-size:12px;min-width:170px;line-height:1.6"><div style="font-weight:600;margin-bottom:4px">Census block group</div>${rows}</div>`
+}
 
 export function formatMetric(value: number | null | undefined, format: MetricDefinition['format']) {
   if (value == null || !Number.isFinite(value)) return '—'

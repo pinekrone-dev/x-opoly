@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { METRIC_DEFINITIONS } from './DemographicsPanel'
+import { METRIC_DEFINITIONS, colorFor, formatMetric } from './DemographicsPanel'
 import type { DealStage, Property, Zone } from '../types'
 
 /**
@@ -11,6 +11,23 @@ import type { DealStage, Property, Zone } from '../types'
  * created and removed here too, because a boundary belongs to the map, not
  * to any one site.
  */
+/** The gradient bar with its endpoints in real units. */
+function DemographicScale({ colorBy, scale }: { colorBy: string; scale: { min: number; max: number } }) {
+  const definition = METRIC_DEFINITIONS.find((metric) => metric.key === colorBy)
+  const stops = [0, 0.25, 0.5, 0.75, 1]
+    .map((t) => colorFor(scale.min + t * (scale.max - scale.min), scale.min, scale.max))
+    .join(', ')
+  return (
+    <div className="mt-1.5 px-0.5">
+      <div className="h-2 rounded-full" style={{ background: `linear-gradient(to right, ${stops})` }} aria-hidden />
+      <div className="mt-0.5 flex justify-between text-[10px] text-faint">
+        <span>{formatMetric(scale.min, definition?.format ?? 'count')}</span>
+        <span>{formatMetric(scale.max, definition?.format ?? 'count')}</span>
+      </div>
+    </div>
+  )
+}
+
 export default function MapLegend({
   stages,
   properties,
@@ -27,7 +44,13 @@ export default function MapLegend({
   onToggleStage: (stage: DealStage) => void
   onDeleteZone: (id: string) => void
   /** The choropleth control: which metric shades the map, over what radius. */
-  demographics?: { colorBy: string | null; radius: number; busy: boolean } | null
+  demographics?: {
+    colorBy: string | null
+    radius: number
+    busy: boolean
+    /** The active shading's value range, drawn as the legend's colour scale. */
+    scale?: { min: number; max: number } | null
+  } | null
   onDemographics?: (colorBy: string | null, radius: number) => void
   /** The client's legend: stage toggles work, but nothing can be removed. */
   readOnly?: boolean
@@ -65,6 +88,7 @@ export default function MapLegend({
             </button>
           </div>
 
+          {stages.length > 0 || unstaged > 0 ? (
           <ul className="mt-2">
             {stages.map((stage) => (
               <li key={stage.id}>
@@ -91,7 +115,9 @@ export default function MapLegend({
               </li>
             ) : null}
           </ul>
+          ) : null}
 
+          {zones.length > 0 ? (
           <div className="mt-2 border-t border-line pt-2">
             <p className="label mb-1">Zones</p>
             {zones.map((zone) => (
@@ -118,38 +144,52 @@ export default function MapLegend({
                 )}
               </div>
             ))}
-
           </div>
+          ) : null}
 
-          {demographics && onDemographics ? (
+          {demographics && (readOnly ? demographics.colorBy : onDemographics) ? (
             <div className="mt-2 border-t border-line pt-2">
               <p className="label mb-1">Demographics</p>
-              <select
-                className="field w-full px-2 py-1 text-xs"
-                aria-label="Shade the map by a census metric"
-                value={demographics.colorBy ?? ''}
-                onChange={(event) => onDemographics(event.target.value || null, demographics.radius)}
-              >
-                <option value="">Off</option>
-                {METRIC_DEFINITIONS.map((metric) => (
-                  <option key={metric.key} value={metric.key}>
-                    {metric.label}
-                  </option>
-                ))}
-              </select>
-              {demographics.colorBy ? (
-                <div className="mt-1.5 flex gap-1">
-                  {[1, 3, 5].map((miles) => (
-                    <button
-                      key={miles}
-                      type="button"
-                      className={`tab px-2 py-0.5 text-xs ${demographics.radius === miles ? 'tab-active' : ''}`}
-                      onClick={() => onDemographics(demographics.colorBy, miles)}
-                    >
-                      {miles} mi
-                    </button>
-                  ))}
-                </div>
+              {readOnly ? (
+                <p className="px-0.5 text-xs text-body">
+                  {METRIC_DEFINITIONS.find((metric) => metric.key === demographics.colorBy)?.label ??
+                    demographics.colorBy}
+                </p>
+              ) : (
+                <>
+                  <select
+                    className="field w-full px-2 py-1 text-xs"
+                    aria-label="Shade the map by a census metric"
+                    value={demographics.colorBy ?? ''}
+                    onChange={(event) => onDemographics?.(event.target.value || null, demographics.radius)}
+                  >
+                    <option value="">Off</option>
+                    {METRIC_DEFINITIONS.map((metric) => (
+                      <option key={metric.key} value={metric.key}>
+                        {metric.label}
+                      </option>
+                    ))}
+                  </select>
+                  {demographics.colorBy ? (
+                    <div className="mt-1.5 flex gap-1">
+                      {[1, 3, 5].map((miles) => (
+                        <button
+                          key={miles}
+                          type="button"
+                          className={`tab px-2 py-0.5 text-xs ${demographics.radius === miles ? 'tab-active' : ''}`}
+                          onClick={() => onDemographics?.(demographics.colorBy, miles)}
+                        >
+                          {miles} mi
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              )}
+
+              {/* The colour scale itself: what light-to-dark means in numbers. */}
+              {demographics.colorBy && demographics.scale ? (
+                <DemographicScale colorBy={demographics.colorBy} scale={demographics.scale} />
               ) : null}
               {demographics.busy ? <p className="mt-1 text-[11px] text-faint">Loading census data…</p> : null}
             </div>

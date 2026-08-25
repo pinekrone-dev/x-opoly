@@ -34,7 +34,7 @@ interface Props {
    * Census block groups shaded by a metric. Each entry carries its own colour,
    * already resolved, so the map does not need to know what is being shown.
    */
-  choropleth?: { geoid: string; geometry: unknown; color: string | null }[] | null
+  choropleth?: { geoid: string; geometry: unknown; color: string | null; info?: string | null }[] | null
   /** Rings drawn around a point, in miles. */
   rings?: { lat: number; lng: number; miles: number[] } | null
   /** Nearby businesses plotted as small secondary markers. */
@@ -334,7 +334,7 @@ export default function MapCanvas({
     const group = L.layerGroup()
     for (const area of choropleth) {
       if (!area.geometry || !area.color) continue
-      L.geoJSON(area.geometry as never, {
+      const shape = L.geoJSON(area.geometry as never, {
         style: {
           color: area.color,
           weight: 1,
@@ -344,8 +344,15 @@ export default function MapCanvas({
           // shading is context for the map, not a replacement for it.
           fillOpacity: 0.45,
         },
-        interactive: false,
-      }).addTo(group)
+        // Tappable when it has something to say — but never while a map
+        // click is armed for dropping a pin or placing a zone, when the
+        // click must fall through to the map itself.
+        interactive: Boolean(area.info) && !onMapClick,
+      })
+      if (area.info && !onMapClick) {
+        shape.bindPopup(area.info, { closeButton: true, maxWidth: 240 })
+      }
+      shape.addTo(group)
     }
     group.addTo(instance)
     // Behind the pins and the route, which must stay readable on top of it.
@@ -353,7 +360,7 @@ export default function MapCanvas({
       if ('bringToBack' in layer) (layer as L.Polygon).bringToBack()
     })
     shading.current = group
-  }, [choropleth])
+  }, [choropleth, onMapClick])
 
 
   // Start and end flags for the tour.

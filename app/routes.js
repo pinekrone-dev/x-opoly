@@ -10,6 +10,7 @@
 import { Hono } from 'hono'
 
 import { BUILD_COMMIT } from './lib/build-info.js'
+import { nowIso } from './lib/ids.js'
 
 import {
   STAGES,
@@ -906,7 +907,41 @@ export function createApp({ db, storage, env = {} }) {
     const end = anchor(body?.end ?? survey.tour?.end)
     const points = [...(start ? [start] : []), ...plan.stops, ...(end ? [end] : [])]
 
-    const routed = await routeLegs(points, { fetchImpl: fetch, env })
+    /*
+     * Route once, reuse forever. The routed path is keyed by the exact
+     * sequence of coordinates; the same tour viewed again — by the broker,
+     * or by the client through the shared link — reads the saved answer
+     * instead of calling the routing APIs. Replanning with different stops
+     * or anchors changes the key, routes fresh, and overwrites the save,
+     * which is how a mid-tour change reaches the client's map.
+     */
+    const routeKey = points.map((point) => `${point.lat.toFixed(6)},${point.lng.toFixed(6)}`).join(';')
+    let stored = null
+    try {
+      stored = JSON.parse((await db.get('SELECT tour_plan FROM surveys WHERE id = ?', [survey.id]))?.tour_plan ?? 'null')
+    } catch {
+      stored = null
+    }
+
+    let routed
+    if (stored?.key === routeKey && ['google', 'osrm'].includes(stored.source) && Array.isArray(stored.geometry)) {
+      routed = { legs: stored.legs, geometry: stored.geometry, source: stored.source, note: null }
+    } else {
+      routed = await routeLegs(points, { fetchImpl: fetch, env })
+      if (['google', 'osrm'].includes(routed.source)) {
+        await db.run('UPDATE surveys SET tour_plan = ? WHERE id = ?', [
+          JSON.stringify({
+            key: routeKey,
+            source: routed.source,
+            legs: routed.legs,
+            geometry: routed.geometry,
+            stopIds: plan.stops.map((stop) => stop.id),
+            savedAt: nowIso(),
+          }),
+          survey.id,
+        ])
+      }
+    }
 
     // Align drive times with stops: with a start anchor every stop has an
     // inbound leg; without one the first stop is where the day begins.
@@ -1000,7 +1035,7 @@ export function createApp({ db, storage, env = {} }) {
       status: state.status,
       periodEnd: state.periodEnd ?? null,
       portalAvailable: Boolean(row?.customer_id),
-      priceLabel: '$9 / month',
+      priceLabel: '$29 / month',
     })
   })
 
@@ -1092,7 +1127,21 @@ export function createApp({ db, storage, env = {} }) {
       }
       return c.json({ error: messages[result.reason], reason: result.reason }, result.reason === 'not_found' ? 404 : 410)
     }
-    return c.json(result)
+
+    // The saved tour rides the share payload, so the client's map draws the
+    // same routed path the broker planned — no routing call, and a replan
+    // updates this link the moment it happens.
+    let tourPlan = null
+    try {
+      const row = await db.get('SELECT tour_plan FROM surveys WHERE share_token = ?', [c.req.param('token')])
+      const parsed = JSON.parse(row?.tour_plan ?? 'null')
+      if (Array.isArray(parsed?.geometry) && parsed.geometry.length > 1) {
+        tourPlan = { geometry: parsed.geometry, stopIds: parsed.stopIds ?? [] }
+      }
+    } catch {
+      tourPlan = null
+    }
+    return c.json({ ...result, tourPlan })
   })
 
   // --- lookups -------------------------------------------------------------

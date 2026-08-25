@@ -279,6 +279,10 @@ function toGroup(feature, lat, lng) {
   const centroid = centroidOf(feature, props)
   if (!centroid) return null
 
+  // Land area, for population density. TIGERweb publishes AREALAND in m².
+  const landM2 = Number(props.AREALAND ?? props.arealand)
+  const areaSqMi = Number.isFinite(landM2) && landM2 > 0 ? landM2 / 2589988.110336 : null
+
   return {
     geoid: String(props.GEOID ?? props.geoid ?? ''),
     state: String(props.STATE ?? props.state ?? ''),
@@ -288,6 +292,7 @@ function toGroup(feature, lat, lng) {
     lat: centroid.lat,
     lng: centroid.lng,
     miles: haversineMiles({ lat, lng }, centroid),
+    areaSqMi,
     geometry: toGeoJson(feature.geometry),
   }
 }
@@ -483,18 +488,32 @@ export async function demographicsFor(
 
     const acs = await fetchAcs(groups, { fetchImpl, timeout, env })
 
-    const areas = groups.map((group) => ({
-      geoid: group.geoid,
-      lat: group.lat,
-      lng: group.lng,
-      miles: Math.round(group.miles * 100) / 100,
-      metrics: acs.get(group.geoid) ?? null,
-      geometry: includeGeometry ? group.geometry : null,
-    }))
+    const areas = groups.map((group) => {
+      const record = acs.get(group.geoid) ?? null
+      // Density is people per square mile of land — the map-readable figure;
+      // raw population just highlights whichever block group happens to be big.
+      const metrics =
+        record && group.areaSqMi && record.population != null
+          ? { ...record, populationDensity: Math.round(record.population / group.areaSqMi) }
+          : record
+      return {
+        geoid: group.geoid,
+        lat: group.lat,
+        lng: group.lng,
+        miles: Math.round(group.miles * 100) / 100,
+        areaSqMi: group.areaSqMi ?? null,
+        metrics,
+        geometry: includeGeometry ? group.geometry : null,
+      }
+    })
 
     const rings = radii.map((miles) => {
       const inside = areas.filter((area) => area.miles <= miles && area.metrics)
       const { metrics, blockGroups } = aggregate(inside.map((area) => area.metrics))
+      const land = inside.reduce((sum, area) => sum + (area.areaSqMi ?? 0), 0)
+      if (metrics && land > 0 && metrics.population != null) {
+        metrics.populationDensity = Math.round(metrics.population / land)
+      }
       return { miles, metrics, blockGroups }
     })
 

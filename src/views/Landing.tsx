@@ -109,7 +109,7 @@ export default function Landing({
           </p>
           <div className="mt-7 flex items-center justify-center gap-3">
             <button type="button" className="btn-primary px-5 py-2.5" onClick={primaryCta}>
-              {selfServe ? 'Start for $9/month' : 'Sign in'}
+              {selfServe ? 'Start for $29/month' : 'Sign in'}
             </button>
             <a className="btn-ghost px-4 py-2.5" href="#features">
               See what it does
@@ -148,7 +148,7 @@ export default function Landing({
                 <div className="border-b border-line bg-brand-tint/60 p-6 text-center">
                   <p className="text-xs font-semibold uppercase tracking-wide text-brand-deep">SiteSurvey CRE</p>
                   <p className="mt-2 text-4xl font-bold text-ink">
-                    $9<span className="text-base font-medium text-muted"> / month</span>
+                    $29<span className="text-base font-medium text-muted"> / month</span>
                   </p>
                   <p className="mt-1 text-xs text-muted">per workspace, teammates included</p>
                 </div>
@@ -175,7 +175,7 @@ export default function Landing({
                   {selfServe ? (
                     <>
                       <button type="button" className="btn-primary w-full py-2.5" onClick={onGetStarted}>
-                        Subscribe — $9/month
+                        Subscribe — $29/month
                       </button>
                       <p className="mt-2.5 text-center text-[11px] text-faint">
                         Create your account, confirm your email, and pay securely by card. Promo codes are

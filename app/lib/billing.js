@@ -1,5 +1,5 @@
 /**
- * Stripe subscriptions, one per team, at $9/month.
+ * Stripe subscriptions, one per team, at $29/month.
  *
  * Plain fetch against the Stripe API — no SDK — so it runs unchanged on
  * Cloudflare Workers. Two design choices carry the weight:
@@ -84,14 +84,14 @@ async function stripe(env, path, { method = 'POST', params = null, fetchImpl = f
   return body
 }
 
-/** The subscription line: a configured price, or $9/month defined inline. */
+/** The subscription line: a configured price, or $29/month defined inline. */
 function lineItem(env) {
   if (env.STRIPE_PRICE_ID) return { price: env.STRIPE_PRICE_ID, quantity: 1 }
   return {
     quantity: 1,
     price_data: {
       currency: 'usd',
-      unit_amount: 900,
+      unit_amount: 2900,
       recurring: { interval: 'month' },
       product_data: { name: 'SiteSurvey CRE' },
     },

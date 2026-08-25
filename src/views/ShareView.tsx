@@ -4,7 +4,7 @@ import MapLegend from '../components/MapLegend'
 import PropertyPanel from '../components/PropertyPanel'
 import { api } from '../api'
 import type { AppFeatures, Demographics, Property, SharePayload } from '../types'
-import { colorFor } from '../components/DemographicsPanel'
+import { areaInfoHtml, colorFor } from '../components/DemographicsPanel'
 import { STAGE_META, fullAddress, displayName, rate, shortDate, sqft } from '../lib/format'
 
 /**
@@ -59,11 +59,17 @@ export default function ShareView({ token, features }: { token: string; features
     if (values.length === 0) return null
     const min = Math.min(...values)
     const max = Math.max(...values)
-    return shapes.map((area) => ({
-      geoid: area.geoid,
-      geometry: area.geometry,
-      color: colorFor(area.metrics?.population, min, max),
-    }))
+    return {
+      min,
+      max,
+      entries: shapes.map((area) => ({
+        geoid: area.geoid,
+        geometry: area.geometry,
+        color: colorFor(area.metrics?.population, min, max),
+        // The client can tap any shaded area for its numbers too.
+        info: areaInfoHtml(area.metrics, 'population'),
+      })),
+    }
   }, [demographics])
 
   if (error) {
@@ -117,12 +123,18 @@ export default function ShareView({ token, features }: { token: string; features
           <button
             type="button"
             className="btn-secondary flex items-center gap-1.5 px-3 py-1.5 text-xs lg:hidden"
-            onClick={() => setMapExpanded(true)}
+            onClick={() => setMapExpanded((open) => !open)}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-              <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
-            </svg>
-            Map view
+            {mapExpanded ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="M4 6h16 M4 12h16 M4 18h16" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
+              </svg>
+            )}
+            {mapExpanded ? 'List view' : 'Map view'}
           </button>
         </div>
       </header>
@@ -176,25 +188,23 @@ export default function ShareView({ token, features }: { token: string; features
         <div
           className={`${
             mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'
-          } bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full`}
+          } bg-paper lg:relative lg:z-auto lg:block lg:h-full lg:w-full`}
         >
-          {mapExpanded ? (
-            <button
-              type="button"
-              className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
-              onClick={() => setMapExpanded(false)}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-              Close map
-            </button>
-          ) : null}
           <MapLegend
             stages={stagesWithHidden}
             properties={properties as Property[]}
             zones={zones}
             readOnly
+            demographics={
+              choropleth
+                ? {
+                    colorBy: 'population',
+                    radius: 5,
+                    busy: false,
+                    scale: { min: choropleth.min, max: choropleth.max },
+                  }
+                : null
+            }
             onToggleStage={(stage) =>
               setHiddenStageIds((current) => {
                 const next = new Set(current)
@@ -218,7 +228,10 @@ export default function ShareView({ token, features }: { token: string; features
             }}
             tiles={features.tiles}
             basemaps={features.basemaps}
-            choropleth={choropleth}
+            choropleth={choropleth?.entries ?? null}
+            routeGeometry={payload.tourPlan?.geometry ?? null}
+            routeIds={payload.tourPlan?.stopIds}
+            routeColor={accent}
             labelPins
             fitKey={`${properties.length}-${mapExpanded}`}
           />

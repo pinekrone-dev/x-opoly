@@ -10,10 +10,11 @@ import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
 import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property, Survey, TourAnchor, TourPlan, Zone } from '../types'
-import { colorFor } from '../components/DemographicsPanel'
+import { areaInfoHtml, colorFor } from '../components/DemographicsPanel'
 import { buildTourBookFor } from '../lib/tourBookPdf'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
+import { autoPhotoFromFlyer } from '../lib/flyerPhoto'
 
 type Tab = 'map' | 'list' | 'tour' | 'share'
 
@@ -132,11 +133,18 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
     const min = Math.min(...values)
     const max = Math.max(...values)
-    return inside.map((area) => ({
-      geoid: area.geoid,
-      geometry: area.geometry,
-      color: colorFor(area.metrics?.[view.colorBy], min, max),
-    }))
+    return {
+      // The scale rides along so the legend can say what the colours mean.
+      min,
+      max,
+      entries: inside.map((area) => ({
+        geoid: area.geoid,
+        geometry: area.geometry,
+        color: colorFor(area.metrics?.[view.colorBy], min, max),
+        // Tapping a shaded block group shows its actual numbers.
+        info: areaInfoHtml(area.metrics, view.colorBy),
+      })),
+    }
   }, [demoView])
 
   /**
@@ -311,6 +319,14 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       stages={stages}
       properties={properties}
       selectedId={selectedId}
+      zones={zones}
+      onDeleteZone={(zoneId) => void removeZone(zoneId)}
+      demographics={{
+        colorBy: demoView?.colorBy ?? null,
+        radius: demoView?.radius ?? 3,
+        busy: mapDemoBusy,
+      }}
+      onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
       onStartZone={() => setZoneMode('armed')}
       pendingZone={pendingZone}
       onSaveZone={(zone) => void saveZone(zone)}
@@ -373,13 +389,19 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
               <button
                 type="button"
                 className="btn-secondary flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs lg:hidden"
-                aria-label="Open the map"
-                onClick={() => setMapExpanded(true)}
+                aria-label={mapExpanded ? 'Back to the list' : 'Open the map'}
+                onClick={() => setMapExpanded((open) => !open)}
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                  <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
-                </svg>
-                Map
+                {mapExpanded ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M4 6h16 M4 12h16 M4 18h16" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2" />
+                  </svg>
+                )}
+                {mapExpanded ? 'List view' : 'Map'}
               </button>
             ) : null}
             <button type="button" className="btn-primary shrink-0 py-1.5" onClick={() => setAdding(true)} aria-label="Add site">
@@ -417,39 +439,46 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             {/* The map: the right column on desktop; on a phone it lives
                 behind the header's Map button, opening full-screen. */}
             <div
-              className={`${mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'} bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full ${
+              className={`${mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'} bg-paper lg:relative lg:z-auto lg:block lg:h-full lg:w-full ${
                 dropPin || placing || zoneMode === 'armed' ? 'cursor-crosshair' : ''
               }`}
             >
-              {(() => {
-                const legend = (
-                  <MapLegend
-                    stages={stages}
-                    properties={properties}
-                    zones={zones}
-                    onToggleStage={(stage) => void toggleStageHidden(stage)}
-                    onDeleteZone={(zoneId) => void removeZone(zoneId)}
-                    demographics={{
-                      colorBy: demoView?.colorBy ?? null,
-                      radius: demoView?.radius ?? 3,
-                      busy: mapDemoBusy,
-                    }}
-                    onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
-                  />
-                )
-                return mapExpanded ? legend : <div className="hidden lg:block">{legend}</div>
-              })()}
+              {/* The floating legend only exists where the sidebar's data
+                  catalog is not on screen: the phone's full-screen map. On
+                  desktop the left panel already says all of this. When the
+                  demographics layer is shaded, the legend carries its scale. */}
               {mapExpanded ? (
-                <button
-                  type="button"
-                  className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
-                  onClick={() => setMapExpanded(false)}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                    <path d="M18 6 6 18M6 6l12 12" />
-                  </svg>
-                  Close map
-                </button>
+                <MapLegend
+                  stages={stages}
+                  properties={properties}
+                  zones={zones}
+                  onToggleStage={(stage) => void toggleStageHidden(stage)}
+                  onDeleteZone={(zoneId) => void removeZone(zoneId)}
+                  demographics={{
+                    colorBy: demoView?.colorBy ?? null,
+                    radius: demoView?.radius ?? 3,
+                    busy: mapDemoBusy,
+                    scale: choropleth ? { min: choropleth.min, max: choropleth.max } : null,
+                  }}
+                  onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
+                />
+              ) : choropleth && demoView ? (
+                <div className="hidden lg:block">
+                  <MapLegend
+                    stages={[]}
+                    properties={[]}
+                    zones={[]}
+                    onToggleStage={() => undefined}
+                    onDeleteZone={() => undefined}
+                    readOnly
+                    demographics={{
+                      colorBy: demoView.colorBy,
+                      radius: demoView.radius,
+                      busy: false,
+                      scale: { min: choropleth.min, max: choropleth.max },
+                    }}
+                  />
+                </div>
               ) : null}
               <MapCanvas
                 stages={stages}
@@ -469,7 +498,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 onViewChange={setMapCenter}
                 tiles={features.tiles}
                 basemaps={features.basemaps}
-                choropleth={choropleth}
+                choropleth={choropleth?.entries ?? null}
                 rings={competition ? { ...competition.center, miles: competition.rings.map((ring) => ring.miles) } : null}
                 competitors={competition?.results}
                 fitKey={fitKey}
@@ -523,18 +552,6 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 mapExpanded ? 'absolute inset-0 z-[750]' : 'hidden'
               } bg-paper lg:static lg:z-auto lg:block lg:h-full lg:w-full lg:overflow-hidden lg:rounded-xl lg:border lg:border-line lg:bg-surface lg:shadow-sm`}
             >
-              {mapExpanded ? (
-                <button
-                  type="button"
-                  className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
-                  onClick={() => setMapExpanded(false)}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                    <path d="M18 6 6 18M6 6l12 12" />
-                  </svg>
-                  Close map
-                </button>
-              ) : null}
               <MapCanvas
                 stages={stages}
                 properties={visibleProperties}
@@ -557,7 +574,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 }
                 routeIds={tourOrder}
                 routeGeometry={tourPlan?.geometry ?? null}
-                choropleth={choropleth}
+                choropleth={choropleth?.entries ?? null}
                 routeColor={survey.brandColor}
                 fitKey={`tour-${properties.length}-${fitKey}`}
               />
@@ -635,6 +652,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             setAdding(false)
             setFitKey((key) => key + 1)
             if (message) setNotice(message)
+            // A flyer-born site gets its card photo from the flyer's first
+            // page, in the background — no cropping required.
+            void autoPhotoFromFlyer(property).then((updated) => {
+              if (updated) upsert(updated)
+            })
           }}
         />
       )}

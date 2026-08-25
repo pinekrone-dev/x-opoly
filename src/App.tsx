@@ -83,7 +83,7 @@ export default function App() {
       // If the billing endpoint itself fails, let the person in: the API's
       // own 402s still guard the data, and a broken check should not lock
       // a paying customer out.
-      .catch(() => setBilling({ configured: false, publishableKey: null, active: true, status: 'unknown', periodEnd: null, portalAvailable: false, priceLabel: '$9 / month' }))
+      .catch(() => setBilling({ configured: false, publishableKey: null, active: true, status: 'unknown', periodEnd: null, portalAvailable: false, priceLabel: '$29 / month' }))
   }, [session?.user, session?.billing.configured, billingVersion])
 
   const signedIn = useCallback(
