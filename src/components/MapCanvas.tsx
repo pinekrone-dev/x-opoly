@@ -13,6 +13,13 @@ interface Props {
   onMapClick?: (lat: number, lng: number) => void
   /** Reports where the map is looking, so a dropped flyer can land nearby. */
   onViewChange?: (center: { lat: number; lng: number }) => void
+  /** The survey's pipeline, for pin colours that match the sidebar. */
+  stages?: { id: string; color: string }[]
+  /** Tour start and end, drawn as their own flags — a tour begins at the
+   * office, and an invisible start point looks like a geocode that failed. */
+  anchors?: { start?: { lat: number; lng: number; label?: string } | null; end?: { lat: number; lng: number; label?: string } | null } | null
+  /** Labelled radius circles — non-competes, boundaries. */
+  zones?: { id: string; label: string; lat: number; lng: number; radiusMiles: number; color: string }[] | null
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
   /**
@@ -79,8 +86,15 @@ function rememberView(instance: L.Map) {
   }
 }
 
-function pinIcon(property: Property, index: number | null, selected: boolean): L.DivIcon {
-  const color = STAGE_META[property.stage]?.color ?? STAGE_META.prospect.color
+function pinIcon(
+  property: Property,
+  index: number | null,
+  selected: boolean,
+  stageColor?: string | null,
+): L.DivIcon {
+  // The survey's own pipeline colours the pin, so map, sidebar and dropdown
+  // all say the same thing; the legacy palette only covers a stage-less site.
+  const color = stageColor ?? STAGE_META[property.stage]?.color ?? STAGE_META.prospect.color
   const label = index == null ? '' : String(index + 1)
   // A site hidden from the client link stays on the broker's map, dimmed —
   // visible enough to manage, distinct enough that its state is never a guess.
@@ -113,6 +127,9 @@ export default function MapCanvas({
   onSelect,
   onMapClick,
   onViewChange,
+  stages,
+  anchors = null,
+  zones = null,
   routeIds,
   routeGeometry,
   routeColor = '#14b8a6',
@@ -134,6 +151,8 @@ export default function MapCanvas({
   const route = useRef<L.Polyline | null>(null)
   const shading = useRef<L.LayerGroup | null>(null)
   const ringLayer = useRef<L.LayerGroup | null>(null)
+  const anchorLayer = useRef<L.LayerGroup | null>(null)
+  const zoneLayer = useRef<L.LayerGroup | null>(null)
   const competitorLayer = useRef<L.LayerGroup | null>(null)
   const clickHandler = useRef(onMapClick)
   const selectHandler = useRef(onSelect)
@@ -213,7 +232,10 @@ export default function MapCanvas({
         position = [property.lat + step * Math.cos(angle), property.lng + step * Math.sin(angle)]
       }
       const routeIndex = order.indexOf(property.id)
-      const icon = pinIcon(property, routeIndex >= 0 ? routeIndex : null, property.id === selectedId)
+      const stageColor = property.stageId
+        ? stages?.find((stage) => stage.id === property.stageId)?.color ?? null
+        : null
+      const icon = pinIcon(property, routeIndex >= 0 ? routeIndex : null, property.id === selectedId, stageColor)
 
       let marker = markers.current.get(property.id)
       if (marker) {
@@ -237,7 +259,7 @@ export default function MapCanvas({
         markers.current.delete(id)
       }
     }
-  }, [properties, selectedId, routeIds])
+  }, [properties, selectedId, routeIds, stages])
 
   useEffect(() => {
     const instance = map.current
@@ -316,6 +338,80 @@ export default function MapCanvas({
     })
     shading.current = group
   }, [choropleth])
+
+
+  // Start and end flags for the tour.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    anchorLayer.current?.remove()
+    anchorLayer.current = null
+    if (!anchors || (!anchors.start && !anchors.end)) return
+
+    const group = L.layerGroup()
+    const flag = (point: { lat: number; lng: number; label?: string }, kind: 'start' | 'end') => {
+      const marker = L.marker([point.lat, point.lng], {
+        icon: L.divIcon({
+          className: 'anchor-pin',
+          html: `<div class="anchor-pin__body anchor-pin__body--${kind}">${kind === 'start' ? 'A' : 'B'}</div>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+        interactive: Boolean(point.label),
+        zIndexOffset: 500,
+      })
+      if (point.label) {
+        marker.bindTooltip(`${kind === 'start' ? 'Start' : 'End'}: ${point.label}`, {
+          direction: 'top',
+          offset: [0, -12],
+          className: 'site-tooltip',
+        })
+      }
+      marker.addTo(group)
+    }
+    if (anchors.start) flag(anchors.start, 'start')
+    if (anchors.end) flag(anchors.end, 'end')
+    group.addTo(instance)
+    anchorLayer.current = group
+  }, [anchors])
+
+
+  // Non-compete circles and other labelled zones.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+
+    zoneLayer.current?.remove()
+    zoneLayer.current = null
+    if (!zones || zones.length === 0) return
+
+    const group = L.layerGroup()
+    for (const zone of zones) {
+      const circle = L.circle([zone.lat, zone.lng], {
+        radius: zone.radiusMiles * 1609.34,
+        color: zone.color,
+        weight: 2,
+        dashArray: '6 4',
+        fillColor: zone.color,
+        fillOpacity: 0.08,
+        interactive: true,
+      })
+      // The label rides on the circle itself, always visible: an unlabelled
+      // dashed ring reads as a bug, a labelled one reads as a boundary.
+      circle.bindTooltip(`${zone.label} · ${zone.radiusMiles} mi`, {
+        permanent: true,
+        direction: 'center',
+        className: 'zone-label',
+      })
+      circle.addTo(group)
+    }
+    group.addTo(instance)
+    group.eachLayer((layer) => {
+      if ('bringToBack' in layer) (layer as L.Circle).bringToBack()
+    })
+    zoneLayer.current = group
+  }, [zones])
 
   // Radius rings around the site being scoped.
   useEffect(() => {

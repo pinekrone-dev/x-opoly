@@ -209,6 +209,37 @@
   transform: rotate(45deg);
 }
 
+.zone-label {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  color: rgb(120 53 15 / 0.9);
+  font-size: 11px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgb(255 255 255 / 0.9);
+}
+
+.anchor-pin__body {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 9999px;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgb(15 23 42 / 0.35);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.anchor-pin__body--start {
+  background: #16a34a;
+}
+
+.anchor-pin__body--end {
+  background: #0f172a;
+}
+
 .site-pin--selected .site-pin__body {
   transform: rotate(-45deg) scale(1.25);
   border-color: #0f172a;

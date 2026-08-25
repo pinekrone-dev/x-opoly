@@ -1,4 +1,14 @@
 /** The signed-in broker. The phone is only ever a hint, never the number. */
+/** A labelled radius circle — a non-compete, a boundary the client set. */
+export interface Zone {
+  id: string
+  label: string
+  lat: number
+  lng: number
+  radiusMiles: number
+  color: string
+}
+
 /** A one-time signup link for a colleague, shown on the Share tab. */
 export interface Invite {
   id: string
@@ -253,6 +263,8 @@ export interface SharePayload {
     expiresAt: string | null
     showDemographics?: boolean
   }
+  stages?: { id: string; name: string; color: string }[]
+  zones?: Zone[]
   properties: Property[]
 }
 

@@ -75,6 +75,8 @@ export default function ShareView({ token, features }: { token: string; features
   if (!payload) return <div className="grid min-h-full place-items-center text-sm text-muted">Loading the map…</div>
 
   const { survey, properties } = payload
+  const stages = (payload.stages ?? []).map((stage) => ({ ...stage, position: 0, hidden: false }))
+  const zones = payload.zones ?? []
   const accent = survey.brandColor || '#14b8a6'
 
   return (
@@ -105,7 +107,7 @@ export default function ShareView({ token, features }: { token: string; features
       <div className="grid min-h-0 flex-1 lg:grid-cols-[22rem_minmax(0,1fr)]">
         <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">
           {selected ? (
-            <PropertyPanel property={selected} readOnly onClose={() => setSelectedId(null)} />
+            <PropertyPanel property={selected} stages={stages} readOnly onClose={() => setSelectedId(null)} />
           ) : (
             <ul className="divide-y divide-line">
               {properties.map((property) => (
@@ -146,6 +148,8 @@ export default function ShareView({ token, features }: { token: string; features
         </div>
 
         <MapCanvas
+          stages={stages}
+          zones={zones}
           properties={properties as Property[]}
           selectedId={selectedId}
           onSelect={setSelectedId}

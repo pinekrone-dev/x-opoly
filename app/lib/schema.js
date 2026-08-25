@@ -115,6 +115,20 @@ export const SCHEMA_STATEMENTS = [
     used_at      TEXT
   )`,
 
+  // Labelled radius circles — a non-compete around an anchor tenant, a
+  // delivery boundary, a "client will not cross this road" line. Drawn on the
+  // broker's map and the client's alike.
+  `CREATE TABLE IF NOT EXISTS zones (
+    id           TEXT PRIMARY KEY,
+    survey_id    TEXT NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
+    label        TEXT NOT NULL,
+    lat          REAL NOT NULL,
+    lng          REAL NOT NULL,
+    radius_miles REAL NOT NULL,
+    color        TEXT NOT NULL DEFAULT '#f59e0b',
+    created_at   TEXT NOT NULL
+  )`,
+
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
   'CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id)',
@@ -122,6 +136,7 @@ export const SCHEMA_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id)',
   'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
   'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
+  'CREATE INDEX IF NOT EXISTS idx_zones_survey ON zones(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
 ]
 

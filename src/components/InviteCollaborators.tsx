@@ -88,10 +88,23 @@ export default function InviteCollaborators() {
 
       {minted ? (
         <div className="mt-3 rounded-lg border border-brand/30 bg-brand-tint p-3">
-          <p className="text-xs text-body">
-            Send this link to <strong className="text-ink">{minted.email}</strong>. It is shown only
-            once and works only for them.
-          </p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-xs text-body">
+              Send this link to <strong className="text-ink">{minted.email}</strong>. It is shown only
+              once and works only for them.
+            </p>
+            <button
+              type="button"
+              className="btn-ghost shrink-0 px-1.5 py-0.5 text-faint hover:text-body"
+              onClick={() => setMinted(null)}
+              aria-label="Dismiss this invitation link"
+              title="Done — hide the link"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
           <div className="mt-2 flex gap-2">
             <input className="field font-mono text-[11px]" readOnly value={minted.url} onFocus={(event) => event.target.select()} />
             <button type="button" className="btn-secondary whitespace-nowrap text-xs" onClick={() => void copy()}>

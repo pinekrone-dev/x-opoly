@@ -4,10 +4,10 @@ import { api } from '../api'
 import type {
   CompetitionResult,
   CustomField,
+  DealStage,
   Demographics,
   FlyerExtraction,
   Property,
-  Stage,
 } from '../types'
 import { STAGE_META, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 import CompetitionPanel from './CompetitionPanel'
@@ -21,10 +21,12 @@ import { directionsUrl } from '../lib/directions'
  * is the page everyone actually lands on.
  */
 const FlyerViewer = lazy(() => import('./FlyerViewer'))
-import { StageSelect } from './StageBadge'
+import { PipelineSelect } from './StageBadge'
 
 interface Props {
   property: Property
+  /** The survey's pipeline, so the stage picker matches the sidebar groups. */
+  stages?: DealStage[]
   readOnly?: boolean
   onChange?: (property: Property) => void
   onDelete?: (id: string) => void
@@ -60,6 +62,7 @@ const EDITABLE: { key: keyof Property; label: string; type?: string; suffix?: st
 
 export default function PropertyPanel({
   property,
+  stages = [],
   readOnly = false,
   onChange,
   onDelete,
@@ -135,10 +138,12 @@ export default function PropertyPanel({
     setEditing(false)
   }
 
-  const setStage = async (stage: Stage) => {
-    const { property: updated } = await api.updateProperty(property.id, { stage })
+  const setStage = async (stageId: string | null) => {
+    const { property: updated } = await api.updateProperty(property.id, { stageId })
     onChange?.(updated)
   }
+
+  const pipelineStage = stages.find((stage) => stage.id === property.stageId) ?? null
 
   const toggleHidden = async () => {
     const { property: updated } = await api.updateProperty(property.id, { hidden: !property.hidden })
@@ -260,11 +265,19 @@ export default function PropertyPanel({
 
         <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-3">
           {readOnly ? (
-            <span className="pill" style={{ background: `${STAGE_META[property.stage]?.color}22`, color: STAGE_META[property.stage]?.color }}>
-              {STAGE_META[property.stage]?.label}
-            </span>
+            pipelineStage ? (
+              <span className="pill" style={{ background: `${pipelineStage.color}22`, color: pipelineStage.color }}>
+                {pipelineStage.name}
+              </span>
+            ) : (
+              <span className="pill bg-sunken text-muted">Unstaged</span>
+            )
           ) : (
-            <StageSelect stage={property.stage} onChange={(stage) => void setStage(stage)} />
+            <PipelineSelect
+              stages={stages}
+              stageId={property.stageId}
+              onChange={(stageId) => void setStage(stageId)}
+            />
           )}
           <div className="flex items-center gap-2">
             {property.lat != null && (

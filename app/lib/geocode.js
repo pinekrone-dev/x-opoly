@@ -84,7 +84,15 @@ function parseNominatim(results) {
       city: result.address?.city || result.address?.town || result.address?.village || null,
       state: result.address?.state || null,
       zip: result.address?.postcode || null,
+      // Whether this match resolved the actual building, or just its street
+      // or city. Decides below whether the result is good enough to pin.
+      precise: Boolean(result.address?.house_number),
     }))
+}
+
+/** "1775 Newport Blvd…" — a query that names a building, not an area. */
+function asksForHouseNumber(search) {
+  return /^\s*\d+\s+\S/.test(search)
 }
 
 /**
@@ -96,9 +104,25 @@ export async function geocode(query, { env = {}, fetchImpl = fetch, timeout = 10
   if (search.length < 3) throw new GeocodeError('Enter at least three characters to search.')
 
   let primaryError = null
+  let imprecise = []
   try {
     const results = await nominatimGeocode(search, { env, fetchImpl, timeout, signal })
-    if (results.length > 0) return results
+
+    /*
+     * "1775 Newport Blvd, Costa Mesa" answered with the city centroid is
+     * worse than no answer: the pin lands somewhere plausible-looking and
+     * wrong, and two different addresses in one town land on the same spot.
+     * When the query names a house number, only a match that resolved one
+     * counts; anything vaguer is held as a last resort while the Census
+     * geocoder — which is house-number precise — gets its turn.
+     */
+    if (!asksForHouseNumber(search)) {
+      if (results.length > 0) return results
+    } else {
+      const precise = results.filter((result) => result.precise)
+      if (precise.length > 0) return precise
+      imprecise = results
+    }
   } catch (error) {
     // A configured custom geocoder failing is worth reporting as-is; the
     // free default failing is what the Census fallback exists for.
@@ -106,12 +130,17 @@ export async function geocode(query, { env = {}, fetchImpl = fetch, timeout = 10
     primaryError = error
   }
 
-  // Nothing from Nominatim — blocked, down, or genuinely no match. The Census
-  // geocoder parses formal US addresses well, so it often answers where the
-  // fuzzy search came back empty, and it does not block cloud IPs.
+  // Nothing precise from Nominatim — blocked, down, or only an area match.
+  // The Census geocoder parses formal US addresses well and resolves to the
+  // address range, and it does not block cloud IPs.
   try {
-    return await censusGeocode(search, { fetchImpl, timeout, signal })
+    const results = await censusGeocode(search, { fetchImpl, timeout, signal })
+    if (results.length > 0) return results
+    // Genuinely unmatched everywhere: a street-level guess beats nothing,
+    // but only as the last word.
+    return imprecise
   } catch (fallbackError) {
+    if (imprecise.length > 0) return imprecise
     // When both are down, the primary's message is the curated one — "check
     // outbound access", "rate limited" — and the more useful thing to show.
     if (primaryError) throw primaryError

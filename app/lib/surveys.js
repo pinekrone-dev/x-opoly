@@ -7,7 +7,8 @@
  */
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
-import { fieldsBySurvey, listPropertyFields, seedStages } from './stages.js'
+import { fieldsBySurvey, listPropertyFields, listStages, seedStages } from './stages.js'
+import { listZones } from './zones.js'
 import { imagesBySurvey, listImages } from './images.js'
 
 export const STAGES = ['prospect', 'touring', 'loi', 'under_contract', 'passed']
@@ -368,6 +369,11 @@ export async function resolveShare(db, token) {
       // Which extras the broker turned on for this report.
       showDemographics: survey.share.showDemographics,
     },
+    // Stage names and colours are part of the story the client reads — a
+    // green "Qualified" pin means something — so they travel with the map.
+    stages: (await listStages(db, row.id)).map(({ id, name, color }) => ({ id, name, color })),
+    // Non-compete circles are part of the story the client is being shown.
+    zones: (await listZones(db, row.id)).map(({ surveyId, createdAt, ...zone }) => zone),
     properties: (await listProperties(db, row.id))
       // What the broker hid, the client never receives — filtered here rather
       // than in the client view, so it is not merely invisible but absent.

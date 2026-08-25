@@ -67,6 +67,7 @@ import {
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
+import { createZone, deleteZone, listZones } from './lib/zones.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -584,6 +585,7 @@ export function createApp({ db, storage, env = {} }) {
       survey,
       properties: await listProperties(db, survey.id),
       stages: await listStages(db, survey.id),
+      zones: await listZones(db, survey.id),
     })
   })
 
@@ -731,6 +733,27 @@ export function createApp({ db, storage, env = {} }) {
     if (error) return error
     const body = await c.req.json().catch(() => ({}))
     return c.json({ survey: await updateShare(db, c.req.param('id'), body) })
+  })
+
+  // --- zones ---------------------------------------------------------------
+
+  app.get('/api/surveys/:id/zones', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+    return c.json({ zones: await listZones(db, survey.id) })
+  })
+
+  app.post('/api/surveys/:id/zones', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+    const result = await createZone(db, survey.id, await c.req.json().catch(() => ({})))
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ zone: result.zone }, 201)
+  })
+
+  app.delete('/api/zones/:id', async (c) => {
+    if (!(await deleteZone(db, c.req.param('id')))) return notFound(c, 'That zone is gone already.')
+    return c.body(null, 204)
   })
 
   // --- collaborators -------------------------------------------------------

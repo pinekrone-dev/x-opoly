@@ -1,6 +1,7 @@
 import type {
   Account,
   Invite,
+  Zone,
   AppFeatures,
   DealStage,
   CompetitionResult,
@@ -67,6 +68,9 @@ export const api = {
   checkInvite: (token: string) =>
     request<{ email: string }>(`/api/auth/invite/${encodeURIComponent(token)}`),
   listInvites: () => request<{ invites: Invite[] }>('/api/invites'),
+  createZone: (surveyId: string, zone: { label: string; lat: number; lng: number; radiusMiles: number; color?: string }) =>
+    request<{ zone: Zone }>(`/api/surveys/${surveyId}/zones`, json(zone)),
+  deleteZone: (id: string) => request<void>(`/api/zones/${id}`, { method: 'DELETE' }),
   createInvite: (email: string) =>
     request<{ invite: Invite; url: string }>('/api/invites', json({ email })),
   revokeInvite: (id: string) => request<void>(`/api/invites/${id}`, { method: 'DELETE' }),
@@ -79,7 +83,7 @@ export const api = {
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>
     request<{ survey: Survey }>('/api/surveys', json(input)),
   getSurvey: (id: string) =>
-    request<{ survey: Survey; properties: Property[]; stages: DealStage[] }>(`/api/surveys/${id}`),
+    request<{ survey: Survey; properties: Property[]; stages: DealStage[]; zones: Zone[] }>(`/api/surveys/${id}`),
   updateSurvey: (id: string, patch: Partial<Survey> & Record<string, unknown>) =>
     request<{ survey: Survey }>(`/api/surveys/${id}`, { ...json(patch), method: 'PATCH' }),
   deleteSurvey: (id: string) => request<void>(`/api/surveys/${id}`, { method: 'DELETE' }),

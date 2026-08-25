@@ -5,11 +5,12 @@ import PropertyPanel from '../components/PropertyPanel'
 import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
 import CompareSites from '../components/CompareSites'
+import MapLegend from '../components/MapLegend'
 import InviteCollaborators from '../components/InviteCollaborators'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
-import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property, Survey, TourPlan } from '../types'
+import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property, Survey, TourAnchor, TourPlan, Zone } from '../types'
 import { colorFor } from '../components/DemographicsPanel'
 import { buildTourBookFor } from '../lib/tourBookPdf'
 import { navigate } from '../lib/router'
@@ -37,9 +38,17 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
   const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
+  const [tourAnchors, setTourAnchors] = useState<{
+    start: TourAnchor | null
+    end: TourAnchor | null
+  } | null>(null)
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null)
   /** A site being given a location by clicking the map. */
   const [placing, setPlacing] = useState<string | null>(null)
+  const [zones, setZones] = useState<Zone[]>([])
+  /** Armed: the next map click centres a new zone. Placed: the form is open. */
+  const [zoneMode, setZoneMode] = useState<'off' | 'armed'>('off')
+  const [pendingZone, setPendingZone] = useState<{ lat: number; lng: number } | null>(null)
   const [bookBusy, setBookBusy] = useState(false)
   const [bookError, setBookError] = useState<string | null>(null)
   const [demoView, setDemoView] = useState<{
@@ -52,10 +61,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   useEffect(() => {
     api
       .getSurvey(id)
-      .then(({ survey: loaded, properties: list, stages: pipeline }) => {
+      .then(({ survey: loaded, properties: list, stages: pipeline, zones: circles }) => {
         setSurvey(loaded)
         setProperties(list)
         setStages(pipeline ?? [])
+        setZones(circles ?? [])
         setFitKey((key) => key + 1)
       })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not open that survey.'))
@@ -119,6 +129,25 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     setSelectedId(property.id)
     setDropPin(false)
     setNotice('Pin dropped — give it a name and the details.')
+  }
+
+  const saveZone = async (input: { label: string; radiusMiles: number }) => {
+    if (!pendingZone) return
+    try {
+      const { zone } = await api.createZone(id, { ...input, ...pendingZone })
+      setZones((current) => [...current, zone])
+      setNotice(`${zone.label} drawn — ${zone.radiusMiles} mi.`)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The zone could not be saved.')
+    } finally {
+      setPendingZone(null)
+      setZoneMode('off')
+    }
+  }
+
+  const removeZone = async (zoneId: string) => {
+    await api.deleteZone(zoneId).catch(() => undefined)
+    setZones((current) => current.filter((zone) => zone.id !== zoneId))
   }
 
   /** Gives an existing, unplaced site the clicked location. */
@@ -202,6 +231,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const sidebar = selected ? (
     <PropertyPanel
       property={selected}
+      stages={stages}
       onChange={upsert}
       onDelete={(propertyId) => void remove(propertyId)}
       onClose={() => setSelectedId(null)}
@@ -296,8 +326,24 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'map' && (
           <div className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]">
             <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">{sidebar}</div>
-            <div className={`relative ${dropPin || placing ? 'cursor-crosshair' : ''}`}>
+            <div className={`relative ${dropPin || placing || zoneMode === 'armed' ? 'cursor-crosshair' : ''}`}>
+              <MapLegend
+                stages={stages}
+                properties={properties}
+                zones={zones}
+                onToggleStage={(stage) => void toggleStageHidden(stage)}
+                onStartZone={() => setZoneMode('armed')}
+                pendingZone={pendingZone}
+                onSaveZone={(zone) => void saveZone(zone)}
+                onCancelZone={() => {
+                  setPendingZone(null)
+                  setZoneMode('off')
+                }}
+                onDeleteZone={(zoneId) => void removeZone(zoneId)}
+              />
               <MapCanvas
+                stages={stages}
+                zones={zones}
                 properties={visibleProperties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
@@ -306,7 +352,9 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                     ? (lat, lng) => void addAt(lat, lng)
                     : placing
                       ? (lat, lng) => void placeAt(lat, lng)
-                      : undefined
+                      : zoneMode === 'armed'
+                        ? (lat, lng) => setPendingZone({ lat, lng })
+                        : undefined
                 }
                 onViewChange={setMapCenter}
                 tiles={features.tiles}
@@ -322,11 +370,12 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
         {tab === 'list' && (
           <div className="grid h-full min-h-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-            <PropertyTable properties={properties} selectedId={selectedId} onSelect={setSelectedId} />
+            <PropertyTable properties={properties} stages={stages} selectedId={selectedId} onSelect={setSelectedId} />
             {selected && (
               <div className="panel min-h-0 overflow-hidden">
                 <PropertyPanel
                   property={selected}
+                  stages={stages}
                   onChange={upsert}
                   onDelete={(propertyId) => void remove(propertyId)}
                   onClose={() => setSelectedId(null)}
@@ -348,15 +397,29 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
               onSelect={setSelectedId}
               onOrderChange={setTourOrder}
               onPlan={setTourPlan}
+              onAnchors={setTourAnchors}
             />
             <div className="panel overflow-hidden">
               <MapCanvas
+                stages={stages}
                 properties={visibleProperties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 tiles={features.tiles}
                 basemaps={features.basemaps}
                 onViewChange={setMapCenter}
+                anchors={
+                  tourAnchors
+                    ? {
+                        start: tourAnchors.start
+                          ? { lat: tourAnchors.start.lat, lng: tourAnchors.start.lng, label: tourAnchors.start.address ?? undefined }
+                          : null,
+                        end: tourAnchors.end
+                          ? { lat: tourAnchors.end.lat, lng: tourAnchors.end.lng, label: tourAnchors.end.address ?? undefined }
+                          : null,
+                      }
+                    : null
+                }
                 routeIds={tourOrder}
                 routeGeometry={tourPlan?.geometry ?? null}
                 choropleth={choropleth}

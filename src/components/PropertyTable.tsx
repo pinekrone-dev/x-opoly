@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import type { Property, Stage } from '../types'
-import { STAGE_META, STAGE_ORDER, count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
-import { StageBadge } from './StageBadge'
+import type { DealStage, Property } from '../types'
+import { count, fullAddress, displayName, money, rate, sqft } from '../lib/format'
 
 interface Props {
   properties: Property[]
+  /** The survey's pipeline: filter chips, the stage column, and its sort order. */
+  stages?: DealStage[]
   selectedId?: string | null
   onSelect: (id: string) => void
   readOnly?: boolean
@@ -12,21 +13,29 @@ interface Props {
 
 type SortKey = 'name' | 'stage' | 'rentRate' | 'sizeSqft' | 'yearBuilt'
 
-export default function PropertyTable({ properties, selectedId, onSelect, readOnly }: Props) {
+export default function PropertyTable({ properties, stages = [], selectedId, onSelect, readOnly }: Props) {
   const [sort, setSort] = useState<{ key: SortKey; direction: 1 | -1 }>({ key: 'name', direction: 1 })
-  const [stageFilter, setStageFilter] = useState<Stage | 'all'>('all')
+  const [stageFilter, setStageFilter] = useState<string | 'all'>('all')
+
+  const stageOf = (property: Property) => stages.find((stage) => stage.id === property.stageId) ?? null
+  const stageRank = (property: Property) => {
+    const index = stages.findIndex((stage) => stage.id === property.stageId)
+    return index === -1 ? stages.length : index
+  }
 
   const rows = useMemo(() => {
-    const filtered = properties.filter((property) => stageFilter === 'all' || property.stage === stageFilter)
+    const filtered = properties.filter(
+      (property) => stageFilter === 'all' || (property.stageId ?? 'unstaged') === stageFilter,
+    )
     return [...filtered].sort((a, b) => {
       const { key, direction } = sort
       if (key === 'name') return displayName(a).localeCompare(displayName(b)) * direction
-      if (key === 'stage') return (STAGE_ORDER.indexOf(a.stage) - STAGE_ORDER.indexOf(b.stage)) * direction
+      if (key === 'stage') return (stageRank(a) - stageRank(b)) * direction
       const left = (a[key] as number) ?? -Infinity
       const right = (b[key] as number) ?? -Infinity
       return (left - right) * direction
     })
-  }, [properties, sort, stageFilter])
+  }, [properties, sort, stageFilter, stages])
 
   const applySort = (key: SortKey) =>
     setSort((current) => (current.key === key ? { key, direction: current.direction === 1 ? -1 : 1 } : { key, direction: 1 }))
@@ -50,21 +59,30 @@ export default function PropertyTable({ properties, selectedId, onSelect, readOn
           >
             All {properties.length}
           </button>
-          {STAGE_ORDER.map((stage) => {
-            const total = properties.filter((property) => property.stage === stage).length
+          {stages.map((stage) => {
+            const total = properties.filter((property) => property.stageId === stage.id).length
             if (total === 0) return null
             return (
               <button
-                key={stage}
+                key={stage.id}
                 type="button"
-                className={`tab px-2.5 py-1 text-xs ${stageFilter === stage ? 'tab-active' : ''}`}
-                onClick={() => setStageFilter(stage)}
+                className={`tab px-2.5 py-1 text-xs ${stageFilter === stage.id ? 'tab-active' : ''}`}
+                onClick={() => setStageFilter(stage.id)}
               >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: STAGE_META[stage].color }} aria-hidden />
-                {STAGE_META[stage].label} {total}
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: stage.color }} aria-hidden />
+                {stage.name} {total}
               </button>
             )
           })}
+          {properties.some((property) => !property.stageId) && (
+            <button
+              type="button"
+              className={`tab px-2.5 py-1 text-xs ${stageFilter === 'unstaged' ? 'tab-active' : ''}`}
+              onClick={() => setStageFilter('unstaged')}
+            >
+              Unstaged {properties.filter((property) => !property.stageId).length}
+            </button>
+          )}
         </div>
       </header>
 
@@ -96,7 +114,17 @@ export default function PropertyTable({ properties, selectedId, onSelect, readOn
                   <span className="block truncate text-xs text-muted">{fullAddress(property)}</span>
                 </td>
                 <td className="px-4 py-2">
-                  <StageBadge stage={property.stage} />
+                  {(() => {
+                    const stage = stageOf(property)
+                    return stage ? (
+                      <span className="pill" style={{ background: `${stage.color}22`, color: stage.color }}>
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: stage.color }} aria-hidden />
+                        {stage.name}
+                      </span>
+                    ) : (
+                      <span className="pill bg-sunken text-muted">Unstaged</span>
+                    )
+                  })()}
                 </td>
                 <td className="px-4 py-2 text-right text-xs text-body">
                   {rate(property)}

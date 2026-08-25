@@ -112,6 +112,80 @@ describe('geocoding', () => {
     )
   })
 
+  test('a city-centroid answer to a street address is not accepted', async () => {
+    // The live failure: "1775 Newport Blvd, Costa Mesa" and "2101 Harbor
+    // Blvd, Costa Mesa" both came back as the city, so two different
+    // buildings landed on the same wrong spot. A match with no house number
+    // must lose to the Census geocoder when the query names one.
+    const cityMatch = {
+      lat: '33.6633', lon: '-117.9033',
+      display_name: 'Costa Mesa, Orange County, California',
+      address: { city: 'Costa Mesa', state: 'California' },
+    }
+    const fetchImpl = async (url) =>
+      url.includes('nominatim')
+        ? { ok: true, status: 200, json: async () => [cityMatch] }
+        : {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              result: {
+                addressMatches: [
+                  {
+                    matchedAddress: '1775 NEWPORT BLVD, COSTA MESA, CA, 92627',
+                    coordinates: { x: -117.918, y: 33.6295 },
+                    addressComponents: { city: 'COSTA MESA', state: 'CA', zip: '92627' },
+                  },
+                ],
+              },
+            }),
+          }
+
+    const results = await geocode('1775 Newport Blvd, Costa Mesa, CA', { fetchImpl })
+    assert.equal(results.length, 1)
+    assert.equal(results[0].lat, 33.6295, 'the Census address-range point wins')
+  })
+
+  test('a house-number match from Nominatim is still preferred', async () => {
+    const precise = {
+      lat: '33.6295', lon: '-117.918',
+      display_name: '1775, Newport Boulevard, Costa Mesa',
+      address: { house_number: '1775', road: 'Newport Boulevard', city: 'Costa Mesa', state: 'California' },
+    }
+    const fetchImpl = async (url) => {
+      if (url.includes('census')) throw new Error('census should not be needed')
+      return { ok: true, status: 200, json: async () => [precise] }
+    }
+    const results = await geocode('1775 Newport Blvd, Costa Mesa', { fetchImpl })
+    assert.equal(results[0].address, '1775 Newport Boulevard')
+  })
+
+  test('an area query keeps its area answer', async () => {
+    // "Costa Mesa" with no street number SHOULD return the city.
+    const cityMatch = {
+      lat: '33.6633', lon: '-117.9033',
+      display_name: 'Costa Mesa, California',
+      address: { city: 'Costa Mesa', state: 'California' },
+    }
+    const fetchImpl = async () => ({ ok: true, status: 200, json: async () => [cityMatch] })
+    const results = await geocode('Costa Mesa', { fetchImpl })
+    assert.equal(results.length, 1)
+  })
+
+  test('when everything is vague, the street guess still beats nothing', async () => {
+    const roadMatch = {
+      lat: '33.64', lon: '-117.91',
+      display_name: 'Newport Boulevard, Costa Mesa',
+      address: { road: 'Newport Boulevard', city: 'Costa Mesa' },
+    }
+    const fetchImpl = async (url) =>
+      url.includes('nominatim')
+        ? { ok: true, status: 200, json: async () => [roadMatch] }
+        : { ok: true, status: 200, json: async () => ({ result: { addressMatches: [] } }) }
+    const results = await geocode('99999 Newport Blvd, Costa Mesa', { fetchImpl })
+    assert.equal(results.length, 1, 'a road-level pin as the last resort')
+  })
+
   test('a genuinely unmatched address returns empty, not an error', async () => {
     const fetchImpl = async (url) =>
       url.includes('nominatim')

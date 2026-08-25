@@ -21,6 +21,8 @@ interface Props {
   onSelect: (id: string) => void
   onOrderChange: (order: string[]) => void
   onPlan?: (plan: TourPlan | null) => void
+  /** Fires whenever the start or end point changes, so the map can flag them. */
+  onAnchors?: (anchors: { start: TourAnchor | null; end: TourAnchor | null }) => void
   onClose?: () => void
 }
 
@@ -32,6 +34,7 @@ export default function TourPlanner({
   onSelect,
   onOrderChange,
   onPlan,
+  onAnchors,
   onClose,
 }: Props) {
   const located = useMemo(
@@ -45,6 +48,10 @@ export default function TourPlanner({
   const [order, setOrder] = useState<string[]>([])
   const [start, setStart] = useState<TourAnchor | null>(defaults.start)
   const [end, setEnd] = useState<TourAnchor | null>(defaults.end)
+
+  useEffect(() => {
+    onAnchors?.({ start, end })
+  }, [start, end, onAnchors])
   const [plan, setPlan] = useState<TourPlan | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
