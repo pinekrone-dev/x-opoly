@@ -386,6 +386,8 @@ export async function resolveShare(db, token) {
       // What the broker hid, the client never receives — filtered here rather
       // than in the client view, so it is not merely invisible but absent.
       .filter((property) => !property.hidden)
-      .map(({ surveyId, notes, hidden, ...rest }) => rest),
+      // The listing broker's details stay behind: a tenant rep hands their
+      // client a map, not a way to go around them to the listing side.
+      .map(({ surveyId, notes, hidden, listingBroker, brokerEmail, brokerPhone, ...rest }) => rest),
   }
 }

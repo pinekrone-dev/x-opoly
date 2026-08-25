@@ -105,6 +105,13 @@ describe('http api on node', () => {
     assert.equal(shared.status, 200)
     assert.equal(shared.body.properties.length, 3)
     assert.equal(shared.body.survey.clientName, 'Vega Foods')
+
+    // A tenant rep's client gets the map, not a line to the listing side.
+    for (const property of shared.body.properties) {
+      assert.ok(!('listingBroker' in property), 'the listing broker never reaches the client')
+      assert.ok(!('brokerEmail' in property), 'nor their email')
+      assert.ok(!('brokerPhone' in property), 'nor their phone')
+    }
   })
 
   test('an unknown share link returns 404, not a server error', async () => {

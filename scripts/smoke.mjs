@@ -525,7 +525,7 @@ try {
   const cardText = await page.textContent('body')
   check('a custom field renders on the site card', cardText?.includes('Available SF') ?? false)
   check('the custom field value renders', cardText?.includes('9,822 SF') ?? false)
-  check('broker contact renders', cardText?.includes('broker@example.com') ?? false)
+  check('the broker still sees the listing contact', cardText?.includes('broker@example.com') ?? false)
 
   const zoomIn = await page.$('.leaflet-control-zoom-in')
   check('map controls present', Boolean(zoomIn))
@@ -672,7 +672,7 @@ try {
       check('the book carries the street address', flat.includes('1600mainst'), text.slice(0, 120))
       check('the book carries the property details', flat.includes('availablesf'))
       check('the book carries the detail values', flat.includes('9,822sf'))
-      check('the book carries the listing contact', flat.includes('broker@example.com'))
+      check('the book withholds the listing contact from the client', !flat.includes('broker@example.com'))
       check('the book offers directions', flat.includes('scanfordirections'))
       check('the book carries arrival times', /\d{1,2}:\d{2}(am|pm)/.test(flat))
       check(

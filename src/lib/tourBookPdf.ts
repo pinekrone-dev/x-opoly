@@ -394,24 +394,12 @@ function drawStop(
   }
 
   let contactY = blockTop + 6
-  const contactWidth = CONTENT_WIDTH - QR_SIZE - 24
 
-  if (property.listingBroker || property.brokerEmail || property.brokerPhone) {
-    setText(doc, 8, MUTED, 'bold')
-    doc.text('LISTING CONTACT', MARGIN, contactY, { charSpace: 1.2 })
-    contactY += 15
-
-    if (property.listingBroker) {
-      setText(doc, 11, INK, 'bold')
-      doc.text(doc.splitTextToSize(property.listingBroker, contactWidth)[0] ?? '', MARGIN, contactY)
-      contactY += 14
-    }
-    setText(doc, 9, BODY)
-    for (const line of [property.brokerEmail, property.brokerPhone].filter(Boolean) as string[]) {
-      doc.text(line, MARGIN, contactY)
-      contactY += 12
-    }
-  }
+  /*
+   * No listing contact here on purpose. The tour book goes to the client, and
+   * a tenant rep does not hand their client a direct line to the listing
+   * broker. The details stay in the workspace, where the broker needs them.
+   */
 
   // A clickable destination for anyone reading the PDF on a screen. The QR
   // serves paper; this serves the same person on a laptop.

@@ -130,11 +130,24 @@ export default function MapLegend({
             <p className="label mb-1">Zones</p>
             {zones.map((zone) => (
               <div key={zone.id} className="flex items-center gap-2 px-1.5 py-1 text-xs">
-                <span
-                  className="h-2.5 w-2.5 rounded-full border-2 border-dashed"
-                  style={{ borderColor: zone.color }}
-                  aria-hidden
-                />
+                {/*
+                  * A stroke sample rather than a dot: the map draws zones as
+                  * a dashed ring with a faint fill, so the key shows that
+                  * exact line — otherwise the legend claims a solid boundary
+                  * the map never draws.
+                  */}
+                <svg width="18" height="10" viewBox="0 0 18 10" aria-hidden className="shrink-0">
+                  <line
+                    x1="1"
+                    y1="5"
+                    x2="17"
+                    y2="5"
+                    stroke={zone.color}
+                    strokeWidth="2"
+                    strokeDasharray="6 4"
+                    strokeLinecap="round"
+                  />
+                </svg>
                 <span className="min-w-0 flex-1 truncate text-body">
                   {zone.label} · {zone.radiusMiles} mi
                 </span>

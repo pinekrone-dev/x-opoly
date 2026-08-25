@@ -4,6 +4,9 @@ import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE } from '../lib/geo'
 
+/** Leaflet pane for census shading: below zones (400) and pins (600). */
+const SHADING_PANE = 'lq-shading'
+
 interface Props {
   tiles: TileConfig
   /** Basemaps the viewer may switch between. Omit to hide the switcher. */
@@ -170,6 +173,18 @@ export default function MapCanvas({
 
     const home = homeView()
     const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(home.center, home.zoom)
+
+    /*
+     * Census shading gets a pane of its own, below Leaflet's overlay pane
+     * (400) and marker pane (600). Ordering by `bringToBack` alone could not
+     * settle this: zones and shading both asked to be at the back, so
+     * whichever effect ran last won and the infill sometimes covered the
+     * boundaries and pins it is meant to sit behind.
+     */
+    instance.createPane(SHADING_PANE)
+    const shadingPane = instance.getPane(SHADING_PANE)
+    if (shadingPane) shadingPane.style.zIndex = '350'
+
     instance.on('click', (event: L.LeafletMouseEvent) => clickHandler.current?.(event.latlng.lat, event.latlng.lng))
     instance.on('moveend', () => rememberView(instance))
     map.current = instance
@@ -335,6 +350,7 @@ export default function MapCanvas({
     for (const area of choropleth) {
       if (!area.geometry || !area.color) continue
       const shape = L.geoJSON(area.geometry as never, {
+        pane: SHADING_PANE,
         style: {
           color: area.color,
           weight: 1,
@@ -355,10 +371,6 @@ export default function MapCanvas({
       shape.addTo(group)
     }
     group.addTo(instance)
-    // Behind the pins and the route, which must stay readable on top of it.
-    group.eachLayer((layer) => {
-      if ('bringToBack' in layer) (layer as L.Polygon).bringToBack()
-    })
     shading.current = group
   }, [choropleth, onMapClick])
 
