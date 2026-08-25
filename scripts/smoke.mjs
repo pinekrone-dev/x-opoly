@@ -117,6 +117,29 @@ try {
   check('D1 database binding works', health.body?.checks?.database?.ok === true)
   check('R2 storage binding works', health.body?.checks?.storage?.ok === true)
 
+  /*
+   * Password hashing, exercised without creating anything.
+   *
+   * An unknown address still runs the full key derivation against a dummy
+   * hash, so the timing does not give away which addresses exist — which
+   * makes this the one way to test the hashing on the real runtime without
+   * registering an account on someone's deployment. It matters because
+   * Cloudflare rejects a PBKDF2 call above 100,000 iterations outright, so
+   * this path threw on the Worker while passing every test on Node.
+   */
+  const unknown = await api('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: `smoke-${Date.now()}@example.invalid`,
+      password: 'not a real password',
+    }),
+  })
+  check(
+    'password hashing runs on this runtime',
+    unknown.status === 401 || unknown.status === 400,
+    `status ${unknown.status}: ${JSON.stringify(unknown.body).slice(0, 160)}`,
+  )
+
   // Accounts: an unclaimed instance is open, a claimed one needs credentials.
   // Failing loudly here matters — silently skipping the API checks would make
   // a locked-out run look like a passing one.
