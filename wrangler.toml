@@ -23,29 +23,23 @@ workers_dev = true
 pattern = "survey.realestateaistudio.com"
 custom_domain = true
 
-# The new canonical home. Commented out until landquotient.com is a zone in
-# this Cloudflare account — naming a route for a zone Cloudflare does not hold
-# fails the deploy, which would stop the running site from being updated.
+# The new canonical home. Cloudflare provisions the DNS records and
+# certificates for both of these on deploy, so nothing is created by hand —
+# and a record added manually would block it, since a custom domain cannot be
+# attached to a hostname that already has one.
 #
-# To switch it on, in order:
-#   1. Cloudflare dashboard -> Add a site -> landquotient.com, and move the
-#      nameservers at the registrar to the two Cloudflare gives you.
-#   2. Wait for the zone to read "Active" (usually minutes, up to 24 hours).
-#   3. Uncomment both blocks below and push. The deploy creates the DNS
-#      records and certificates on its own.
-#
-# The app itself needs no other change: every link it builds — verification
-# emails, Stripe return URLs, client share links — is derived from the host
-# the request arrived on, and the worker already 301s any www.* to the bare
-# name, keeping path and query.
-#
-# [[routes]]
-# pattern = "landquotient.com"
-# custom_domain = true
-#
-# [[routes]]
-# pattern = "www.landquotient.com"
-# custom_domain = true
+# Custom domains match the hostname exactly, so the apex and www each need
+# their own entry; the worker then 301s www to the bare name, keeping path
+# and query. Nothing else in the app changes: every link it builds —
+# verification emails, Stripe return URLs, client share links — is derived
+# from the host the request arrived on.
+[[routes]]
+pattern = "landquotient.com"
+custom_domain = true
+
+[[routes]]
+pattern = "www.landquotient.com"
+custom_domain = true
 
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.

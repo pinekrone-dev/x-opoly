@@ -93,12 +93,11 @@ The app builds every outbound link — verification emails, Stripe return URLs, 
 links — from the host the request arrived on, so it follows a new domain on its own. What
 does not follow automatically, in the order it has to happen:
 
-1. **Cloudflare.** Add landquotient.com as a site and move the registrar's nameservers to
-   the two Cloudflare gives you. Wait for the zone to read *Active*.
-2. **Routes.** Uncomment the two `[[routes]]` blocks in `wrangler.toml` and push. The deploy
-   provisions the DNS records and certificates itself. Leaving them commented until the zone
-   exists is deliberate: naming a route Cloudflare does not hold fails the deploy, which
-   would stop the running site from being updated.
+1. **Cloudflare zone.** Done — the domain is registered through Cloudflare Registrar, so
+   the zone is in the account and already using Cloudflare nameservers.
+2. **Routes.** Done — the apex and `www` are custom domains in `wrangler.toml`, and the
+   deploy provisions their DNS records and certificates. Never add a DNS record for either
+   hostname by hand: a custom domain cannot attach to a name that already has one.
 3. **SendGrid.** Authenticate landquotient.com under Sender Authentication, add the DNS
    records it prints, then set the `EMAIL_FROM` secret to
    `Land Quotient <support@landquotient.com>`. Until the domain is authenticated, sends are
