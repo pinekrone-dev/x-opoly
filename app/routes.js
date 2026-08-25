@@ -79,6 +79,7 @@ import {
   confirmCheckout,
   createCheckout,
   isExemptEmail,
+  publishableKey,
   portalUrl,
   stripeConfigured,
   verifyWebhook,
@@ -414,6 +415,22 @@ export function createApp({ db, storage, env = {} }) {
    */
   const UNGATED = [/^\/api\/auth(\/|$)/, /^\/api\/billing(\/|$)/]
   const exemptTeams = new Map()
+
+  /**
+   * Whether a team ever sees the paywall. Two doors out: the operator's own
+   * team — whoever claimed the instance first is the person selling it, and
+   * their collaborators ride along — and any owner email named in
+   * STRIPE_EXEMPT_EMAILS. Cached per isolate; neither answer changes.
+   */
+  const teamIsExempt = async (teamId, fallbackEmail) => {
+    if (!exemptTeams.has(teamId)) {
+      const owner = await db.get('SELECT email FROM users WHERE id = ?', [teamId])
+      const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
+      exemptTeams.set(teamId, teamId === first?.id || isExemptEmail(env, owner?.email ?? fallbackEmail))
+    }
+    return exemptTeams.get(teamId)
+  }
+
   app.use('/api/*', async (c, next) => {
     if (!stripeConfigured(env)) return next()
     const user = c.get('user')
@@ -423,11 +440,7 @@ export function createApp({ db, storage, env = {} }) {
     if (PUBLIC_PATHS.some((pattern) => pattern.test(path))) return next()
     if (UNGATED.some((pattern) => pattern.test(path))) return next()
 
-    if (!exemptTeams.has(user.teamId)) {
-      const owner = await db.get('SELECT email FROM users WHERE id = ?', [user.teamId])
-      exemptTeams.set(user.teamId, isExemptEmail(env, owner?.email ?? user.email))
-    }
-    if (exemptTeams.get(user.teamId)) return next()
+    if (await teamIsExempt(user.teamId, user.email)) return next()
 
     const state = await billingState(db, env, user.teamId)
     if (state.active) return next()
@@ -460,7 +473,7 @@ export function createApp({ db, storage, env = {} }) {
         // Selling to strangers needs both halves: a way to charge them and a
         // way to verify they own the email they signed up with.
         selfServe: stripeConfigured(env) && emailConfigured(env),
-        publishableKey: env.STRIPE_PUBLISHABLE_KEY ?? null,
+        publishableKey: publishableKey(env),
       },
     })
   })
@@ -977,13 +990,12 @@ export function createApp({ db, storage, env = {} }) {
   app.get('/api/billing', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    const owner = await db.get('SELECT email FROM users WHERE id = ?', [user.teamId])
-    const exempt = isExemptEmail(env, owner?.email ?? user.email)
+    const exempt = await teamIsExempt(user.teamId, user.email)
     const state = stripeConfigured(env) && !exempt ? await billingState(db, env, user.teamId) : { active: true, status: exempt ? 'exempt' : 'unmetered' }
     const row = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [user.teamId])
     return c.json({
       configured: stripeConfigured(env),
-      publishableKey: env.STRIPE_PUBLISHABLE_KEY ?? null,
+      publishableKey: publishableKey(env),
       active: state.active,
       status: state.status,
       periodEnd: state.periodEnd ?? null,

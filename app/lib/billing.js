@@ -24,8 +24,21 @@ const API = 'https://api.stripe.com/v1'
 /** Days past the paid-through date before the gate closes. Card retries take time. */
 const GRACE_DAYS = 3
 
+/**
+ * The configured names are canonical, but the aliases match what was
+ * actually typed into the Cloudflare dashboard — renaming a stored secret
+ * is harder than accepting both spellings here.
+ */
+export function secretKey(env = {}) {
+  return env.STRIPE_SECRET_KEY || env.STRIPE_KEY || null
+}
+
+export function publishableKey(env = {}) {
+  return env.STRIPE_PUBLISHABLE_KEY || env.PUBLISHABLE_STRIPE || null
+}
+
 export function stripeConfigured(env = {}) {
-  return Boolean(env.STRIPE_SECRET_KEY)
+  return Boolean(secretKey(env))
 }
 
 export class BillingError extends Error {
@@ -59,7 +72,7 @@ async function stripe(env, path, { method = 'POST', params = null, fetchImpl = f
   const response = await fetchImpl(`${API}${path}`, {
     method,
     headers: {
-      authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      authorization: `Bearer ${secretKey(env)}`,
       ...(params ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
     },
     ...(params ? { body: formEncode(params) } : {}),
@@ -94,13 +107,18 @@ function lineItem(env) {
  */
 export async function createCheckout(db, env, { teamId, email, origin, fetchImpl = fetch }) {
   const existing = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [teamId])
-  const embedded = Boolean(env.STRIPE_PUBLISHABLE_KEY)
+  const embedded = Boolean(publishableKey(env))
 
   const params = {
     mode: 'subscription',
     line_items: [lineItem(env)],
     client_reference_id: teamId,
     subscription_data: { metadata: { team_id: teamId } },
+    // Promotion codes minted in the Stripe dashboard work at checkout, and a
+    // code that brings the total to zero skips card collection entirely —
+    // which is how a free user is invited without ever touching env vars.
+    allow_promotion_codes: 'true',
+    payment_method_collection: 'if_required',
     ...(existing?.customer_id ? { customer: existing.customer_id } : { customer_email: email }),
     ...(embedded
       ? { ui_mode: 'embedded', return_url: `${origin}/billing/return?session_id={CHECKOUT_SESSION_ID}` }

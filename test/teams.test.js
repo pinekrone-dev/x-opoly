@@ -22,7 +22,9 @@ let app
 const ENV = {
   STRIPE_SECRET_KEY: 'sk_test_not_called_in_these_tests',
   RESEND_API_KEY: 're_test_stub',
-  STRIPE_EXEMPT_EMAILS: 'alice@example.com,bob@example.com,carol@example.com',
+  // Alice is deliberately NOT listed: as the instance's first account she is
+  // exempt by the owner rule, and this file proves it.
+  STRIPE_EXEMPT_EMAILS: 'bob@example.com,carol@example.com',
 }
 
 /** Every email the app "sends" lands here instead of Resend. */
@@ -207,7 +209,9 @@ describe('the subscription gate', () => {
     assert.equal(billing.body.active, false)
   })
 
-  test('exempt teams never see the gate', async () => {
+  test("the operator's own team never sees the gate, with no env list needed", async () => {
     assert.equal((await alice('/api/surveys')).status, 200)
+    const billing = await alice('/api/billing')
+    assert.equal(billing.body.status, 'exempt')
   })
 })

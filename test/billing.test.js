@@ -19,6 +19,7 @@ import {
   createCheckout,
   isExemptEmail,
   portalUrl,
+  publishableKey,
   stripeConfigured,
   verifyWebhook,
   BillingError,
@@ -62,6 +63,12 @@ describe('configuration and exemptions', () => {
     assert.equal(stripeConfigured(ENV), true)
   })
 
+  test('the names typed into the Cloudflare dashboard work as-is', () => {
+    assert.equal(stripeConfigured({ STRIPE_KEY: 'sk_test_alias' }), true)
+    assert.equal(publishableKey({ PUBLISHABLE_STRIPE: 'pk_test_alias' }), 'pk_test_alias')
+    assert.equal(publishableKey({ STRIPE_PUBLISHABLE_KEY: 'pk_a', PUBLISHABLE_STRIPE: 'pk_b' }), 'pk_a')
+  })
+
   test('exempt emails match case-insensitively and tolerate spacing', () => {
     const env = { STRIPE_EXEMPT_EMAILS: ' Kevin@Example.com , smoke@example.com ' }
     assert.equal(isExemptEmail(env, 'kevin@example.com'), true)
@@ -97,6 +104,23 @@ describe('creating a checkout', () => {
     assert.ok(body.includes('customer_email=buyer@example.com'))
     assert.ok(body.includes('ui_mode=embedded'))
     assert.ok(body.includes('return_url=https://survey.example.com/billing/return?session_id={CHECKOUT_SESSION_ID}'))
+    assert.ok(body.includes('allow_promotion_codes=true'), 'dashboard promo codes work at checkout')
+    assert.ok(
+      body.includes('payment_method_collection=if_required'),
+      'a 100%-off code needs no card at all',
+    )
+  })
+
+  test('a secret key under the alias name still reaches Stripe', async () => {
+    const fetchImpl = stubFetch({ body: {} })
+    await createCheckout(db, { STRIPE_KEY: 'sk_test_alias', PUBLISHABLE_STRIPE: 'pk_test_alias' }, {
+      teamId: 'team-1',
+      email: 'buyer@example.com',
+      origin: 'https://survey.example.com',
+      fetchImpl,
+    })
+    assert.equal(fetchImpl.calls[0].init.headers.authorization, 'Bearer sk_test_alias')
+    assert.ok(decodeURIComponent(fetchImpl.calls[0].init.body).includes('ui_mode=embedded'))
   })
 
   test('a configured price id replaces the inline price', async () => {

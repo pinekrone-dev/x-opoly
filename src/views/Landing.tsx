@@ -178,7 +178,8 @@ export default function Landing({
                         Subscribe — $9/month
                       </button>
                       <p className="mt-2.5 text-center text-[11px] text-faint">
-                        Create your account, confirm your email, and pay securely by card. Powered by Stripe.
+                        Create your account, confirm your email, and pay securely by card. Promo codes are
+                        entered at checkout. Powered by Stripe.
                       </p>
                     </>
                   ) : (

@@ -116,6 +116,14 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
+    // One canonical hostname: any www-prefixed variant 301s to the bare
+    // domain, keeping path and query. The DNS record and Worker route for
+    // the www name still have to exist in Cloudflare for this to be reached.
+    if (url.hostname.startsWith('www.')) {
+      url.hostname = url.hostname.slice(4)
+      return Response.redirect(url.toString(), 301)
+    }
+
     if (url.pathname.startsWith('/api/')) {
       if (env.DB) {
         // Let the request through even if migrating failed: routes that do not

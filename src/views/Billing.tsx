@@ -54,6 +54,7 @@ export function Paywall({
           ? `Payments for this workspace stopped going through. Renew for ${billing.priceLabel} and everything is exactly where you left it.`
           : `One plan — ${billing.priceLabel} — with unlimited surveys, demographics, tours and client links. Cancel any time.`}
       </p>
+      <p className="mt-1 text-xs text-faint">Have a promo code? There&rsquo;s a field for it at checkout.</p>
 
       <div className="mt-5">
         <CheckoutPanel publishableKey={billing.publishableKey} />

@@ -1,5 +1,6 @@
 /**
- * Outbound email, over Resend's plain HTTP API.
+ * Outbound email, over plain HTTP — SendGrid or Resend, whichever key the
+ * deployment holds.
  *
  * No SDK — one fetch — so it runs unchanged on Cloudflare Workers. The only
  * mail this app sends is the signup verification link, and self-serve signup
@@ -7,10 +8,8 @@
  * receive its verification link should never get created.
  */
 
-const API = 'https://api.resend.com/emails'
-
 export function emailConfigured(env = {}) {
-  return Boolean(env.RESEND_API_KEY)
+  return Boolean(env.SENDGRID_API_KEY || env.RESEND_API_KEY)
 }
 
 export class EmailError extends Error {
@@ -21,38 +20,79 @@ export class EmailError extends Error {
 }
 
 /**
- * The sender line. EMAIL_FROM should name a domain verified in Resend;
- * the fallback is Resend's shared testing sender, which only delivers to
- * the account owner's own address — fine for trying it out, wrong for
- * production, so set EMAIL_FROM before opening signup.
+ * The sender, split into address and display name.
+ *
+ * EMAIL_FROM accepts either `Name <address>` or a bare address, and must be
+ * a sender the provider has verified — a SendGrid single sender or
+ * authenticated domain, or a Resend-verified domain. The fallback address
+ * will bounce on SendGrid until one is verified, so set EMAIL_FROM before
+ * opening signup.
  */
 function sender(env) {
-  return env.EMAIL_FROM || 'SiteSurvey CRE <onboarding@resend.dev>'
+  const raw = String(env.EMAIL_FROM || 'SiteSurvey CRE <noreply@realestateaistudio.com>')
+  const match = raw.match(/^\s*(.*?)\s*<([^>]+)>\s*$/)
+  if (match) return { name: match[1] || 'SiteSurvey CRE', email: match[2].trim() }
+  return { name: 'SiteSurvey CRE', email: raw.trim() }
 }
 
-export async function sendEmail(env, { to, subject, html, text }, { fetchImpl = fetch } = {}) {
-  if (!emailConfigured(env)) throw new EmailError('Email sending is not configured on this server.')
-
-  let response
+/** One fetch, with a network failure translated into the survivable error. */
+async function post(fetchImpl, url, init) {
   try {
-    response = await fetchImpl(API, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${env.RESEND_API_KEY}`,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({ from: sender(env), to: [to], subject, html, text }),
-    })
+    return await fetchImpl(url, init)
   } catch {
     // A network failure is the email service being unreachable, which callers
     // already know how to survive; it must not surface as a server error.
     throw new EmailError('The email service could not be reached. Try again in a moment.')
   }
+}
+
+async function viaSendgrid(env, { to, subject, html, text }, fetchImpl) {
+  const from = sender(env)
+  const response = await post(fetchImpl, 'https://api.sendgrid.com/v3/mail/send', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.SENDGRID_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: to }] }],
+      from,
+      subject,
+      // SendGrid insists text/plain comes before text/html.
+      content: [
+        { type: 'text/plain', value: text },
+        { type: 'text/html', value: html },
+      ],
+    }),
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    throw new EmailError(body?.errors?.[0]?.message ?? `The email service returned HTTP ${response.status}.`)
+  }
+  return response.headers.get('x-message-id') ?? 'sent'
+}
+
+async function viaResend(env, { to, subject, html, text }, fetchImpl) {
+  const from = sender(env)
+  const response = await post(fetchImpl, 'https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ from: `${from.name} <${from.email}>`, to: [to], subject, html, text }),
+  })
   const body = await response.json().catch(() => null)
   if (!response.ok) {
     throw new EmailError(body?.message ?? `The email service returned HTTP ${response.status}.`)
   }
   return body?.id ?? null
+}
+
+export async function sendEmail(env, message, { fetchImpl = fetch } = {}) {
+  if (env.SENDGRID_API_KEY) return viaSendgrid(env, message, fetchImpl)
+  if (env.RESEND_API_KEY) return viaResend(env, message, fetchImpl)
+  throw new EmailError('Email sending is not configured on this server.')
 }
 
 /** The verification email, plain enough to survive any mail client. */
