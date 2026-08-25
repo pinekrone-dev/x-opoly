@@ -217,6 +217,30 @@ describe('finding block groups', () => {
     assert.match(queried, /MapServer\/12\/query/, 'the labels layer holds no polygons to return')
   })
 
+  test('esriJSON rings come out as GeoJSON the map can draw', async () => {
+    // The query asks for f=json, so polygons arrive as {rings}. The frontend
+    // hands geometry straight to L.geoJSON, which draws nothing for rings —
+    // no error, just a choropleth that never appears.
+    resetLayerCache()
+    const ring = [[-97.74, 30.27], [-97.73, 30.27], [-97.73, 30.28], [-97.74, 30.27]]
+    const fetchImpl = withLayerLookup({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        features: [
+          {
+            attributes: { GEOID: '1', STATE: '48', COUNTY: '453', CENTLAT: '30.27', CENTLON: '-97.74' },
+            geometry: { rings: [ring] },
+          },
+        ],
+      }),
+    })
+
+    const groups = await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.equal(groups[0].geometry.type, 'Polygon')
+    assert.deepEqual(groups[0].geometry.coordinates, [ring])
+  })
+
   test('a layer that answers with nothing is not the end of the search', async () => {
     // Live, discovery picked layer 4 and the request came back empty, which
     // was reported as "no block groups for that area" over downtown Dallas.
@@ -296,6 +320,50 @@ describe('finding block groups', () => {
 
     await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
     assert.match(queried, /[?&]f=json(&|$)/, 'esriJSON is the format that is always supported')
+  })
+
+  test('an HTML answer is retried once and named, not parsed aloud', async () => {
+    // Live, TIGERweb answered one request with an HTML error page, and the
+    // panel showed the raw parse error: "Unexpected token '<'". The next
+    // request seconds later worked, so one retry absorbs the flake.
+    resetLayerCache()
+    let queries = 0
+    const fetchImpl = async (url) => {
+      if (!url.includes('/query')) return { ok: true, status: 200, json: async () => LAYERS }
+      queries += 1
+      if (queries === 1) {
+        return { ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token '<'") } }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          features: [
+            { attributes: { GEOID: '1', STATE: '48', COUNTY: '453', CENTLAT: '30.27', CENTLON: '-97.74' } },
+          ],
+        }),
+      }
+    }
+
+    const groups = await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.equal(groups.length, 1)
+    assert.equal(queries, 2, 'the failed request was retried once')
+  })
+
+  test('a persistent HTML answer surfaces as the service, not a parse error', async () => {
+    resetLayerCache()
+    const broken = {
+      ok: true,
+      status: 200,
+      json: async () => { throw new SyntaxError("Unexpected token '<'") },
+    }
+    const fetchImpl = async (url) =>
+      url.includes('/query') ? broken : { ok: true, status: 200, json: async () => LAYERS }
+
+    await assert.rejects(
+      () => fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl }),
+      /TIGERweb answered with something other than JSON/,
+    )
   })
 
   test('an ArcGIS error carried in a 200 is reported, not read as empty coverage', async () => {

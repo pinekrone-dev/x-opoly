@@ -131,6 +131,9 @@ export const COLUMN_ADDITIONS = [
   ['properties', 'tour_minutes', 'INTEGER'],
   // Which stored image is the hero shot in the tour book.
   ['properties', 'cover_image_id', 'TEXT'],
+  // Kept off the client share link. The broker's own map still shows it,
+  // dimmed — hiding is about what the client sees, not losing the site.
+  ['properties', 'hidden', 'INTEGER NOT NULL DEFAULT 0'],
 
   // Who a survey belongs to. NULL means it predates accounts existing; the
   // first account to be created adopts those rather than orphaning them.

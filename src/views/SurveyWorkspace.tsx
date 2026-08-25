@@ -4,6 +4,7 @@ import MapCanvas from '../components/MapCanvas'
 import PropertyPanel from '../components/PropertyPanel'
 import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
+import CompareSites from '../components/CompareSites'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
@@ -342,6 +343,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'share' && (
           <div className="h-full overflow-y-auto p-4">
             <ShareSettings survey={survey} onChange={setSurvey} />
+
+            <CompareSites survey={survey} properties={properties} stages={stages} />
 
             {/*
               The other half of sharing. A link is for a client at a desk; the

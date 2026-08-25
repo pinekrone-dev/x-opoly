@@ -133,7 +133,26 @@ export class DemographicsUnavailable extends Error {
 /** Degrees of latitude per mile. Longitude is scaled by cos(latitude). */
 const MILES_PER_DEGREE = 69
 
+/**
+ * One fetch with a deadline, plus a single retry.
+ *
+ * Both census services intermittently answer one request with an HTML error
+ * page and the very next one normally — observed live, where the same check
+ * failed on one domain and passed on the other seconds apart. One retry
+ * absorbs that; more would just slow down a real outage.
+ */
 async function withTimeout(fetchImpl, url, timeout, label) {
+  try {
+    return await requestJson(fetchImpl, url, timeout, label)
+  } catch (error) {
+    // A rejection the service itself spelled out (an ArcGIS error object) is
+    // deliberate and will repeat; only the transient shapes are worth retrying.
+    if (!error?.transient) throw error
+    return await requestJson(fetchImpl, url, timeout, label)
+  }
+}
+
+async function requestJson(fetchImpl, url, timeout, label) {
   const controller = typeof AbortController === 'function' ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), timeout) : null
   try {
@@ -141,8 +160,18 @@ async function withTimeout(fetchImpl, url, timeout, label) {
       signal: controller?.signal,
       headers: { accept: 'application/json' },
     })
-    if (!response.ok) throw new Error(`${label} HTTP ${response.status}`)
-    const body = await response.json()
+    if (!response.ok) {
+      throw transient(new Error(`${label} HTTP ${response.status}`))
+    }
+
+    let body
+    try {
+      body = await response.json()
+    } catch {
+      // An HTML error page with HTTP 200. Without this the raw parse error —
+      // "Unexpected token '<'" — is what reached the panel.
+      throw transient(new Error(`${label} answered with something other than JSON`))
+    }
 
     // ArcGIS reports its own failures in the body with HTTP 200. Left
     // unchecked they arrive downstream as missing fields and get reported as
@@ -155,6 +184,11 @@ async function withTimeout(fetchImpl, url, timeout, label) {
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+function transient(error) {
+  error.transient = true
+  return error
 }
 
 /**
@@ -254,8 +288,28 @@ function toGroup(feature, lat, lng) {
     lat: centroid.lat,
     lng: centroid.lng,
     miles: haversineMiles({ lat, lng }, centroid),
-    geometry: feature.geometry ?? null,
+    geometry: toGeoJson(feature.geometry),
   }
+}
+
+/**
+ * Geometry as GeoJSON, whichever dialect the service answered in.
+ *
+ * The query asks for `f=json`, so what comes back is esriJSON — polygons as
+ * `{rings}` — but the map draws with `L.geoJSON`. Shipping the rings through
+ * unconverted would not error anywhere; Leaflet would simply draw nothing,
+ * and the choropleth would look like it never loaded.
+ */
+function toGeoJson(geometry) {
+  if (!geometry) return null
+  if (geometry.type && geometry.coordinates) return geometry
+  if (Array.isArray(geometry.rings) && geometry.rings.length > 0) {
+    // Block groups are almost always one ring; when there are more, Leaflet
+    // treats the first as the shell and the rest as holes, which matches how
+    // TIGERweb orders them closely enough for a translucent overlay.
+    return { type: 'Polygon', coordinates: geometry.rings }
+  }
+  return null
 }
 
 /**

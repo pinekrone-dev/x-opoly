@@ -244,11 +244,52 @@ try {
       JSON.stringify(rings.map((ring) => `${ring.miles}mi:${ring.metrics.population}`)))
     check('the figures name their source', typeof demographics.body?.source === 'string',
       String(demographics.body?.source))
+
+    // The map shades block-group polygons with L.geoJSON, which draws nothing
+    // for esriJSON rings — silently. This is the check that catches a format
+    // regression before a broker wonders why the choropleth never appears.
+    const shapes = (demographics.body?.areas ?? []).filter((area) => area.geometry)
+    check('block groups carry geometry the map can draw',
+      shapes.length > 0 && shapes.every((area) =>
+        area.geometry.type && Array.isArray(area.geometry.coordinates)),
+      `${shapes.length} shapes, first: ${JSON.stringify(shapes[0]?.geometry?.type ?? null)}`)
   } else {
     // A census outage should not fail the build, but it must be visible
     // rather than quietly skipped.
     check('census demographics are reachable', false,
       `status ${demographics.status}: ${JSON.stringify(demographics.body).slice(0, 200)}`)
+  }
+
+  // The client share link, and the promise that a hidden site never reaches it.
+  {
+    const buried = createdIds[1]
+    await api(`/api/properties/${buried}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ hidden: true }),
+    })
+    const share = await api(`/api/surveys/${surveyId}/share`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled: true }),
+    })
+    const token = share.body?.survey?.share?.token
+    check('sharing switches on and mints a token', Boolean(token), `status ${share.status}`)
+
+    if (token) {
+      const clientView = await api(`/api/share/${token}`)
+      const names = (clientView.body?.properties ?? []).map((property) => property.name)
+      check('the client link opens', clientView.status === 200, `status ${clientView.status}`)
+      check('a hidden site never reaches the client', !names.includes(PINS[1].name),
+        JSON.stringify(names))
+      check('the shown sites do', names.includes(PINS[0].name), JSON.stringify(names))
+      check('the hidden flag itself stays private',
+        (clientView.body?.properties ?? []).every((property) => !('hidden' in property)))
+    }
+
+    // Put it back so the later UI checks see both pins.
+    await api(`/api/properties/${buried}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ hidden: false }),
+    })
   }
 
   // Flyer and images: what the tour book is built out of.

@@ -144,4 +144,29 @@ describe('client sharing', () => {
     assert.ok(!('surveyId' in result.properties[0]), 'internal survey id is withheld')
     assert.ok(!('share' in result.survey), 'the token is not echoed back')
   })
+
+  test('a hidden site never reaches the client', async () => {
+    // The walkthrough's promise: hide the unqualified site, share the link,
+    // and the client sees only what the broker chose. Filtered server-side,
+    // so it is absent from the payload — not just undrawn.
+    const shared = await createSurvey(db, { name: 'Curated' })
+    const shown = await createProperty(db, shared.id, { name: 'Qualified', lat: 30.1, lng: -97.1 })
+    const buried = await createProperty(db, shared.id, { name: 'Unqualified', lat: 30.2, lng: -97.2 })
+    await updateProperty(db, buried.id, { hidden: true })
+    await updateShare(db, shared.id, { enabled: true })
+
+    const result = await resolveShare(db, shared.share.token)
+    assert.deepEqual(result.properties.map((p) => p.name), ['Qualified'])
+    assert.ok(!('hidden' in result.properties[0]), 'the flag itself stays private')
+
+    // Unhiding is the refresh-and-it-appears moment from the walkthrough.
+    await updateProperty(db, buried.id, { hidden: false })
+    const after = await resolveShare(db, shared.share.token)
+    assert.equal(after.properties.length, 2)
+
+    // The broker's own view still carries both, flagged.
+    const mine = await listProperties(db, shared.id)
+    assert.equal(mine.length, 2)
+    assert.equal(mine.find((p) => p.id === shown.id).hidden, false)
+  })
 })

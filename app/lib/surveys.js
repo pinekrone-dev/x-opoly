@@ -50,6 +50,7 @@ const PROPERTY_FIELDS = {
   flyer_name: (v) => text(v, 300),
   photo_path: (v) => text(v, 500),
   tour_order: (v) => integer(v, 0, 10000),
+  hidden: (v) => (v ? 1 : 0),
 }
 
 const SURVEY_FIELDS = {
@@ -123,6 +124,7 @@ function mapProperty(row) {
     flyerName: row.flyer_name,
     photoUrl: row.photo_path ? `/api/files/${row.photo_path}` : null,
     tourOrder: row.tour_order,
+    hidden: toBool(row.hidden),
     fields: [],
     images: [],
     createdAt: row.created_at,
@@ -360,6 +362,10 @@ export async function resolveShare(db, token) {
       zoom: survey.zoom,
       expiresAt: survey.share.expiresAt,
     },
-    properties: (await listProperties(db, row.id)).map(({ surveyId, notes, ...rest }) => rest),
+    properties: (await listProperties(db, row.id))
+      // What the broker hid, the client never receives — filtered here rather
+      // than in the client view, so it is not merely invisible but absent.
+      .filter((property) => !property.hidden)
+      .map(({ surveyId, notes, hidden, ...rest }) => rest),
   }
 }

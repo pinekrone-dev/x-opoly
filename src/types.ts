@@ -87,6 +87,8 @@ export interface Property {
   flyerName: string | null
   photoUrl: string | null
   tourOrder: number | null
+  /** Kept off the client share link; the broker still sees it, dimmed. */
+  hidden?: boolean
   createdAt: string
   updatedAt: string
 }

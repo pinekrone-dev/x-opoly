@@ -38,12 +38,56 @@ interface Props {
 
 const FALLBACK_CENTER: [number, number] = [30.2672, -97.7431]
 
+const HOME_STORAGE_KEY = 'sitesurvey.home'
+
+/**
+ * The broker's home market: wherever they last left the map.
+ *
+ * A survey with pins fits to them and never reaches this; an empty new survey
+ * used to open on the hardcoded fallback, which is the wrong city for anyone
+ * not in Austin. Remembering the last view means the second survey opens
+ * where the broker actually works, with nothing to configure.
+ */
+function homeView(): { center: [number, number]; zoom: number } {
+  try {
+    const raw = window.localStorage.getItem(HOME_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (
+        Number.isFinite(parsed?.lat) &&
+        Number.isFinite(parsed?.lng) &&
+        Number.isFinite(parsed?.zoom)
+      ) {
+        return { center: [parsed.lat, parsed.lng], zoom: parsed.zoom }
+      }
+    }
+  } catch {
+    // Blocked storage just means the fallback city.
+  }
+  return { center: FALLBACK_CENTER, zoom: 11 }
+}
+
+function rememberView(instance: L.Map) {
+  try {
+    const center = instance.getCenter()
+    window.localStorage.setItem(
+      HOME_STORAGE_KEY,
+      JSON.stringify({ lat: center.lat, lng: center.lng, zoom: instance.getZoom() }),
+    )
+  } catch {
+    // Nothing to do — the map still works, it just cannot remember.
+  }
+}
+
 function pinIcon(property: Property, index: number | null, selected: boolean): L.DivIcon {
   const color = STAGE_META[property.stage]?.color ?? STAGE_META.prospect.color
   const label = index == null ? '' : String(index + 1)
+  // A site hidden from the client link stays on the broker's map, dimmed —
+  // visible enough to manage, distinct enough that its state is never a guess.
+  const dimmed = property.hidden ? 'opacity:0.45;' : ''
   return L.divIcon({
     className: `site-pin${selected ? ' site-pin--selected' : ''}`,
-    html: `<div class="site-pin__body" style="background:${color}"><span class="site-pin__label">${label}</span></div>`,
+    html: `<div class="site-pin__body" style="background:${color};${dimmed}"><span class="site-pin__label">${label}</span></div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 28],
     popupAnchor: [0, -26],
@@ -101,8 +145,10 @@ export default function MapCanvas({
   useEffect(() => {
     if (!container.current || map.current) return
 
-    const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(FALLBACK_CENTER, 11)
+    const home = homeView()
+    const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(home.center, home.zoom)
     instance.on('click', (event: L.LeafletMouseEvent) => clickHandler.current?.(event.latlng.lat, event.latlng.lng))
+    instance.on('moveend', () => rememberView(instance))
     map.current = instance
 
     // The container is often sized by a flex parent that settles after mount.

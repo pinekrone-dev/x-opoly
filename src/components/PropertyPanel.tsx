@@ -136,6 +136,11 @@ export default function PropertyPanel({
     onChange?.(updated)
   }
 
+  const toggleHidden = async () => {
+    const { property: updated } = await api.updateProperty(property.id, { hidden: !property.hidden })
+    onChange?.(updated)
+  }
+
   const loadDemographics = async () => {
     if (property.lat == null || property.lng == null) {
       setDemoError('Drop this property on the map first.')
@@ -224,12 +229,46 @@ export default function PropertyPanel({
           ) : (
             <StageSelect stage={property.stage} onChange={(stage) => void setStage(stage)} />
           )}
-          {property.lat != null && (
-            <span className="font-mono text-[11px] text-faint">
-              {property.lat.toFixed(4)}, {property.lng?.toFixed(4)}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {property.lat != null && (
+              <span className="font-mono text-[11px] text-faint">
+                {property.lat.toFixed(4)}, {property.lng?.toFixed(4)}
+              </span>
+            )}
+            {!readOnly && (
+              <button
+                type="button"
+                className={`btn-ghost px-1.5 py-1 ${property.hidden ? 'text-amber-600' : 'text-faint hover:text-body'}`}
+                onClick={() => void toggleHidden()}
+                aria-pressed={Boolean(property.hidden)}
+                title={
+                  property.hidden
+                    ? 'Hidden from the client link — click to show it'
+                    : 'Shown on the client link — click to hide it'
+                }
+                aria-label={property.hidden ? 'Show this site to clients' : 'Hide this site from clients'}
+              >
+                {property.hidden ? (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                    <path d="m1 1 22 22" />
+                  </svg>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z" />
+                    <circle cx="12" cy="12" r="3" />
+                  </svg>
+                )}
+              </button>
+            )}
+          </div>
         </div>
+
+        {property.hidden && !readOnly ? (
+          <p className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-700">
+            Hidden from the client link. It stays on your map, dimmed, until you show it again.
+          </p>
+        ) : null}
 
         <nav className="flex gap-1 border-b border-line px-3 py-2" aria-label="Property sections">
           {((readOnly ? ['details', 'flyer', 'demographics'] : ['details', 'flyer', 'demographics', 'competition']) as Tab[]).map((entry) => (

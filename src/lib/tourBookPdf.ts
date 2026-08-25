@@ -27,11 +27,11 @@ const MARGIN = 42
 const CONTENT_WIDTH = PAGE.width - MARGIN * 2
 const FOOTER_Y = PAGE.height - 28
 
-const INK = { r: 15, g: 23, b: 42 }
-const BODY = { r: 51, g: 65, b: 85 }
-const MUTED = { r: 113, g: 128, b: 150 }
-const RULE = { r: 226, g: 232, b: 240 }
-const ACCENT = { r: 13, g: 148, b: 136 }
+export const INK = { r: 15, g: 23, b: 42 }
+export const BODY = { r: 51, g: 65, b: 85 }
+export const MUTED = { r: 113, g: 128, b: 150 }
+export const RULE = { r: 226, g: 232, b: 240 }
+export const ACCENT = { r: 13, g: 148, b: 136 }
 
 /** The QR block sits bottom-right; content flows above it. */
 const QR_SIZE = 96
@@ -44,7 +44,7 @@ interface BookInput {
   summary: { startTime: string; endTime: string; driveLabel: string } | null
 }
 
-interface LoadedImage {
+export interface LoadedImage {
   dataUrl: string
   width: number
   height: number
@@ -60,7 +60,7 @@ type Doc = import('jspdf').jsPDF
  * it is given, and a distorted building photo is worse than none. Returns null
  * rather than throwing, so one unreachable image cannot cost the whole export.
  */
-async function loadImage(url: string): Promise<LoadedImage | null> {
+export async function loadImage(url: string): Promise<LoadedImage | null> {
   try {
     const response = await fetch(url)
     if (!response.ok) return null
@@ -87,7 +87,7 @@ async function loadImage(url: string): Promise<LoadedImage | null> {
 }
 
 /** Fits an image inside a box without distorting it. */
-function contain(image: LoadedImage, box: { width: number; height: number }) {
+export function contain(image: LoadedImage, box: { width: number; height: number }) {
   const scale = Math.min(box.width / image.width, box.height / image.height)
   return { width: image.width * scale, height: image.height * scale }
 }
