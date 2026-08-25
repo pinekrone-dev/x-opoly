@@ -121,7 +121,9 @@ try {
   // Failing loudly here matters — silently skipping the API checks would make
   // a locked-out run look like a passing one.
   const account = await api('/api/auth/me')
-  if (account.body?.setupRequired) {
+  const unclaimed = Boolean(account.body?.setupRequired)
+
+  if (unclaimed) {
     check('the workspace is unclaimed, so the API is open', true, 'no account exists yet')
   } else if (process.env.SMOKE_EMAIL && process.env.SMOKE_PASSWORD) {
     const signedIn = await api('/api/auth/login', {
@@ -333,6 +335,35 @@ try {
     timeout: 45000,
   })
   check('GET /survey/:id serves the app', response?.status() === 200, `status ${response?.status()}`)
+
+  /*
+   * The interface is behind a login now. On an unclaimed workspace that means
+   * the claim form, which is worth asserting — it was unreachable until
+   * recently, so nobody could create an account at all — but it also means the
+   * rest of the UI cannot be reached from here.
+   *
+   * Deliberately not registering an account to get past it: this runs against
+   * the real deployment on every push, and claiming someone's workspace with a
+   * test account would take it away from them.
+   */
+  if (unclaimed && !sessionCookie) {
+    await page.waitForSelector('#root *', { timeout: 20000 })
+    const wall = await page.textContent('body')
+    check(
+      'an unclaimed workspace offers the claim form',
+      wall?.includes('Claim this workspace') || wall?.includes('Create the account'),
+      (wall ?? '').slice(0, 120),
+    )
+    check(
+      'the deployment can be verified end to end',
+      false,
+      'This workspace has not been claimed. Create the account in the browser, then add ' +
+        'SMOKE_EMAIL and SMOKE_PASSWORD as repository secrets so these checks can sign in. ' +
+        'Until then everything below the login cannot be exercised.',
+    )
+    await page.screenshot({ path: 'smoke-map.png', fullPage: false })
+    throw new Error('Workspace unclaimed — UI checks need credentials. See the check above.')
+  }
 
   // The frontend booted at all — this is what a missing asset upload breaks.
   await page.waitForSelector('#root *', { timeout: 20000 })

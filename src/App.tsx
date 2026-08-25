@@ -72,12 +72,22 @@ export default function App() {
     return <ShareView token={route.token} features={features} />
   }
 
-  // `setupRequired` keeps a fresh deployment usable: nothing is locked until
-  // an account exists to unlock it with.
-  if (!session.user && !session.setupRequired) {
+  /*
+   * Anyone without a session sees the sign-in screen — including on a
+   * workspace nobody has claimed yet, where it becomes the form that creates
+   * the first account.
+   *
+   * That distinction was previously wrong in a way that mattered: the guard
+   * skipped this branch entirely while `setupRequired` was true, so the claim
+   * form could never be reached and there was no way to create an account at
+   * all. The intent had been to keep a fresh deployment recoverable, but that
+   * only ever required leaving the *API* open during the setup window — which
+   * the server still does — not hiding the signup.
+   */
+  if (!session.user) {
     return (
       <SignIn
-        setupRequired={false}
+        setupRequired={session.setupRequired}
         smsConfigured={session.smsConfigured}
         onSignedIn={(user) => setSession({ ...session, user, setupRequired: false })}
       />
