@@ -11,6 +11,8 @@ interface Props {
   selectedId?: string | null
   onSelect?: (id: string) => void
   onMapClick?: (lat: number, lng: number) => void
+  /** Reports where the map is looking, so a dropped flyer can land nearby. */
+  onViewChange?: (center: { lat: number; lng: number }) => void
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
   /**
@@ -66,6 +68,7 @@ export default function MapCanvas({
   selectedId,
   onSelect,
   onMapClick,
+  onViewChange,
   routeIds,
   routeGeometry,
   routeColor = '#14b8a6',
@@ -170,6 +173,21 @@ export default function MapCanvas({
       }
     }
   }, [properties, selectedId, routeIds])
+
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !onViewChange) return undefined
+
+    const report = () => {
+      const center = instance.getCenter()
+      onViewChange({ lat: center.lat, lng: center.lng })
+    }
+    instance.on('moveend', report)
+    report()
+    return () => {
+      instance.off('moveend', report)
+    }
+  }, [onViewChange])
 
   // Draw the tour line.
   useEffect(() => {

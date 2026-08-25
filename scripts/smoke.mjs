@@ -421,55 +421,25 @@ try {
 
   check('no uncaught page errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
 
-  // The flyer viewer: pdf.js is a lazy chunk, so this also proves the split
-  // bundle actually loads rather than 404ing.
-  // Exact, case-sensitive: the tab's literal text is "flyer" (capitalised by
-  // CSS), and a loose match also hits "Fill in from flyer" and "Listing flyer"
-  // once the tab is open. Failures are reported rather than swallowed — a
-  // silently skipped click made the last failure read as a missing canvas.
-  try {
-    await page.click('text="flyer"', { timeout: 10000 })
-  } catch (error) {
-    check('the flyer tab could be opened', false, error.message.split('\n')[0])
-  }
-  await page.waitForTimeout(4000)
-  // Clipping opens in a full-screen dialog now — a flyer page rendered into a
-  // sidebar column was too small to crop accurately.
-  const clipButton = await page.$('text=Clip photos from flyer')
-  check('clipping opens in a dialog rather than the sidebar', Boolean(clipButton))
-  if (clipButton) {
-    await clipButton.click()
-    await page.waitForTimeout(3500)
+  // UI checks, ordered so the modal comes last. Opening the clipping dialog
+  // earlier and leaving it open made every later click time out against the
+  // overlay — three failures that looked like missing features and were not.
+  const openSite = async () => {
+    await page.click(`text=${PINS[0].name}`, { timeout: 10000 }).catch(() => undefined)
+    await page.waitForTimeout(900)
   }
 
-  const flyerCanvas = await page.$('[aria-label="Flyer page"]')
-  check('the flyer renders to a canvas', Boolean(flyerCanvas))
-  if (flyerCanvas) {
-    const painted = await flyerCanvas.evaluate((node) => node.width > 0 && node.height > 0)
-    check('the PDF page actually rasterised', painted)
-  }
-  const viewerText = await page.textContent('body')
-  check('the crop prompt is shown', viewerText?.includes('Drag a box') ?? false)
-  // The share tab carries the book, not just the link.
-  await page.click('text="Share"').catch(() => undefined)
-  await page.waitForTimeout(900)
-  const shareText = await page.textContent('body')
-  check('the share tab offers the tour book', shareText?.includes('Tour book') ?? false)
-  check('with a PDF download', shareText?.includes('Download tour book') ?? false)
-  await page.click('text="Map"').catch(() => undefined)
-  await page.waitForTimeout(600)
-  await page.click(`text=${PINS[0].name}`).catch(() => undefined)
-  await page.waitForTimeout(900)
-  await page.click('text="flyer"').catch(() => undefined)
-  await page.waitForTimeout(1200)
+  await openSite()
 
+  await page.click('text="flyer"', { timeout: 10000 }).catch(() => undefined)
+  await page.waitForTimeout(900)
   const fillButton = await page.$('text=Fill in from flyer')
   check('the fill-from-flyer button is on the flyer tab', Boolean(fillButton))
 
   // Directions: the clickable half of the pair. The tour book PDF prints the
   // same destination as a QR, which paper needs and a screen does not.
-  await page.click('text="details"').catch(() => undefined)
-  await page.waitForTimeout(600)
+  await page.click('text="details"', { timeout: 10000 }).catch(() => undefined)
+  await page.waitForTimeout(700)
   const directions = await page.$('a:has-text("Get directions")')
   check('a Get directions link is offered', Boolean(directions))
   if (directions) {
@@ -479,6 +449,45 @@ try {
       Boolean(href?.includes('google.com/maps/dir/') && href?.includes(String(PINS[0].lat))),
       String(href),
     )
+  }
+
+  // The share tab carries the book, not just the link.
+  await page.click('text="Share"', { timeout: 10000 }).catch(() => undefined)
+  await page.waitForTimeout(1000)
+  const shareText = await page.textContent('body')
+  check('the share tab offers the tour book', shareText?.includes('Tour book') ?? false)
+  check('with a PDF download', shareText?.includes('Download tour book') ?? false)
+
+  // Clipping last, because it opens a modal over everything else.
+  await page.click('text="Map"', { timeout: 10000 }).catch(() => undefined)
+  await page.waitForTimeout(700)
+  await openSite()
+  await page.click('text="flyer"', { timeout: 10000 }).catch(() => undefined)
+  await page.waitForTimeout(900)
+
+  const clipButton = await page.$('text=Clip photos from flyer')
+  check('clipping opens in a dialog rather than the sidebar', Boolean(clipButton))
+  if (clipButton) {
+    await clipButton.click()
+    await page.waitForTimeout(4000)
+
+    const flyerCanvas = await page.$('[aria-label="Flyer page"]')
+    check('the flyer renders to a canvas', Boolean(flyerCanvas))
+    if (flyerCanvas) {
+      const painted = await flyerCanvas.evaluate((node) => node.width > 0 && node.height > 0)
+      check('the PDF page actually rasterised', painted)
+      const box = await flyerCanvas.boundingBox()
+      // The whole point of the change: bigger than the sidebar column it used
+      // to be squeezed into.
+      check('the page is rendered large enough to crop accurately', (box?.width ?? 0) > 500,
+        `${Math.round(box?.width ?? 0)}px wide`)
+    }
+    const viewerText = await page.textContent('body')
+    check('the crop prompt is shown', viewerText?.includes('Drag a box') ?? false)
+
+    // Close it, or everything after this clicks the overlay instead.
+    await page.click('text="Done"', { timeout: 10000 }).catch(() => undefined)
+    await page.waitForTimeout(600)
   }
 
   await page.screenshot({ path: 'smoke-map.png', fullPage: false })

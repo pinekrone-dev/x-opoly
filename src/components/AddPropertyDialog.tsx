@@ -5,6 +5,8 @@ import type { GeocodeResult, Property } from '../types'
 interface Props {
   surveyId: string
   flyerExtractionEnabled: boolean
+  /** Where the map is looking, so a flyer with no address still lands in view. */
+  mapCenter?: { lat: number; lng: number } | null
   onAdded: (property: Property, message?: string) => void
   onClose: () => void
   onDropPinMode: () => void
@@ -12,7 +14,14 @@ interface Props {
 
 type Mode = 'search' | 'flyer' | 'manual'
 
-export default function AddPropertyDialog({ surveyId, flyerExtractionEnabled, onAdded, onClose, onDropPinMode }: Props) {
+export default function AddPropertyDialog({
+  surveyId,
+  flyerExtractionEnabled,
+  mapCenter,
+  onAdded,
+  onClose,
+  onDropPinMode,
+}: Props) {
   const [mode, setMode] = useState<Mode>('search')
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GeocodeResult[]>([])
@@ -67,7 +76,7 @@ export default function AddPropertyDialog({ surveyId, flyerExtractionEnabled, on
     setBusy(true)
     setError(null)
     try {
-      const { property, extraction } = await api.uploadFlyer(surveyId, file)
+      const { property, extraction } = await api.uploadFlyer(surveyId, file, mapCenter)
       const uncertain = extraction.uncertainFields?.length
         ? ` Check these fields: ${extraction.uncertainFields.join(', ')}.`
         : ''

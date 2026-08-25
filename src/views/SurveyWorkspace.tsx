@@ -35,6 +35,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
   const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null)
   const [bookBusy, setBookBusy] = useState(false)
   const [bookError, setBookError] = useState<string | null>(null)
   const [demoView, setDemoView] = useState<{
@@ -327,6 +328,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 onSelect={setSelectedId}
                 tiles={features.tiles}
                 basemaps={features.basemaps}
+                onViewChange={setMapCenter}
                 routeIds={tourOrder}
                 routeGeometry={tourPlan?.geometry ?? null}
                 choropleth={choropleth}
@@ -396,6 +398,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
       {adding && (
         <AddPropertyDialog
+          mapCenter={mapCenter}
           surveyId={survey.id}
           flyerExtractionEnabled={features.flyerExtraction}
           onClose={() => setAdding(false)}

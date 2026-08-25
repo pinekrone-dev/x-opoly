@@ -169,12 +169,18 @@ export const api = {
   demographics: (lat: number, lng: number) => request<Demographics>(`/api/demographics?lat=${lat}&lng=${lng}`),
 
   /** Uploads the raw file body; the filename travels in a header. */
-  uploadFlyer: (surveyId: string, file: File) =>
+  uploadFlyer: (surveyId: string, file: File, hint?: { lat: number; lng: number } | null) =>
     request<{ property: Property; extraction: { model: string; confidence: string; uncertainFields: string[] } }>(
       `/api/surveys/${surveyId}/flyer`,
       {
         method: 'POST',
-        headers: { 'content-type': file.type || 'application/octet-stream', 'x-filename': encodeURIComponent(file.name) },
+        headers: {
+          'content-type': file.type || 'application/octet-stream',
+          'x-filename': encodeURIComponent(file.name),
+          // Where the broker is looking. Used only when the flyer carries no
+          // address to geocode, so the pin lands in view rather than nowhere.
+          ...(hint ? { 'x-map-lat': String(hint.lat), 'x-map-lng': String(hint.lng) } : {}),
+        },
         body: file,
       },
     ),

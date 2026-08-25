@@ -92,7 +92,7 @@ const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
  * no pin at all, and it is obvious it needs moving. Never throws — a geocoder
  * outage must not cost someone their upload.
  */
-async function locateFromFields(fields, survey, env) {
+async function locateFromFields(fields, survey, env, { hint = null, siblings = [] } = {}) {
   const parts = [fields?.address, fields?.city, fields?.state, fields?.zip].filter(Boolean)
 
   if (parts.length > 0) {
@@ -102,14 +102,43 @@ async function locateFromFields(fields, survey, env) {
         return { lat: results[0].lat, lng: results[0].lng, placed: 'geocoded' }
       }
     } catch {
-      // Fall through to the survey centre.
+      // Fall through to the cruder guesses below.
     }
+  }
+
+  // Where the broker is actually looking, sent by the client. The best of the
+  // fallbacks, because a flyer is nearly always dropped while looking at the
+  // area it belongs to.
+  if (hint && Number.isFinite(hint.lat) && Number.isFinite(hint.lng)) {
+    return { lat: hint.lat, lng: hint.lng, placed: 'map-centre' }
   }
 
   if (survey?.center) {
     return { lat: survey.center.lat, lng: survey.center.lng, placed: 'survey-centre' }
   }
+
+  // The survey's own centre of gravity. A survey stores no centre until
+  // someone sets one, so without this a flyer dropped on a survey that already
+  // has pins still landed nowhere — which is exactly how the bug was reported.
+  const placed = siblings.filter((row) => row.lat != null && row.lng != null)
+  if (placed.length > 0) {
+    return {
+      lat: placed.reduce((total, row) => total + row.lat, 0) / placed.length,
+      lng: placed.reduce((total, row) => total + row.lng, 0) / placed.length,
+      placed: 'near-existing-sites',
+    }
+  }
+
   return { lat: null, lng: null, placed: 'unplaced' }
+}
+
+/** An optional "where the map is looking" hint from the client. */
+function mapHint(c) {
+  const lat = Number(c.req.header('x-map-lat'))
+  const lng = Number(c.req.header('x-map-lng'))
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null
+  return { lat, lng }
 }
 
 /** A tour start/end point: a real coordinate, or nothing at all. */
@@ -729,7 +758,10 @@ export function createApp({ db, storage, env = {} }) {
 
     try {
       const { fields, model } = await extractFromFlyer(upload.bytes, upload.mimeType, { env })
-      const located = await locateFromFields(fields, survey, env)
+      const located = await locateFromFields(fields, survey, env, {
+        hint: mapHint(c),
+        siblings: await listProperties(db, survey.id),
+      })
 
       const property = await createProperty(db, survey.id, {
         ...toPropertyInput(fields),
@@ -758,7 +790,10 @@ export function createApp({ db, storage, env = {} }) {
         // Keep the file and file a stub so the upload is never wasted — but
         // still place it, so the broker sees a pin appear and can drag it to
         // the right spot rather than wondering whether anything happened.
-        const located = await locateFromFields(null, survey, env)
+        const located = await locateFromFields(null, survey, env, {
+          hint: mapHint(c),
+          siblings: await listProperties(db, survey.id),
+        })
         const property = await createProperty(db, survey.id, {
           name: filename,
           lat: located.lat,
@@ -871,7 +906,9 @@ export function createApp({ db, storage, env = {} }) {
       // A site read from a flyer but never placed still needs a pin.
       if (property.lat == null || property.lng == null) {
         const survey = await getSurvey(db, property.surveyId)
-        const located = await locateFromFields(fields, survey, env)
+        const located = await locateFromFields(fields, survey, env, {
+          siblings: await listProperties(db, property.surveyId),
+        })
         if (located.lat != null) {
           patch.lat = located.lat
           patch.lng = located.lng
