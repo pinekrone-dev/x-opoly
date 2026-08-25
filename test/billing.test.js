@@ -343,3 +343,22 @@ describe('webhooks', () => {
     assert.equal(await applyWebhook(db, { type: 'invoice.finalized', data: { object: { id: 'in_1' } } }), false)
   })
 })
+
+describe('minting a free code', () => {
+  test('creates a 100%-off forever coupon and a single-use promotion code', async () => {
+    const { mintFreeCode } = await import('../app/lib/billing.js')
+    const fetchImpl = stubFetch({ body: { id: 'coupon_1' } }, { body: { id: 'promo_1', code: 'FREE-XYZ' } })
+    const minted = await mintFreeCode({ STRIPE_SECRET_KEY: 'sk_test_stub' }, { fetchImpl })
+    assert.equal(minted.code, 'FREE-XYZ')
+
+    const couponBody = decodeURIComponent(fetchImpl.calls[0].init.body)
+    assert.ok(fetchImpl.calls[0].url.endsWith('/coupons'))
+    assert.ok(couponBody.includes('percent_off=100'))
+    assert.ok(couponBody.includes('duration=forever'))
+
+    const promoBody = decodeURIComponent(fetchImpl.calls[1].init.body)
+    assert.ok(fetchImpl.calls[1].url.endsWith('/promotion_codes'))
+    assert.ok(promoBody.includes('coupon=coupon_1'))
+    assert.ok(promoBody.includes('max_redemptions=1'))
+  })
+})

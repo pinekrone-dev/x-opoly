@@ -11,9 +11,16 @@ import type { DealStage, Property, Zone } from '../types'
  * created and removed here too, because a boundary belongs to the map, not
  * to any one site.
  */
-/** The gradient bar with its endpoints in real units. */
-function DemographicScale({ colorBy, scale }: { colorBy: string; scale: { min: number; max: number } }) {
+/** The gradient bar with low, median and high in real units. */
+export function DemographicScale({
+  colorBy,
+  scale,
+}: {
+  colorBy: string
+  scale: { min: number; max: number; median?: number }
+}) {
   const definition = METRIC_DEFINITIONS.find((metric) => metric.key === colorBy)
+  const format = definition?.format ?? 'count'
   const stops = [0, 0.25, 0.5, 0.75, 1]
     .map((t) => colorFor(scale.min + t * (scale.max - scale.min), scale.min, scale.max))
     .join(', ')
@@ -21,8 +28,9 @@ function DemographicScale({ colorBy, scale }: { colorBy: string; scale: { min: n
     <div className="mt-1.5 px-0.5">
       <div className="h-2 rounded-full" style={{ background: `linear-gradient(to right, ${stops})` }} aria-hidden />
       <div className="mt-0.5 flex justify-between text-[10px] text-faint">
-        <span>{formatMetric(scale.min, definition?.format ?? 'count')}</span>
-        <span>{formatMetric(scale.max, definition?.format ?? 'count')}</span>
+        <span>{formatMetric(scale.min, format)}</span>
+        {scale.median != null ? <span className="text-body">{formatMetric(scale.median, format)} med</span> : null}
+        <span>{formatMetric(scale.max, format)}</span>
       </div>
     </div>
   )
@@ -49,7 +57,7 @@ export default function MapLegend({
     radius: number
     busy: boolean
     /** The active shading's value range, drawn as the legend's colour scale. */
-    scale?: { min: number; max: number } | null
+    scale?: { min: number; max: number; median?: number } | null
   } | null
   onDemographics?: (colorBy: string | null, radius: number) => void
   /** The client's legend: stage toggles work, but nothing can be removed. */

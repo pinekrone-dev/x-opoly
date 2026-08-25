@@ -59,9 +59,12 @@ export default function ShareView({ token, features }: { token: string; features
     if (values.length === 0) return null
     const min = Math.min(...values)
     const max = Math.max(...values)
+    const sorted = [...values].sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
     return {
       min,
       max,
+      median,
       entries: shapes.map((area) => ({
         geoid: area.geoid,
         geometry: area.geometry,
@@ -201,7 +204,7 @@ export default function ShareView({ token, features }: { token: string; features
                     colorBy: 'population',
                     radius: 5,
                     busy: false,
-                    scale: { min: choropleth.min, max: choropleth.max },
+                    scale: { min: choropleth.min, max: choropleth.max, median: choropleth.median },
                   }
                 : null
             }

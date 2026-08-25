@@ -180,6 +180,26 @@ export async function confirmCheckout(db, env, sessionId, { fetchImpl = fetch } 
   return { active: ['active', 'trialing'].includes(subscription.status), status: subscription.status, teamId }
 }
 
+/**
+ * Mints a single-use, 100%-off-forever promotion code.
+ *
+ * The operator's way to hand someone the product free without touching the
+ * Stripe dashboard: the code goes in at checkout, brings the total to zero,
+ * and — because checkout collects no card at zero — the invitee never enters
+ * payment details at all.
+ */
+export async function mintFreeCode(env, { fetchImpl = fetch } = {}) {
+  const coupon = await stripe(env, '/coupons', {
+    params: { percent_off: 100, duration: 'forever', name: 'Free forever (operator invite)' },
+    fetchImpl,
+  })
+  const promo = await stripe(env, '/promotion_codes', {
+    params: { coupon: coupon.id, max_redemptions: 1 },
+    fetchImpl,
+  })
+  return { code: promo.code }
+}
+
 /** A Stripe-hosted page where the subscriber updates cards or cancels. */
 export async function portalUrl(db, env, teamId, returnUrl, { fetchImpl = fetch } = {}) {
   const row = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [teamId])

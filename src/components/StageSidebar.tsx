@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { METRIC_DEFINITIONS } from './DemographicsPanel'
+import { DemographicScale } from './MapLegend'
 import type { DealStage, Property, Zone } from '../types'
 
 /**
@@ -18,7 +19,12 @@ interface Props {
   zones?: Zone[]
   onDeleteZone?: (id: string) => void
   /** The demographics layer control, part of the data catalog. */
-  demographics?: { colorBy: string | null; radius: number; busy: boolean } | null
+  demographics?: {
+    colorBy: string | null
+    radius: number
+    busy: boolean
+    scale?: { min: number; max: number; median?: number } | null
+  } | null
   onDemographics?: (colorBy: string | null, radius: number) => void
   /** Set once the map has been clicked; the zone form renders here. */
   pendingZone?: { lat: number; lng: number } | null
@@ -358,6 +364,9 @@ export default function StageSidebar({
                       </button>
                     ))}
                   </div>
+                ) : null}
+                {demographics.colorBy && demographics.scale ? (
+                  <DemographicScale colorBy={demographics.colorBy} scale={demographics.scale} />
                 ) : null}
                 {demographics.busy ? <p className="mt-1 text-[11px] text-faint">Loading census data…</p> : null}
               </div>

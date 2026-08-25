@@ -133,10 +133,13 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
     const min = Math.min(...values)
     const max = Math.max(...values)
+    const sorted = [...values].sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
     return {
       // The scale rides along so the legend can say what the colours mean.
       min,
       max,
+      median,
       entries: inside.map((area) => ({
         geoid: area.geoid,
         geometry: area.geometry,
@@ -325,6 +328,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         colorBy: demoView?.colorBy ?? null,
         radius: demoView?.radius ?? 3,
         busy: mapDemoBusy,
+        scale: choropleth ? { min: choropleth.min, max: choropleth.max, median: choropleth.median } : null,
       }}
       onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
       onStartZone={() => setZoneMode('armed')}
@@ -458,7 +462,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                     colorBy: demoView?.colorBy ?? null,
                     radius: demoView?.radius ?? 3,
                     busy: mapDemoBusy,
-                    scale: choropleth ? { min: choropleth.min, max: choropleth.max } : null,
+                    scale: choropleth ? { min: choropleth.min, max: choropleth.max, median: choropleth.median } : null,
                   }}
                   onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
                 />
@@ -475,7 +479,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                       colorBy: demoView.colorBy,
                       radius: demoView.radius,
                       busy: false,
-                      scale: { min: choropleth.min, max: choropleth.max },
+                      scale: { min: choropleth.min, max: choropleth.max, median: choropleth.median },
                     }}
                   />
                 </div>

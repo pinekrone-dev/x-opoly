@@ -80,6 +80,7 @@ import {
   confirmCheckout,
   createCheckout,
   isExemptEmail,
+  mintFreeCode,
   publishableKey,
   portalUrl,
   stripeConfigured,
@@ -1061,6 +1062,27 @@ export function createApp({ db, storage, env = {} }) {
     if (!sessionId) return c.json({ error: 'No checkout session to confirm.' }, 400)
     try {
       return c.json(await confirmCheckout(db, env, sessionId))
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 502)
+      throw error
+    }
+  })
+
+  /**
+   * Mints a free-forever signup code. Operator-team only: this is the
+   * house's pen, not a customer feature.
+   */
+  app.post('/api/billing/free-code', async (c) => {
+    const throttled = limited(c, 'free-code', 10, 60 * 60 * 1000)
+    if (throttled) return throttled
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
+    if (!(await teamIsExempt(user.teamId, user.email))) {
+      return c.json({ error: 'Only the workspace operator can mint free codes.' }, 403)
+    }
+    try {
+      return c.json(await mintFreeCode(env))
     } catch (error) {
       if (error instanceof BillingError) return c.json({ error: error.message }, 502)
       throw error
