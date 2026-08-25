@@ -47,6 +47,8 @@ export default function FlyerViewer({
   const documentRef = useRef<pdfjs.PDFDocumentProxy | null>(null)
   const renderTask = useRef<pdfjs.RenderTask | null>(null)
 
+  const [ready, setReady] = useState(false)
+  const [width, setWidth] = useState(0)
   const [pageCount, setPageCount] = useState(0)
   const [page, setPage] = useState(1)
   const [zoom, setZoom] = useState(1)
@@ -79,6 +81,7 @@ export default function FlyerViewer({
         documentRef.current = document
         setPageCount(document.numPages)
         setPage(1)
+        setReady(true)
         setLoading(false)
       })
       .catch((cause: Error) => {
@@ -97,8 +100,31 @@ export default function FlyerViewer({
       cancelled = true
       void task.destroy()
       documentRef.current = null
+      setReady(false)
     }
   }, [property.flyerUrl])
+
+  /*
+   * Watch the container, and redraw when it changes size.
+   *
+   * Without this the page was rasterised once, at whatever width the container
+   * happened to be on the first pass — which in the clipping dialog was before
+   * layout had settled, so it fell back to a hardcoded 600 and rendered at
+   * 300 CSS pixels inside a full-screen window. It also means the page now
+   * reflows when the window is resized, which it never did.
+   */
+  useEffect(() => {
+    const element = wrapRef.current
+    if (!element || typeof ResizeObserver === 'undefined') return undefined
+
+    const observer = new ResizeObserver((entries) => {
+      const next = Math.round(entries[0]?.contentRect.width ?? 0)
+      // Ignore sub-pixel jitter, which would otherwise redraw continuously.
+      setWidth((current) => (Math.abs(current - next) > 8 ? next : current))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
 
   // Draw the current page whenever it or the zoom changes.
   const draw = useCallback(async () => {
@@ -111,7 +137,11 @@ export default function FlyerViewer({
     renderTask.current?.cancel()
 
     const pdfPage = await document.getPage(page)
-    const available = wrapRef.current?.clientWidth ?? 600
+    // `?? 600` was wrong twice over: it only catches null, so a container
+    // measured at 0 produced a zero-width canvas, and a null ref produced a
+    // 600pt page regardless of how much room there actually was.
+    const measured = wrapRef.current?.clientWidth || width
+    const available = measured > 0 ? measured - 24 : 600
     const unscaled = pdfPage.getViewport({ scale: 1 })
     const fitScale = (available / unscaled.width) * zoom
     const viewport = pdfPage.getViewport({ scale: fitScale * QUALITY })
@@ -134,7 +164,7 @@ export default function FlyerViewer({
         setError(`That page could not be rendered (${(cause as Error).message}).`)
       }
     }
-  }, [page, zoom])
+  }, [page, zoom, ready, width])
 
   useEffect(() => {
     void draw()
