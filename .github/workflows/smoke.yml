@@ -35,6 +35,11 @@ jobs:
 
     env:
       SMOKE_URL: ${{ github.event.inputs.url || matrix.url }}
+      # Secrets are not ambient in Actions — a workflow only sees the ones it
+      # names. Without these two lines the smoke test kept reporting "add the
+      # secrets" after they had been added.
+      SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+      SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
 
     steps:
       - uses: actions/checkout@v4
