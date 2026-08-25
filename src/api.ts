@@ -1,5 +1,8 @@
 import type {
   Account,
+  CrmRecord,
+  Deal,
+  RecordType,
   BillingConfig,
   BillingStatus,
   Invite,
@@ -104,6 +107,26 @@ export const api = {
     request<{ user: Account }>('/api/auth/2fa', json(input)),
   changePassword: (input: { currentPassword: string; newPassword: string }) =>
     request<{ ok: true }>('/api/auth/password', json(input)),
+
+  // --- CRM ------------------------------------------------------------------
+  /** The four object types share one shape, so they share one set of calls. */
+  crm: {
+    list: <T = CrmRecord>(segment: string, search = '') =>
+      request<{ records: T[] }>(`/api/crm/${segment}${search ? `?q=${encodeURIComponent(search)}` : ''}`),
+    get: <T = CrmRecord>(segment: string, id: string) => request<{ record: T }>(`/api/crm/${segment}/${id}`),
+    create: <T = CrmRecord>(segment: string, input: Record<string, unknown>) =>
+      request<{ record: T }>(`/api/crm/${segment}`, json(input)),
+    update: <T = CrmRecord>(segment: string, id: string, patch: Record<string, unknown>) =>
+      request<{ record: T }>(`/api/crm/${segment}/${id}`, { ...json(patch), method: 'PATCH' }),
+    remove: (segment: string, id: string) => request<void>(`/api/crm/${segment}/${id}`, { method: 'DELETE' }),
+    addParty: (dealId: string, input: { kind: RecordType; refId: string; role?: string }) =>
+      request<{ deal: Deal }>(`/api/crm/deals/${dealId}/parties`, json(input)),
+    removeParty: (dealId: string, partyId: string) =>
+      request<void>(`/api/crm/deals/${dealId}/parties/${partyId}`, { method: 'DELETE' }),
+    /** Copies a known building into a survey, optionally straight onto the tour. */
+    sendPlace: (placeId: string, input: { surveyId: string; addToTour?: boolean }) =>
+      request<{ property: Property }>(`/api/crm/places/${placeId}/send`, json(input)),
+  },
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>

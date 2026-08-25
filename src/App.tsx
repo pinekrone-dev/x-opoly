@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import ShareView from './views/ShareView'
-import SurveyList from './views/SurveyList'
 import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
 import Landing from './views/Landing'
 import Welcome from './views/Welcome'
+import Home from './views/Home'
+import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
@@ -208,11 +209,38 @@ export default function App() {
     return <SurveyWorkspace id={route.id} features={features} />
   }
 
+  /* One CRM record: a deal, person, company or place. */
+  if (route.view === 'record' && route.recordType && route.id) {
+    return <RecordView recordType={route.recordType} id={route.id} />
+  }
+
+  /*
+   * The workspace home. A survey is one deal's map; the deals, people,
+   * companies and places behind it are what the broker opens the app for, so
+   * they are what greets them.
+   */
+  if (route.view === 'home') {
+    return (
+      <Home
+        account={session.user}
+        smsConfigured={session.smsConfigured}
+        billing={billing}
+        tab={route.tab ?? 'deals'}
+        onAccountChange={(user) => setSession({ ...session, user })}
+        onSignedOut={() => {
+          setSession({ ...session, user: null, setupRequired: false })
+          setDoor('landing')
+        }}
+      />
+    )
+  }
+
   return (
-    <SurveyList
+    <Home
       account={session.user}
       smsConfigured={session.smsConfigured}
       billing={billing}
+      tab="deals"
       onAccountChange={(user) => setSession({ ...session, user })}
       onSignedOut={() => {
         setSession({ ...session, user: null, setupRequired: false })

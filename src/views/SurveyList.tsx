@@ -9,12 +9,15 @@ export default function SurveyList({
   account,
   smsConfigured,
   billing,
+  embedded = false,
   onAccountChange,
   onSignedOut,
 }: {
   account?: import('../types').Account | null
   smsConfigured?: boolean
   billing?: import('../types').BillingStatus | null
+  /** Rendered inside the workspace shell, which already has a header. */
+  embedded?: boolean
   onAccountChange?: (account: import('../types').Account) => void
   onSignedOut?: () => void
 }) {
@@ -84,18 +87,24 @@ export default function SurveyList({
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-10">
-      <header className="mb-8 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-ink">Your surveys</h1>
-          <p className="mt-1 text-sm text-muted">
+    <div className={embedded ? '' : 'mx-auto max-w-5xl px-6 py-10'}>
+      <header className={`flex flex-wrap items-end justify-between gap-4 ${embedded ? 'mb-4' : 'mb-8'}`}>
+        {embedded ? (
+          <p className="text-sm text-muted">
             One survey per client search. Map the candidates, work the stages, send a link.
           </p>
-        </div>
+        ) : (
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-ink">Your surveys</h1>
+            <p className="mt-1 text-sm text-muted">
+              One survey per client search. Map the candidates, work the stages, send a link.
+            </p>
+          </div>
+        )}
         <button type="button" className="btn-primary" onClick={() => setCreating(true)}>
           New survey
         </button>
-        {account ? (
+        {!embedded && account ? (
           <AccountMenu
             account={account}
             smsConfigured={Boolean(smsConfigured)}

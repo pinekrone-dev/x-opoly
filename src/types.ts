@@ -316,3 +316,89 @@ export interface PlaceCategory {
   id: string
   label: string
 }
+
+
+// --- CRM ---------------------------------------------------------------------
+
+/** A field the broker added to a record's profile. */
+export interface RecordField {
+  id?: string
+  label: string
+  value?: string | null
+  position?: number
+}
+
+export type RecordType = 'deal' | 'person' | 'company' | 'place'
+
+export interface Company {
+  id: string
+  name: string
+  industry?: string | null
+  website?: string | null
+  phone?: string | null
+  address?: string | null
+  city?: string | null
+  state?: string | null
+  zip?: string | null
+  notes?: string | null
+  fields: RecordField[]
+  updatedAt?: string
+}
+
+export interface Person {
+  id: string
+  companyId?: string | null
+  firstName?: string | null
+  lastName?: string | null
+  email?: string | null
+  phone?: string | null
+  title?: string | null
+  notes?: string | null
+  fields: RecordField[]
+  updatedAt?: string
+}
+
+export interface Place {
+  id: string
+  name?: string | null
+  address?: string | null
+  city?: string | null
+  state?: string | null
+  zip?: string | null
+  lat?: number | null
+  lng?: number | null
+  propertyType?: string | null
+  sizeSqft?: number | null
+  acreage?: number | null
+  availability?: string | null
+  askingRate?: number | null
+  rateUnit?: string | null
+  ownerCompanyId?: string | null
+  notes?: string | null
+  fields: RecordField[]
+  updatedAt?: string
+}
+
+/** A person, company or place brought into a deal, in a named role. */
+export interface DealParty {
+  id: string
+  kind: 'person' | 'company' | 'place'
+  role?: string | null
+  record: Person & Company & Place
+}
+
+export interface Deal {
+  id: string
+  name: string
+  kind?: string | null
+  stage: string
+  value?: number | null
+  closeDate?: string | null
+  surveyId?: string | null
+  notes?: string | null
+  fields: RecordField[]
+  parties?: DealParty[]
+  updatedAt?: string
+}
+
+export type CrmRecord = Company | Person | Place | Deal

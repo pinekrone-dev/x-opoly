@@ -22,9 +22,13 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'surveys' | 'workspace' | 'share' | 'book' | 'billingReturn'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record'
   id?: string
   token?: string
+  /** Which CRM object a `record` route is showing. */
+  recordType?: 'deal' | 'person' | 'company' | 'place'
+  /** Which list the home page opens on. */
+  tab?: string
 }
 
 export function matchRoute(path: string): Route {
@@ -41,5 +45,16 @@ export function matchRoute(path: string): Route {
   const workspace = path.match(/^\/survey\/([\w-]+)\/?$/)
   if (workspace) return { view: 'workspace', id: workspace[1] }
 
-  return { view: 'surveys' }
+  // A single CRM record: /deals/:id, /people/:id, /companies/:id, /places/:id
+  const record = path.match(/^\/(deals|people|companies|places)\/([\w-]+)\/?$/)
+  if (record) {
+    const types = { deals: 'deal', people: 'person', companies: 'company', places: 'place' } as const
+    return { view: 'record', recordType: types[record[1] as keyof typeof types], id: record[2] }
+  }
+
+  // The object lists live on the home page, one tab each.
+  const list = path.match(/^\/(deals|people|companies|places|surveys)\/?$/)
+  if (list) return { view: 'home', tab: list[1] }
+
+  return { view: 'home', tab: 'deals' }
 }
