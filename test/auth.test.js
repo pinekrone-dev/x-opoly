@@ -84,6 +84,36 @@ describe('password hashing', () => {
     assert.notEqual(a, b)
   })
 
+  test('no single derivation exceeds what Cloudflare Workers will accept', async () => {
+    // Workers refuse a PBKDF2 call above 100,000 iterations outright — they do
+    // not run it slowly, they throw. Signing up therefore failed on the
+    // deployed Worker while passing every test here, because Node has no such
+    // cap. The work factor is kept by chaining runs instead of cutting it.
+    const real = crypto.subtle.deriveBits.bind(crypto.subtle)
+    const asked = []
+    crypto.subtle.deriveBits = (algorithm, key, length) => {
+      asked.push(algorithm.iterations)
+      return real(algorithm, key, length)
+    }
+
+    try {
+      const hash = await hashPassword('a long enough password')
+      assert.ok(asked.length > 0, 'the derivation ran')
+      assert.ok(
+        asked.every((count) => count <= 100_000),
+        `Workers would reject ${asked.filter((count) => count > 100_000).join(', ')}`,
+      )
+      assert.equal(
+        asked.reduce((total, count) => total + count, 0),
+        Number(hash.split('$')[2]),
+        'the chained runs add up to the cost the hash claims',
+      )
+      assert.equal(await verifyPassword('a long enough password', hash), true)
+    } finally {
+      crypto.subtle.deriveBits = real
+    }
+  })
+
   test('a corrupt stored hash fails the login instead of throwing', async () => {
     for (const bad of ['', 'nonsense', 'pbkdf2$sha256$notanumber$x$y', 'bcrypt$2b$12$abc', null]) {
       assert.equal(await verifyPassword('anything', bad), false, `should reject ${bad}`)

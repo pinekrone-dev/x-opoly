@@ -11,6 +11,16 @@
 /** OWASP's floor for PBKDF2-SHA256. Stored per hash so it can be raised. */
 const ITERATIONS = 210_000
 
+/**
+ * The most iterations one WebCrypto call will accept on Cloudflare Workers.
+ *
+ * Asking for more does not run slowly — it throws, so signing up failed
+ * outright on the deployed Worker while working locally on Node. Rather than
+ * cut the work factor to fit, the derivation is chained in runs of this size
+ * (see `pbkdf2`), which costs the same and keeps the same total.
+ */
+const MAX_ITERATIONS_PER_CALL = 100_000
+
 /** Codes live minutes, not months, so they need less stretching than a password. */
 const CODE_ITERATIONS = 50_000
 
@@ -53,16 +63,36 @@ export function randomCode(digits = 6) {
   return String(value % max).padStart(digits, '0')
 }
 
-async function pbkdf2(secret, salt, iterations) {
-  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), 'PBKDF2', false, [
-    'deriveBits',
-  ])
+async function deriveBits(material, salt, iterations) {
+  const key = await crypto.subtle.importKey('raw', material, 'PBKDF2', false, ['deriveBits'])
   const bits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', hash: 'SHA-256', salt, iterations },
     key,
     256,
   )
   return new Uint8Array(bits)
+}
+
+/**
+ * PBKDF2, in runs no larger than the platform will take.
+ *
+ * Each run's output becomes the next run's input, so 210,000 iterations is
+ * three chained calls rather than one that Workers refuses. The total work is
+ * unchanged and the chain is deterministic, so a hash written by one runtime
+ * verifies on the other — the chunking is a function of the iteration count
+ * recorded in the hash, not of where it was computed.
+ */
+async function pbkdf2(secret, salt, iterations) {
+  let material = typeof secret === 'string' ? encoder.encode(secret) : secret
+  let remaining = Math.max(1, Math.floor(iterations))
+
+  while (remaining > 0) {
+    const run = Math.min(remaining, MAX_ITERATIONS_PER_CALL)
+    material = await deriveBits(material, salt, run)
+    remaining -= run
+  }
+
+  return material
 }
 
 /** `pbkdf2$sha256$<iterations>$<salt>$<hash>` — self-describing, so the cost can change. */
