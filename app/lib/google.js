@@ -37,14 +37,25 @@ function seconds(value) {
   return match ? Number(match[1]) : null
 }
 
-async function post(url, { body, headers, fetchImpl, timeout, label }) {
+/**
+ * Sent with every Google call so a key restricted to the site's domain still
+ * works from the Worker. Server-side requests carry no Referer of their own,
+ * and Google's "website" restriction checks exactly that header — so a
+ * domain-locked key was rejected on every call. Overridable for deployments
+ * on other domains.
+ */
+function refererFor(env = {}) {
+  return env.GOOGLE_REFERER || 'https://survey.realestateaistudio.com/'
+}
+
+async function post(url, { body, headers, fetchImpl, timeout, label, env = {} }) {
   const controller = typeof AbortController === 'function' ? new AbortController() : null
   const timer = controller ? setTimeout(() => controller.abort(), timeout) : null
   try {
     const response = await fetchImpl(url, {
       method: 'POST',
       signal: controller?.signal,
-      headers: { 'content-type': 'application/json', ...headers },
+      headers: { 'content-type': 'application/json', referer: refererFor(env), ...headers },
       body: JSON.stringify(body),
     })
     if (response.status === 401 || response.status === 403) {

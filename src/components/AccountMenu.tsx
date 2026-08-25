@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
-import type { Account } from '../types'
+import type { Account, BillingStatus } from '../types'
 
 /**
  * The signed-in account: signing out, and the second factor.
@@ -13,11 +13,13 @@ import type { Account } from '../types'
 export default function AccountMenu({
   account,
   smsConfigured,
+  billing,
   onChange,
   onSignedOut,
 }: {
   account: Account
   smsConfigured: boolean
+  billing?: BillingStatus | null
   onChange: (account: Account) => void
   onSignedOut: () => void
 }) {
@@ -281,6 +283,43 @@ export default function AccountMenu({
             {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
             {notice ? <p className="mt-2 text-xs text-brand-deep">{notice}</p> : null}
           </div>
+
+          {billing?.configured ? (
+            <div className="mt-4 border-t border-line pt-3">
+              <p className="label mb-2">Subscription</p>
+              <p className="text-xs text-body">
+                {billing.status === 'exempt'
+                  ? 'This workspace is on the house.'
+                  : billing.active
+                    ? `Active — ${billing.priceLabel}${
+                        billing.periodEnd ? `, renews ${new Date(billing.periodEnd).toLocaleDateString()}` : ''
+                      }.`
+                    : 'Not active.'}
+              </p>
+              {billing.portalAvailable ? (
+                <button
+                  type="button"
+                  className="btn-secondary mt-2 w-full text-xs"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true)
+                    setError(null)
+                    try {
+                      // Cards, invoices and cancellation live on Stripe's
+                      // portal; the return link brings them straight back.
+                      const { url } = await api.billingPortal()
+                      window.location.assign(url)
+                    } catch (cause) {
+                      setError(cause instanceof Error ? cause.message : 'The billing page could not be opened.')
+                      setBusy(false)
+                    }
+                  }}
+                >
+                  Manage billing
+                </button>
+              ) : null}
+            </div>
+          ) : null}
 
           <button
             type="button"

@@ -74,6 +74,8 @@ function mapUser(row) {
     phoneHint: row.phone ? `••• ••• ${String(row.phone).slice(-4)}` : null,
     hasPhone: Boolean(row.phone),
     sms2fa: Boolean(row.sms_2fa),
+    teamId: row.team_id ?? row.id,
+    verified: Boolean(row.verified ?? 1),
     totp: Boolean(row.totp_enabled),
     // What the login form will ask for. TOTP wins when both are on: it needs
     // no carrier, costs nothing, and survives a SIM swap.
@@ -96,7 +98,7 @@ export async function getUser(db, id) {
   return mapUser(await db.get('SELECT * FROM users WHERE id = ?', [id]))
 }
 
-export async function createUser(db, { email, password, name = null, phone = null } = {}) {
+export async function createUser(db, { email, password, name = null, phone = null, teamId = null, verified = true } = {}) {
   const address = normalizeEmail(email)
   if (!EMAIL.test(address)) return { error: 'That does not look like an email address.' }
   if (String(password ?? '').length < MIN_PASSWORD_LENGTH) {
@@ -108,18 +110,59 @@ export async function createUser(db, { email, password, name = null, phone = nul
 
   const id = newId()
   await db.run(
-    `INSERT INTO users (id, email, password_hash, name, phone, sms_2fa, created_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?)`,
+    `INSERT INTO users (id, email, password_hash, name, phone, sms_2fa, team_id, verified, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
     [
       id,
       address,
       await hashPassword(password),
       name ? String(name).trim().slice(0, 120) : null,
       normalizePhone(phone),
+      // A self-serve account is its own team; an invited one joins the
+      // inviter's, so they see the same surveys.
+      teamId ?? id,
+      // An invite or a setup token proves the email; a self-serve signup
+      // proves nothing yet, so it starts unverified.
+      verified ? 1 : 0,
       nowIso(),
     ],
   )
   return { user: await getUser(db, id) }
+}
+
+/** How long a verification link stays good. Generous: signups check email later. */
+const VERIFY_TTL_HOURS = 24
+
+/**
+ * Mints a fresh verification token for an unverified account.
+ *
+ * Stored as a digest, like sessions and invites: a leaked database must not
+ * yield working verification links. Re-issuing replaces the old token, so a
+ * resend invalidates every earlier email.
+ */
+export async function createEmailVerification(db, userId) {
+  const token = randomToken(32)
+  await db.run('UPDATE users SET verify_digest = ?, verify_expires = ? WHERE id = ?', [
+    await hashToken(token),
+    minutesFromNow(VERIFY_TTL_HOURS * 60),
+    userId,
+  ])
+  return token
+}
+
+/**
+ * Redeems a verification link. One use: the digest is cleared on success, and
+ * an expired or unknown token says so without revealing whose it was.
+ */
+export async function verifyEmailToken(db, token) {
+  if (!token) return { error: 'This verification link is not valid.' }
+  const row = await db.get('SELECT * FROM users WHERE verify_digest = ?', [await hashToken(String(token))])
+  if (!row) return { error: 'This verification link is not valid. It may have been replaced by a newer email.' }
+  if (isPast(row.verify_expires)) {
+    return { error: 'This verification link has expired. Sign in to get a new one.' }
+  }
+  await db.run('UPDATE users SET verified = 1, verify_digest = NULL, verify_expires = NULL WHERE id = ?', [row.id])
+  return { userId: row.id, user: await getUser(db, row.id) }
 }
 
 function minutesFromNow(minutes) {

@@ -57,17 +57,32 @@ import {
   createUser,
   destroyAllSessions,
   destroySession,
+  createEmailVerification,
   findByEmail,
   getUser,
   markLogin,
   normalizePhone,
   sessionUser,
   verifyChallenge,
+  verifyEmailToken,
 } from './lib/auth.js'
+import { EmailError, emailConfigured, sendEmail, verificationEmail } from './lib/email.js'
+import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
 import { createZone, deleteZone, listZones } from './lib/zones.js'
+import {
+  BillingError,
+  applyWebhook,
+  billingState,
+  confirmCheckout,
+  createCheckout,
+  isExemptEmail,
+  portalUrl,
+  stripeConfigured,
+  verifyWebhook,
+} from './lib/billing.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -183,10 +198,42 @@ export function createApp({ db, storage, env = {} }) {
   const notFound = (c, message) => c.json({ error: message }, 404)
 
   /** Loads a survey or ends the request. */
+  /**
+   * The survey, only if it belongs to the caller's team.
+   *
+   * A mismatch answers 404, not 403: another team's survey ids are not this
+   * caller's business, not even their existence. A survey with no owner —
+   * created before teams — is claimed by the first team to touch it.
+   */
   async function requireSurvey(c) {
     const survey = await getSurvey(db, c.req.param('id'))
     if (!survey) return { error: notFound(c, 'That survey does not exist.') }
+
+    const user = c.get('user')
+    if (user) {
+      if (survey.ownerId && survey.ownerId !== user.teamId) {
+        return { error: notFound(c, 'That survey does not exist.') }
+      }
+      if (!survey.ownerId) {
+        await db.run('UPDATE surveys SET owner_id = ? WHERE id = ? AND owner_id IS NULL', [user.teamId, survey.id])
+      }
+    }
     return { survey }
+  }
+
+  /** A property, only if its survey belongs to the caller's team. */
+  async function requireProperty(c, id = c.req.param('id')) {
+    const property = await getProperty(db, id)
+    if (!property) return { error: notFound(c, 'That property does not exist.') }
+
+    const user = c.get('user')
+    if (user) {
+      const survey = await getSurvey(db, property.surveyId)
+      if (survey?.ownerId && survey.ownerId !== user.teamId) {
+        return { error: notFound(c, 'That property does not exist.') }
+      }
+    }
+    return { property }
   }
 
   // --- health --------------------------------------------------------------
@@ -331,6 +378,8 @@ export function createApp({ db, storage, env = {} }) {
     // Public census data: the shared client map shades its block groups
     // without a session, and nothing here is private to the workspace.
     /^\/api\/demographics$/,
+    // Stripe calls this unauthenticated; the webhook signature is the auth.
+    /^\/api\/billing\/webhook$/,
   ]
 
   /**
@@ -355,12 +404,64 @@ export function createApp({ db, storage, env = {} }) {
     return next()
   })
 
+  /**
+   * The subscription gate.
+   *
+   * Auth and billing endpoints stay reachable — a lapsed subscriber must be
+   * able to sign in and pay — and everything else answers 402 until the
+   * team's subscription is active. No Stripe key means no gate at all, and
+   * exempt teams (the operator, the smoke account) never see it.
+   */
+  const UNGATED = [/^\/api\/auth(\/|$)/, /^\/api\/billing(\/|$)/]
+  const exemptTeams = new Map()
+  app.use('/api/*', async (c, next) => {
+    if (!stripeConfigured(env)) return next()
+    const user = c.get('user')
+    if (!user) return next()
+
+    const path = new URL(c.req.url).pathname
+    if (PUBLIC_PATHS.some((pattern) => pattern.test(path))) return next()
+    if (UNGATED.some((pattern) => pattern.test(path))) return next()
+
+    if (!exemptTeams.has(user.teamId)) {
+      const owner = await db.get('SELECT email FROM users WHERE id = ?', [user.teamId])
+      exemptTeams.set(user.teamId, isExemptEmail(env, owner?.email ?? user.email))
+    }
+    if (exemptTeams.get(user.teamId)) return next()
+
+    const state = await billingState(db, env, user.teamId)
+    if (state.active) return next()
+    return c.json(
+      { error: 'This workspace needs an active subscription.', code: 'subscription_required' },
+      402,
+    )
+  })
+
+  /**
+   * Answers 429 when this client has hit an endpoint too often, else null.
+   * Keyed by address so one abuser does not close the door for everyone.
+   */
+  const limited = (c, bucket, limit, windowMs, extra = '') => {
+    const key = `${bucket}:${clientAddress(c)}${extra ? `:${extra}` : ''}`
+    const verdict = rateLimit(key, { limit, windowMs })
+    if (verdict.allowed) return null
+    c.header('Retry-After', String(verdict.retryAfterSeconds))
+    return c.json({ error: 'Too many attempts. Slow down and try again shortly.', code: 'rate_limited' }, 429)
+  }
+
   app.get('/api/auth/me', async (c) => {
     const user = await sessionUser(db, tokenFrom(c))
     return c.json({
       user,
       setupRequired: (await countUsers(db)) === 0,
       smsConfigured: smsConfigured(env),
+      billing: {
+        configured: stripeConfigured(env),
+        // Selling to strangers needs both halves: a way to charge them and a
+        // way to verify they own the email they signed up with.
+        selfServe: stripeConfigured(env) && emailConfigured(env),
+        publishableKey: env.STRIPE_PUBLISHABLE_KEY ?? null,
+      },
     })
   })
 
@@ -372,36 +473,118 @@ export function createApp({ db, storage, env = {} }) {
    * second broker gets added without opening registration to the internet.
    */
   app.post('/api/auth/register', async (c) => {
+    const throttled = limited(c, 'register', 10, 60 * 60 * 1000)
+    if (throttled) return throttled
+
     const body = await c.req.json().catch(() => ({}))
     const existing = await countUsers(db)
 
+    let teamId = null
+    let selfServe = false
     if (existing > 0) {
       const offered = String(body?.inviteToken ?? '')
       const isSignupToken = Boolean(env.SIGNUP_TOKEN) && offered === env.SIGNUP_TOKEN
       if (!isSignupToken) {
-        // A colleague's one-time invite, bound to their email. Checked before
-        // the account is created so a mismatched address costs nothing.
-        const redeemed = await redeemInvite(db, offered, body?.email)
-        if (!redeemed.ok) {
-          return c.json(
-            { error: offered ? redeemed.error : 'Registration is closed on this instance.' },
-            403,
-          )
+        if (offered) {
+          // A colleague's one-time invite, bound to their email. Checked
+          // before the account is created so a mismatched address costs
+          // nothing — and it decides which team the account joins.
+          const redeemed = await redeemInvite(db, offered, body?.email)
+          if (!redeemed.ok) return c.json({ error: redeemed.error }, 403)
+          teamId = redeemed.teamId
+        } else if (!stripeConfigured(env) || !emailConfigured(env)) {
+          // Self-serve signup exists to sell subscriptions. Without billing
+          // there is nothing to sell, and without email sending the address
+          // could never be verified — either way the door stays invite-only.
+          return c.json({ error: 'Registration is closed on this instance.' }, 403)
+        } else {
+          selfServe = true
         }
       }
     }
 
-    const result = await createUser(db, body)
+    // An invite or setup token proves the email; a stranger's signup proves
+    // nothing until they click the link this sends.
+    const result = await createUser(db, { ...body, teamId, verified: !selfServe })
     if (result.error) return c.json({ error: result.error }, 400)
 
     // The first account adopts anything created before accounts existed,
     // rather than letting real work become unreachable.
     const adopted = existing === 0 ? await adoptOrphanSurveys(db, result.user.id) : 0
 
+    if (selfServe) {
+      const verifyToken = await createEmailVerification(db, result.user.id)
+      const origin = new URL(c.req.url).origin
+      try {
+        await sendEmail(env, {
+          to: result.user.email,
+          ...verificationEmail({ name: result.user.name, url: `${origin}/?verify=${verifyToken}` }),
+        })
+      } catch (error) {
+        if (error instanceof EmailError) {
+          // The account exists but the link never left. Say so honestly:
+          // resend is the recovery, not a mystery inbox wait.
+          return c.json(
+            { user: result.user, requiresVerification: true, emailFailed: true, error: error.message },
+            201,
+          )
+        }
+        throw error
+      }
+      // No session yet: the cookie is what verification earns.
+      return c.json({ user: result.user, requiresVerification: true }, 201)
+    }
+
     const token = await createSession(db, result.user.id)
     await markLogin(db, result.user.id)
     setSessionCookie(c, token)
     return c.json({ user: result.user, adoptedSurveys: adopted }, 201)
+  })
+
+  /** Redeems the emailed link: verifies the address and signs the browser in. */
+  app.post('/api/auth/verify-email', async (c) => {
+    const throttled = limited(c, 'verify-email', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => ({}))
+    const result = await verifyEmailToken(db, String(body?.token ?? ''))
+    if (result.error) return c.json({ error: result.error }, 410)
+
+    const token = await createSession(db, result.userId)
+    await markLogin(db, result.userId)
+    setSessionCookie(c, token)
+    return c.json({ user: result.user })
+  })
+
+  /**
+   * Sends a fresh verification link. Always answers the same 200 whether or
+   * not the address has an account, so this cannot enumerate customers.
+   */
+  app.post('/api/auth/resend-verification', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const email = String(body?.email ?? '').trim().toLowerCase()
+    const throttled = limited(c, 'resend-verification', 3, 10 * 60 * 1000, email)
+    if (throttled) return throttled
+
+    const answer = { ok: true, message: 'If that address has an unverified account, a new link is on its way.' }
+    if (!emailConfigured(env)) return c.json(answer)
+
+    const row = await findByEmail(db, email)
+    if (row && !row.verified) {
+      const verifyToken = await createEmailVerification(db, row.id)
+      const origin = new URL(c.req.url).origin
+      try {
+        await sendEmail(env, {
+          to: row.email,
+          ...verificationEmail({ name: row.name, url: `${origin}/?verify=${verifyToken}` }),
+        })
+      } catch (error) {
+        if (!(error instanceof EmailError)) throw error
+        // The generic answer stands: a sending hiccup is not the caller's
+        // signal to learn which addresses exist.
+      }
+    }
+    return c.json(answer)
   })
 
   /**
@@ -424,9 +607,25 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.post('/api/auth/login', async (c) => {
+    const throttled = limited(c, 'login', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
+
     const body = await c.req.json().catch(() => ({}))
     const result = await authenticate(db, body?.email, body?.password)
     if (result.error) return c.json({ error: result.error }, result.locked ? 429 : 401)
+
+    // A correct password on an unverified account earns a resend, not a
+    // session — the email has to be proven exactly once.
+    if (!result.row.verified) {
+      return c.json(
+        {
+          error: 'Confirm your email address first — check your inbox for the link.',
+          code: 'email_unverified',
+          email: result.user.email,
+        },
+        403,
+      )
+    }
 
     // With 2FA on, the password alone must not produce a session.
     //
@@ -570,12 +769,12 @@ export function createApp({ db, storage, env = {} }) {
     return c.json({ ok: true })
   })
 
-  app.get('/api/surveys', async (c) => c.json({ surveys: await listSurveys(db) }))
+  app.get('/api/surveys', async (c) => c.json({ surveys: await listSurveys(db, c.get('user')?.teamId ?? null) }))
 
   app.post('/api/surveys', async (c) => {
     const body = await c.req.json().catch(() => ({}))
     if (!String(body?.name || '').trim()) return c.json({ error: 'Give the survey a name.' }, 400)
-    return c.json({ survey: await createSurvey(db, body) }, 201)
+    return c.json({ survey: await createSurvey(db, body, c.get('user')?.teamId ?? null) }, 201)
   })
 
   app.get('/api/surveys/:id', async (c) => {
@@ -597,6 +796,8 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.delete('/api/surveys/:id', async (c) => {
+    const { error } = await requireSurvey(c)
+    if (error) return error
     if (!(await deleteSurvey(db, c.req.param('id')))) return notFound(c, 'That survey does not exist.')
     return c.body(null, 204)
   })
@@ -614,7 +815,10 @@ export function createApp({ db, storage, env = {} }) {
 
   app.patch('/api/properties/:id', async (c) => {
     const id = c.req.param('id')
-    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c, id)
+      if (error) return error
+    }
     const body = await c.req.json().catch(() => ({}))
     await updateProperty(db, id, body)
     if (Array.isArray(body?.fields)) await setPropertyFields(db, id, body.fields)
@@ -622,6 +826,8 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.delete('/api/properties/:id', async (c) => {
+    const { error } = await requireProperty(c)
+    if (error) return error
     if (!(await deleteProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
     return c.body(null, 204)
   })
@@ -753,13 +959,90 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.delete('/api/zones/:id', async (c) => {
+    const zone = await db.get('SELECT survey_id FROM zones WHERE id = ?', [c.req.param('id')])
+    if (!zone) return notFound(c, 'That zone is gone already.')
+    const user = c.get('user')
+    if (user) {
+      const survey = await getSurvey(db, zone.survey_id)
+      if (survey?.ownerId && survey.ownerId !== user.teamId) {
+        return notFound(c, 'That zone is gone already.')
+      }
+    }
     if (!(await deleteZone(db, c.req.param('id')))) return notFound(c, 'That zone is gone already.')
     return c.body(null, 204)
   })
 
+  // --- billing -------------------------------------------------------------
+
+  app.get('/api/billing', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const owner = await db.get('SELECT email FROM users WHERE id = ?', [user.teamId])
+    const exempt = isExemptEmail(env, owner?.email ?? user.email)
+    const state = stripeConfigured(env) && !exempt ? await billingState(db, env, user.teamId) : { active: true, status: exempt ? 'exempt' : 'unmetered' }
+    const row = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [user.teamId])
+    return c.json({
+      configured: stripeConfigured(env),
+      publishableKey: env.STRIPE_PUBLISHABLE_KEY ?? null,
+      active: state.active,
+      status: state.status,
+      periodEnd: state.periodEnd ?? null,
+      portalAvailable: Boolean(row?.customer_id),
+      priceLabel: '$9 / month',
+    })
+  })
+
+  app.post('/api/billing/checkout', async (c) => {
+    const throttled = limited(c, 'checkout', 10, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
+    try {
+      const origin = new URL(c.req.url).origin
+      return c.json(await createCheckout(db, env, { teamId: user.teamId, email: user.email, origin }))
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 502)
+      throw error
+    }
+  })
+
+  app.get('/api/billing/confirm', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const sessionId = c.req.query('session_id')
+    if (!sessionId) return c.json({ error: 'No checkout session to confirm.' }, 400)
+    try {
+      return c.json(await confirmCheckout(db, env, sessionId))
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 502)
+      throw error
+    }
+  })
+
+  app.post('/api/billing/portal', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    try {
+      const origin = new URL(c.req.url).origin
+      return c.json({ url: await portalUrl(db, env, user.teamId, `${origin}/`) })
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 400)
+      throw error
+    }
+  })
+
+  app.post('/api/billing/webhook', async (c) => {
+    const payload = await c.req.text()
+    const event = await verifyWebhook(env, payload, c.req.header('stripe-signature'))
+    if (!event) return c.json({ error: 'Signature verification failed.' }, 400)
+    await applyWebhook(db, event)
+    return c.json({ received: true })
+  })
+
   // --- collaborators -------------------------------------------------------
 
-  app.get('/api/invites', async (c) => c.json({ invites: await listInvites(db) }))
+  app.get('/api/invites', async (c) => c.json({ invites: await listInvites(db, c.get('user')?.teamId ?? null) }))
 
   app.post('/api/invites', async (c) => {
     const body = await c.req.json().catch(() => ({}))
@@ -803,6 +1086,8 @@ export function createApp({ db, storage, env = {} }) {
   // --- lookups -------------------------------------------------------------
 
   app.get('/api/geocode', async (c) => {
+    const throttled = limited(c, 'geocode', 60, 60 * 1000)
+    if (throttled) return throttled
     try {
       return c.json({ results: await geocode(c.req.query('q'), { env }) })
     } catch (error) {
@@ -864,6 +1149,8 @@ export function createApp({ db, storage, env = {} }) {
    * where a flyer image is not, so this endpoint never answers "set a key".
    */
   app.post('/api/surveys/:id/paste', async (c) => {
+    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -906,6 +1193,8 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.post('/api/surveys/:id/flyer', async (c) => {
+    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -970,7 +1259,10 @@ export function createApp({ db, storage, env = {} }) {
   // --- images ---------------------------------------------------------------
 
   app.get('/api/properties/:id/images', async (c) => {
-    if (!(await getProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c)
+      if (error) return error
+    }
     return c.json({ images: await listImages(db, c.req.param('id')) })
   })
 
@@ -982,7 +1274,10 @@ export function createApp({ db, storage, env = {} }) {
    */
   app.post('/api/properties/:id/images', async (c) => {
     const id = c.req.param('id')
-    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c, id)
+      if (error) return error
+    }
 
     const upload = await readUpload(c)
     if (upload.error) return upload.error
@@ -1007,7 +1302,20 @@ export function createApp({ db, storage, env = {} }) {
     return c.json({ image: result.image, property: await getProperty(db, id) }, 201)
   })
 
+  /** The image's owning property, team-checked; null answers are 404s. */
+  async function requireImage(c) {
+    const row = await db.get('SELECT property_id FROM property_images WHERE id = ?', [c.req.param('id')])
+    if (!row) return { error: notFound(c, 'That image does not exist.') }
+    const { error } = await requireProperty(c, row.property_id)
+    if (error) return { error }
+    return {}
+  }
+
   app.patch('/api/images/:id', async (c) => {
+    {
+      const { error } = await requireImage(c)
+      if (error) return error
+    }
     const body = await c.req.json().catch(() => ({}))
     const result = await updateImage(db, c.req.param('id'), body)
     if (result.error) return notFound(c, result.error)
@@ -1015,6 +1323,10 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.delete('/api/images/:id', async (c) => {
+    {
+      const { error } = await requireImage(c)
+      if (error) return error
+    }
     if (!(await deleteImage(db, c.req.param('id'), storage))) {
       return notFound(c, 'That image does not exist.')
     }
@@ -1023,7 +1335,10 @@ export function createApp({ db, storage, env = {} }) {
 
   app.put('/api/properties/:id/images', async (c) => {
     const id = c.req.param('id')
-    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c, id)
+      if (error) return error
+    }
     const body = await c.req.json().catch(() => ({}))
     const order = Array.isArray(body?.order) ? body.order.map(String) : []
     return c.json({ images: await reorderImages(db, id, order) })
@@ -1041,9 +1356,11 @@ export function createApp({ db, storage, env = {} }) {
    * they ask for rather than something that happens to them.
    */
   app.post('/api/properties/:id/extract', async (c) => {
+    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
     const id = c.req.param('id')
-    const property = await getProperty(db, id)
-    if (!property) return notFound(c, 'That property does not exist.')
+    const { property, error } = await requireProperty(c, id)
+    if (error) return error
     if (!property.flyerUrl) {
       return c.json({ error: 'There is no flyer on this site to read. Attach one first.' }, 400)
     }
@@ -1100,7 +1417,10 @@ export function createApp({ db, storage, env = {} }) {
   /** Attaches a flyer to a property that already exists. */
   app.post('/api/properties/:id/flyer', async (c) => {
     const id = c.req.param('id')
-    if (!(await getProperty(db, id))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c, id)
+      if (error) return error
+    }
 
     const upload = await readUpload(c)
     if (upload.error) return upload.error
@@ -1115,7 +1435,10 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.post('/api/properties/:id/photo', async (c) => {
-    if (!(await getProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
+    {
+      const { error } = await requireProperty(c)
+      if (error) return error
+    }
 
     const upload = await readUpload(c)
     if (upload.error) return upload.error

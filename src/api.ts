@@ -1,5 +1,7 @@
 import type {
   Account,
+  BillingConfig,
+  BillingStatus,
   Invite,
   Zone,
   AppFeatures,
@@ -40,11 +42,31 @@ export const api = {
 
   // --- accounts -------------------------------------------------------------
   me: () =>
-    request<{ user: Account | null; setupRequired: boolean; smsConfigured: boolean }>(
+    request<{ user: Account | null; setupRequired: boolean; smsConfigured: boolean; billing: BillingConfig }>(
       '/api/auth/me',
     ),
   register: (input: { email: string; password: string; name?: string; phone?: string; inviteToken?: string }) =>
-    request<{ user: Account; adoptedSurveys: number }>('/api/auth/register', json(input)),
+    request<{
+      user: Account
+      adoptedSurveys?: number
+      requiresVerification?: boolean
+      emailFailed?: boolean
+    }>('/api/auth/register', json(input)),
+
+  /** Redeems the emailed verification link; signs the browser in on success. */
+  verifyEmail: (token: string) => request<{ user: Account }>('/api/auth/verify-email', json({ token })),
+  resendVerification: (email: string) =>
+    request<{ ok: true; message: string }>('/api/auth/resend-verification', json({ email })),
+
+  // --- billing --------------------------------------------------------------
+  billingStatus: () => request<BillingStatus>('/api/billing'),
+  startCheckout: () =>
+    request<{ clientSecret: string | null; url: string | null; embedded: boolean }>('/api/billing/checkout', {
+      method: 'POST',
+    }),
+  confirmCheckout: (sessionId: string) =>
+    request<{ active: boolean; status: string }>(`/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`),
+  billingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),
   signIn: (input: { email: string; password: string }) =>
     request<{
       user?: Account

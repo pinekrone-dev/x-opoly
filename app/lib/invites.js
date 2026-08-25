@@ -68,8 +68,14 @@ export async function createInvite(db, { email, createdBy }) {
 }
 
 /** Outstanding and recently-used invites, newest first, for the Share tab. */
-export async function listInvites(db) {
-  const rows = await db.all('SELECT * FROM invites ORDER BY created_at DESC LIMIT 50')
+export async function listInvites(db, teamId = null) {
+  const rows = teamId
+    ? await db.all(
+        `SELECT * FROM invites WHERE created_by IN (SELECT id FROM users WHERE COALESCE(team_id, id) = ?)
+         ORDER BY created_at DESC LIMIT 50`,
+        [teamId],
+      )
+    : await db.all('SELECT * FROM invites ORDER BY created_at DESC LIMIT 50')
   return rows.map(mapInvite)
 }
 
@@ -114,5 +120,10 @@ export async function redeemInvite(db, token, email) {
     return { ok: false, error: `This invitation was sent to ${row.email}. Sign up with that address.` }
   }
   await db.run('UPDATE invites SET used_at = ? WHERE id = ?', [nowIso(), row.id])
-  return { ok: true }
+
+  // The team the new account joins: the inviter's.
+  const inviter = row.created_by
+    ? await db.get('SELECT id, team_id FROM users WHERE id = ?', [row.created_by])
+    : null
+  return { ok: true, teamId: inviter ? inviter.team_id ?? inviter.id : null }
 }

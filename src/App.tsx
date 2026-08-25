@@ -1,12 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import ShareView from './views/ShareView'
 import SurveyList from './views/SurveyList'
 import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
+import Landing from './views/Landing'
+import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
 import { matchRoute, usePath } from './lib/router'
-import type { Account, AppFeatures } from './types'
+import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
 
 /**
  * Used only if /api/health cannot be reached. Keyless, and a light street map
@@ -31,10 +33,13 @@ const FALLBACK_FEATURES: AppFeatures = {
   tileAttribution: FALLBACK_TILES.attribution,
 }
 
+const NO_BILLING: BillingConfig = { configured: false, selfServe: false, publishableKey: null }
+
 interface Session {
   user: Account | null
   setupRequired: boolean
   smsConfigured: boolean
+  billing: BillingConfig
 }
 
 export default function App() {
@@ -42,6 +47,14 @@ export default function App() {
   const route = matchRoute(path)
   const [features, setFeatures] = useState<AppFeatures | null>(null)
   const [session, setSession] = useState<Session | null>(null)
+
+  // What the signed-out visitor is looking at: the landing page, or a form.
+  const [door, setDoor] = useState<'landing' | 'signIn' | 'signUp'>('landing')
+
+  // The team's subscription, checked once signed in on a billing-enabled
+  // instance. `null` while unknown; bumping `billingVersion` re-checks.
+  const [billing, setBilling] = useState<BillingStatus | null>(null)
+  const [billingVersion, setBillingVersion] = useState(0)
 
   useEffect(() => {
     api
@@ -53,11 +66,33 @@ export default function App() {
   useEffect(() => {
     api
       .me()
-      .then(setSession)
+      .then((me) => setSession({ ...me, billing: me.billing ?? NO_BILLING }))
       // A server too old to know about accounts, or unreachable: treat the app
       // as open rather than locking someone out of their own data.
-      .catch(() => setSession({ user: null, setupRequired: true, smsConfigured: false }))
+      .catch(() => setSession({ user: null, setupRequired: true, smsConfigured: false, billing: NO_BILLING }))
   }, [])
+
+  useEffect(() => {
+    if (!session?.user || !session.billing.configured) {
+      setBilling(null)
+      return
+    }
+    api
+      .billingStatus()
+      .then(setBilling)
+      // If the billing endpoint itself fails, let the person in: the API's
+      // own 402s still guard the data, and a broken check should not lock
+      // a paying customer out.
+      .catch(() => setBilling({ configured: false, publishableKey: null, active: true, status: 'unknown', periodEnd: null, portalAvailable: false, priceLabel: '$9 / month' }))
+  }, [session?.user, session?.billing.configured, billingVersion])
+
+  const signedIn = useCallback(
+    (user: Account) => {
+      setSession((current) => (current ? { ...current, user, setupRequired: false } : current))
+      setBillingVersion((version) => version + 1)
+    },
+    [],
+  )
 
   if (!features || !session) {
     return <div className="grid min-h-full place-items-center text-sm text-muted">Starting up…</div>
@@ -73,25 +108,66 @@ export default function App() {
   }
 
   /*
-   * Anyone without a session sees the sign-in screen — including on a
-   * workspace nobody has claimed yet, where it becomes the form that creates
-   * the first account.
-   *
-   * That distinction was previously wrong in a way that mattered: the guard
-   * skipped this branch entirely while `setupRequired` was true, so the claim
-   * form could never be reached and there was no way to create an account at
-   * all. The intent had been to keep a fresh deployment recoverable, but that
-   * only ever required leaving the *API* open during the setup window — which
-   * the server still does — not hiding the signup.
+   * Anyone without a session sees the public face of the instance: the
+   * landing page with pricing when billing is configured, or the sign-in
+   * screen on a private deployment. Invite and verification links, and an
+   * unclaimed workspace, always go straight to the form that handles them.
    */
   if (!session.user) {
+    const params = new URLSearchParams(window.location.search)
+    const hasLinkToken = params.has('invite') || params.has('verify')
+    const showLanding =
+      session.billing.configured && !session.setupRequired && !hasLinkToken && door === 'landing' && route.view !== 'billingReturn'
+
+    if (showLanding) {
+      return (
+        <Landing
+          selfServe={session.billing.selfServe}
+          onSignIn={() => setDoor('signIn')}
+          onGetStarted={() => setDoor('signUp')}
+        />
+      )
+    }
+
     return (
       <SignIn
         setupRequired={session.setupRequired}
         smsConfigured={session.smsConfigured}
-        onSignedIn={(user) => setSession({ ...session, user, setupRequired: false })}
+        selfServe={session.billing.selfServe}
+        startMode={door === 'signUp' ? 'signUp' : 'signIn'}
+        onSignedIn={signedIn}
+        onBack={session.billing.configured && !session.setupRequired && !hasLinkToken ? () => setDoor('landing') : undefined}
       />
     )
+  }
+
+  /* Back from Stripe: confirm the checkout session, then into the app. */
+  if (route.view === 'billingReturn') {
+    return <BillingReturn onDone={() => setBillingVersion((version) => version + 1)} />
+  }
+
+  /*
+   * The subscription gate, mirrored client-side. The API already answers 402
+   * without an active subscription; this renders the payment step instead of
+   * letting every fetch fail.
+   */
+  if (session.billing.configured) {
+    if (!billing) {
+      return <div className="grid min-h-full place-items-center text-sm text-muted">Checking your subscription…</div>
+    }
+    if (!billing.active) {
+      return (
+        <Paywall
+          account={session.user}
+          billing={billing}
+          onActivated={() => setBillingVersion((version) => version + 1)}
+          onSignedOut={() => {
+            setSession({ ...session, user: null, setupRequired: false })
+            setDoor('landing')
+          }}
+        />
+      )
+    }
   }
 
   if (route.view === 'book' && route.id) {
@@ -106,8 +182,12 @@ export default function App() {
     <SurveyList
       account={session.user}
       smsConfigured={session.smsConfigured}
+      billing={billing}
       onAccountChange={(user) => setSession({ ...session, user })}
-      onSignedOut={() => setSession({ ...session, user: null, setupRequired: false })}
+      onSignedOut={() => {
+        setSession({ ...session, user: null, setupRequired: false })
+        setDoor('landing')
+      }}
     />
   )
 }

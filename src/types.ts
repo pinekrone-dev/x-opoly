@@ -25,10 +25,30 @@ export interface Account {
   phoneHint: string | null
   hasPhone: boolean
   sms2fa: boolean
+  teamId?: string
+  verified?: boolean
   totp: boolean
   secondFactor: 'sms' | 'totp' | null
   createdAt: string
   lastLoginAt: string | null
+}
+
+/** What /api/auth/me says about billing, before anyone signs in. */
+export interface BillingConfig {
+  configured: boolean
+  selfServe: boolean
+  publishableKey: string | null
+}
+
+/** The signed-in team's subscription, from /api/billing. */
+export interface BillingStatus {
+  configured: boolean
+  publishableKey: string | null
+  active: boolean
+  status: string
+  periodEnd: string | null
+  portalAvailable: boolean
+  priceLabel: string
 }
 
 export type Stage = 'prospect' | 'touring' | 'loi' | 'under_contract' | 'passed'

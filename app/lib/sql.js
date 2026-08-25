@@ -10,7 +10,7 @@
  * async and the callers have to be written for the stricter of the two.
  */
 
-import { COLUMN_ADDITIONS, SCHEMA_STATEMENTS } from './schema.js'
+import { COLUMN_ADDITIONS, DATA_FIXES, SCHEMA_STATEMENTS } from './schema.js'
 
 
 /**
@@ -36,6 +36,11 @@ async function applySchema(adapter) {
     if (columns.has(column)) continue
     await adapter.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
     columns.add(column)
+  }
+
+  // Repairs run last, once every column they reference exists.
+  for (const statement of DATA_FIXES) {
+    await adapter.run(statement)
   }
 }
 

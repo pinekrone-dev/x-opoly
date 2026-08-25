@@ -138,6 +138,7 @@ function mapProperty(row) {
 function mapSurvey(row) {
   if (!row) return null
   return {
+    ownerId: row.owner_id ?? null,
     id: row.id,
     name: row.name,
     clientName: row.client_name,
@@ -185,20 +186,26 @@ function buildPatch(input, allowed) {
   return { columns, values }
 }
 
-export async function listSurveys(db) {
-  const rows = await db.all(
-    `SELECT s.*, (SELECT COUNT(*) FROM properties p WHERE p.survey_id = s.id) AS pin_count
-     FROM surveys s ORDER BY s.updated_at DESC`,
-  )
+export async function listSurveys(db, teamId = null) {
+  const rows = teamId
+    ? await db.all(
+        `SELECT s.*, (SELECT COUNT(*) FROM properties p WHERE p.survey_id = s.id) AS pin_count
+         FROM surveys s WHERE s.owner_id = ? ORDER BY s.updated_at DESC`,
+        [teamId],
+      )
+    : await db.all(
+        `SELECT s.*, (SELECT COUNT(*) FROM properties p WHERE p.survey_id = s.id) AS pin_count
+         FROM surveys s ORDER BY s.updated_at DESC`,
+      )
   return rows.map((row) => ({ ...mapSurvey(row), pinCount: row.pin_count }))
 }
 
-export async function createSurvey(db, input = {}) {
+export async function createSurvey(db, input = {}, teamId = null) {
   const id = newId()
   const timestamp = nowIso()
   await db.run(
-    `INSERT INTO surveys (id, name, client_name, broker_name, company_name, brand_color, center_lat, center_lng, zoom, share_token, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO surveys (id, name, client_name, broker_name, company_name, brand_color, center_lat, center_lng, zoom, share_token, owner_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       text(input.name, 200) || 'Untitled survey',
@@ -210,6 +217,7 @@ export async function createSurvey(db, input = {}) {
       number(input.centerLng, -180, 180),
       integer(input.zoom, 1, 20) ?? 11,
       newShareToken(),
+      teamId,
       timestamp,
       timestamp,
     ],

@@ -83,6 +83,10 @@ export const SCHEMA_STATEMENTS = [
     name           TEXT,
     phone          TEXT,
     sms_2fa        INTEGER NOT NULL DEFAULT 0,
+    team_id        TEXT,
+    verified       INTEGER NOT NULL DEFAULT 1,
+    verify_digest  TEXT,
+    verify_expires TEXT,
     failed_logins  INTEGER NOT NULL DEFAULT 0,
     locked_until   TEXT,
     created_at     TEXT NOT NULL,
@@ -103,6 +107,19 @@ export const SCHEMA_STATEMENTS = [
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  // One Stripe subscription per team. The row is written from checkout
+  // confirmation or the webhook, and lazily re-checked against Stripe when
+  // the paid period lapses — so billing stays honest even with no webhook
+  // configured at all.
+  `CREATE TABLE IF NOT EXISTS billing (
+    team_id            TEXT PRIMARY KEY,
+    customer_id        TEXT,
+    subscription_id    TEXT,
+    status             TEXT NOT NULL DEFAULT 'none',
+    current_period_end TEXT,
+    updated_at         TEXT NOT NULL
+  )`,
+
   // One-time signup links for collaborators. The token is stored as a digest,
   // like sessions: a leaked database must not mint working invitations.
   `CREATE TABLE IF NOT EXISTS invites (
@@ -149,6 +166,25 @@ export const SCHEMA_STATEMENTS = [
  * supported way to extend an existing table; editing the CREATE statements
  * above only affects databases created from scratch.
  */
+/**
+ * Idempotent data repairs, run after the column additions so the columns they
+ * touch exist. Each must be a no-op the second time.
+ */
+export const DATA_FIXES = [
+  // Users who joined through an invitation belong to the inviter's team.
+  `UPDATE users SET team_id = (
+     SELECT COALESCE(u2.team_id, u2.id) FROM invites i JOIN users u2 ON u2.id = i.created_by
+     WHERE i.email = users.email AND i.used_at IS NOT NULL LIMIT 1
+   )
+   WHERE team_id IS NULL AND EXISTS (
+     SELECT 1 FROM invites i WHERE i.email = users.email AND i.used_at IS NOT NULL AND i.created_by IS NOT NULL
+   )`,
+  // Everyone else is their own team.
+  'UPDATE users SET team_id = id WHERE team_id IS NULL',
+  // Runs here, after the column exists on databases that predate it.
+  'CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id)',
+]
+
 export const COLUMN_ADDITIONS = [
   // A site belongs to a stage by id now, so stages can be renamed and
   // recoloured without rewriting every property. NULL means unstaged.
@@ -170,8 +206,19 @@ export const COLUMN_ADDITIONS = [
   // An authenticator app as the second factor. Kept alongside SMS rather than
   // replacing it: TOTP needs no carrier and no third party, which is why it is
   // preferred, but a broker who wants a text should still get one.
+  // Which team a user belongs to: the team owner's user id. A self-serve
+  // account is its own team; redeeming an invite joins the inviter's.
+  ['users', 'team_id', 'TEXT'],
   ['users', 'totp_secret', 'TEXT'],
   ['users', 'totp_enabled', 'INTEGER NOT NULL DEFAULT 0'],
+
+  // Email verification for self-serve signups. The DEFAULT 1 is the
+  // grandfathering: every account that existed before this column did was
+  // created by the operator or an invite, both of which prove the email.
+  // Only a fresh self-serve signup is inserted unverified.
+  ['users', 'verified', 'INTEGER NOT NULL DEFAULT 1'],
+  ['users', 'verify_digest', 'TEXT'],
+  ['users', 'verify_expires', 'TEXT'],
 
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],

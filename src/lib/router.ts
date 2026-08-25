@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'surveys' | 'workspace' | 'share' | 'book'
+  view: 'surveys' | 'workspace' | 'share' | 'book' | 'billingReturn'
   id?: string
   token?: string
 }
@@ -30,6 +30,9 @@ export interface Route {
 export function matchRoute(path: string): Route {
   const shared = path.match(/^\/s\/([\w-]+)\/?$/)
   if (shared) return { view: 'share', token: shared[1] }
+
+  // Where Stripe sends the buyer back; the session id rides the query string.
+  if (/^\/billing\/return\/?$/.test(path)) return { view: 'billingReturn' }
 
   // Matched before the workspace, whose pattern would otherwise not reach it.
   const book = path.match(/^\/survey\/([\w-]+)\/book\/?$/)

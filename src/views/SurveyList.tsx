@@ -8,11 +8,13 @@ import { shortDate } from '../lib/format'
 export default function SurveyList({
   account,
   smsConfigured,
+  billing,
   onAccountChange,
   onSignedOut,
 }: {
   account?: import('../types').Account | null
   smsConfigured?: boolean
+  billing?: import('../types').BillingStatus | null
   onAccountChange?: (account: import('../types').Account) => void
   onSignedOut?: () => void
 }) {
@@ -97,6 +99,7 @@ export default function SurveyList({
           <AccountMenu
             account={account}
             smsConfigured={Boolean(smsConfigured)}
+            billing={billing}
             onChange={(next) => onAccountChange?.(next)}
             onSignedOut={() => onSignedOut?.()}
           />
