@@ -29,12 +29,35 @@ export default function SurveyList({
       .finally(() => setLoading(false))
   }, [])
 
+  /** Reads the map view MapCanvas remembers; {} when storage is empty or blocked. */
+  const homeCenter = (): { centerLat?: number; centerLng?: number; zoom?: number } => {
+    try {
+      const raw = window.localStorage.getItem('sitesurvey.home')
+      if (!raw) return {}
+      const parsed = JSON.parse(raw)
+      if (Number.isFinite(parsed?.lat) && Number.isFinite(parsed?.lng)) {
+        return {
+          centerLat: parsed.lat,
+          centerLng: parsed.lng,
+          zoom: Number.isFinite(parsed?.zoom) ? parsed.zoom : undefined,
+        }
+      }
+    } catch {
+      // Storage blocked — the survey just starts without a centre, as before.
+    }
+    return {}
+  }
+
   const create = async (form: HTMLFormElement) => {
     const data = new FormData(form)
     const { survey } = await api.createSurvey({
       name: String(data.get('name') || '').trim(),
       clientName: String(data.get('clientName') || '').trim() || undefined,
       brokerName: String(data.get('brokerName') || '').trim() || undefined,
+      // The broker's home market, remembered from wherever they last left a
+      // map. A survey with a centre can place a flyer that names no address —
+      // without one, that upload used to produce an invisible, unplaced site.
+      ...homeCenter(),
     })
     navigate(`/survey/${survey.id}`)
   }

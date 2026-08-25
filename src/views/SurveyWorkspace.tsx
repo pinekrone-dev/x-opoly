@@ -38,6 +38,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [tourOrder, setTourOrder] = useState<string[]>([])
   const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number } | null>(null)
+  /** A site being given a location by clicking the map. */
+  const [placing, setPlacing] = useState<string | null>(null)
   const [bookBusy, setBookBusy] = useState(false)
   const [bookError, setBookError] = useState<string | null>(null)
   const [demoView, setDemoView] = useState<{
@@ -119,6 +121,17 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     setNotice('Pin dropped — give it a name and the details.')
   }
 
+  /** Gives an existing, unplaced site the clicked location. */
+  const placeAt = async (lat: number, lng: number) => {
+    if (!placing) return
+    const { property } = await api.updateProperty(placing, { lat, lng })
+    upsert(property)
+    setSelectedId(property.id)
+    setPlacing(null)
+    setFitKey((key) => key + 1)
+    setNotice(`${property.name ?? 'The site'} is on the map now.`)
+  }
+
   const remove = async (propertyId: string) => {
     await api.deleteProperty(propertyId)
     setProperties((current) => current.filter((property) => property.id !== propertyId))
@@ -194,6 +207,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       onClose={() => setSelectedId(null)}
       onCompetition={setCompetition}
       onDemographics={setDemoView}
+      onPlaceOnMap={() => {
+        setPlacing(selected.id)
+        setTab('map')
+        setNotice('Click the spot on the map where this site sits.')
+      }}
     />
   ) : (
     <StageSidebar
@@ -278,14 +296,22 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'map' && (
           <div className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]">
             <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">{sidebar}</div>
-            <div className={dropPin ? 'cursor-crosshair' : ''}>
+            <div className={dropPin || placing ? 'cursor-crosshair' : ''}>
               <MapCanvas
                 properties={visibleProperties}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                onMapClick={dropPin ? (lat, lng) => void addAt(lat, lng) : undefined}
+                onMapClick={
+                  dropPin
+                    ? (lat, lng) => void addAt(lat, lng)
+                    : placing
+                      ? (lat, lng) => void placeAt(lat, lng)
+                      : undefined
+                }
+                onViewChange={setMapCenter}
                 tiles={features.tiles}
                 basemaps={features.basemaps}
+                choropleth={choropleth}
                 rings={competition ? { ...competition.center, miles: competition.rings.map((ring) => ring.miles) } : null}
                 competitors={competition?.results}
                 fitKey={fitKey}

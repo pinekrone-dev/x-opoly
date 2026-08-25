@@ -31,6 +31,8 @@ interface Props {
   onCompetition?: (result: (CompetitionResult & { center: { lat: number; lng: number } }) | null) => void
   /** Fires when there are figures to shade the map with, or the view changes. */
   onDemographics?: (view: { data: Demographics | null; colorBy: string; radius: number } | null) => void
+  /** Starts click-to-place for a site with no location yet. */
+  onPlaceOnMap?: () => void
 }
 
 type Tab = 'details' | 'flyer' | 'demographics' | 'competition'
@@ -63,6 +65,7 @@ export default function PropertyPanel({
   onClose,
   onCompetition,
   onDemographics,
+  onPlaceOnMap,
 }: Props) {
   const [tab, setTab] = useState<Tab>('details')
   const [editing, setEditing] = useState(false)
@@ -263,6 +266,21 @@ export default function PropertyPanel({
             )}
           </div>
         </div>
+
+        {property.lat == null && !readOnly ? (
+          <div className="border-b border-line bg-amber-500/10 px-4 py-3">
+            <p className="text-[11px] leading-relaxed text-amber-700">
+              This site has no location yet, so it cannot appear on the map or in a tour.
+            </p>
+            <button
+              type="button"
+              className="btn-primary mt-2 w-full text-xs"
+              onClick={() => onPlaceOnMap?.()}
+            >
+              Place it on the map
+            </button>
+          </div>
+        ) : null}
 
         {property.hidden && !readOnly ? (
           <p className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-[11px] leading-relaxed text-amber-700">

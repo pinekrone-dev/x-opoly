@@ -76,7 +76,7 @@ export const api = {
     request<{ ok: true }>('/api/auth/password', json(input)),
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
-  createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string }) =>
+  createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>
     request<{ survey: Survey }>('/api/surveys', json(input)),
   getSurvey: (id: string) =>
     request<{ survey: Survey; properties: Property[]; stages: DealStage[] }>(`/api/surveys/${id}`),

@@ -362,11 +362,15 @@ export default function MapCanvas({
       .map((property) => [property.lat as number, property.lng as number] as [number, number])
 
     if (points.length === 0) return
+    // Without animation on purpose: the selected-pin effect below reads
+    // getBounds() right after this, and an animated fit reports the old view
+    // mid-flight — so the pan "correcting" the selection undid the fit and
+    // slid every other pin off the screen.
     if (points.length === 1) {
-      instance.setView(points[0], 14)
+      instance.setView(points[0], 14, { animate: false })
       return
     }
-    instance.fitBounds(L.latLngBounds(points), { padding: [48, 48], maxZoom: 15 })
+    instance.fitBounds(L.latLngBounds(points), { padding: [48, 48], maxZoom: 15, animate: false })
   }, [fitKey])
 
   // Keep the selected pin in view when it is chosen from a list.
@@ -375,7 +379,14 @@ export default function MapCanvas({
     if (!instance || !selectedId) return
     const property = properties.find((entry) => entry.id === selectedId)
     if (property?.lat == null || property?.lng == null) return
-    instance.panTo([property.lat, property.lng], { animate: true })
+
+    // Only move when it is actually out of view. Adding a site both fits the
+    // map to every pin and selects the new one; recentring on the selection
+    // after that fit slid the other pins off the screen — which read as
+    // "my points don't all show on the map".
+    const target = L.latLng(property.lat, property.lng)
+    if (instance.getBounds().pad(-0.05).contains(target)) return
+    instance.panTo(target, { animate: true })
   }, [selectedId])
 
   const chooseBasemap = (id: string) => {

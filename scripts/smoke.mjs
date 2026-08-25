@@ -222,6 +222,17 @@ try {
   check('the route reports its source', ['osrm', 'estimate'].includes(tour.body?.routeSource),
     String(tour.body?.routeSource))
 
+  // Address search, against the real geocoders. This exact path failed live
+  // while passing every test: Nominatim refuses cloud IPs, which only a
+  // request from the deployed Worker can reveal. The Census geocoder is the
+  // fallback, so between them a plain Dallas street address must resolve.
+  const looked = await api(`/api/geocode?q=${encodeURIComponent('1600 Main St, Dallas, TX')}`)
+  check(
+    'an address search returns pins to click',
+    looked.status === 200 && (looked.body?.results?.length ?? 0) > 0,
+    `status ${looked.status}: ${JSON.stringify(looked.body).slice(0, 160)}`,
+  )
+
   // Census demographics, against the real ACS. The API is keyless for light
   // use, so this is expected to work with or without CENSUS_API_KEY; the key
   // only raises the rate limit. Reported either way so adding it later is

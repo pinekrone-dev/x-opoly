@@ -46,6 +46,79 @@ describe('geocoding', () => {
       (error) => error instanceof GeocodeError && /by hand/.test(error.message),
     )
   })
+
+  test('a blocked Nominatim falls through to the Census geocoder', async () => {
+    // The live failure this guards: Nominatim's public instance refuses cloud
+    // provider IPs, so address search worked in every test and failed on the
+    // deployed Worker. The Census geocoder answers instead.
+    const asked = []
+    const fetchImpl = async (url) => {
+      asked.push(url)
+      if (url.includes('nominatim')) return { ok: false, status: 403 }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          result: {
+            addressMatches: [
+              {
+                matchedAddress: '1600 MAIN ST, DALLAS, TX, 75201',
+                coordinates: { x: -96.7972, y: 32.7808 },
+                addressComponents: { streetNumber: '1600', streetName: 'MAIN', suffixType: 'ST', city: 'DALLAS', state: 'TX', zip: '75201' },
+              },
+            ],
+          },
+        }),
+      }
+    }
+
+    const results = await geocode('1600 Main St, Dallas TX', { fetchImpl })
+    assert.equal(results.length, 1)
+    assert.equal(results[0].lat, 32.7808)
+    assert.equal(results[0].lng, -96.7972)
+    assert.equal(results[0].city, 'DALLAS')
+    assert.ok(asked.some((url) => url.includes('geocoding.geo.census.gov')))
+  })
+
+  test('an empty Nominatim answer also tries the Census parser', async () => {
+    // A formal "123 N Something Rd" often misses on fuzzy search and hits on
+    // the Census parser; an empty [] must not be treated as the final word.
+    const fetchImpl = async (url) =>
+      url.includes('nominatim')
+        ? { ok: true, status: 200, json: async () => [] }
+        : {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              result: {
+                addressMatches: [
+                  { matchedAddress: 'X', coordinates: { x: -97.1, y: 30.1 }, addressComponents: {} },
+                ],
+              },
+            }),
+          }
+
+    const results = await geocode('130 E Travis St', { fetchImpl })
+    assert.equal(results.length, 1)
+  })
+
+  test('when both providers fail, the useful message survives', async () => {
+    // The Nominatim path carries the curated messages ("check outbound
+    // access", "rate limited"); the fallback failing second must not replace
+    // them with a generic HTTP code.
+    await assert.rejects(
+      () => geocode('austin', { fetchImpl: stubFetch({ ok: false, status: 403 }) }),
+      (error) => error instanceof GeocodeError && /not allowed to reach the geocoder/.test(error.message),
+    )
+  })
+
+  test('a genuinely unmatched address returns empty, not an error', async () => {
+    const fetchImpl = async (url) =>
+      url.includes('nominatim')
+        ? { ok: true, status: 200, json: async () => [] }
+        : { ok: true, status: 200, json: async () => ({ result: { addressMatches: [] } }) }
+    assert.deepEqual(await geocode('nowhere at all', { fetchImpl }), [])
+  })
 })
 
 describe('flyer extraction', () => {
