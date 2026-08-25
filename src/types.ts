@@ -1,4 +1,13 @@
 /** The signed-in broker. The phone is only ever a hint, never the number. */
+/** A one-time signup link for a colleague, shown on the Share tab. */
+export interface Invite {
+  id: string
+  email: string
+  createdAt: string
+  expiresAt: string
+  used: boolean
+}
+
 export interface Account {
   id: string
   email: string

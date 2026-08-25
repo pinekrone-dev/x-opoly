@@ -64,6 +64,7 @@ import {
   sessionUser,
   verifyChallenge,
 } from './lib/auth.js'
+import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -352,8 +353,17 @@ export function createApp({ db, storage, env = {} }) {
 
     if (existing > 0) {
       const offered = String(body?.inviteToken ?? '')
-      if (!env.SIGNUP_TOKEN || offered !== env.SIGNUP_TOKEN) {
-        return c.json({ error: 'Registration is closed on this instance.' }, 403)
+      const isSignupToken = Boolean(env.SIGNUP_TOKEN) && offered === env.SIGNUP_TOKEN
+      if (!isSignupToken) {
+        // A colleague's one-time invite, bound to their email. Checked before
+        // the account is created so a mismatched address costs nothing.
+        const redeemed = await redeemInvite(db, offered, body?.email)
+        if (!redeemed.ok) {
+          return c.json(
+            { error: offered ? redeemed.error : 'Registration is closed on this instance.' },
+            403,
+          )
+        }
       }
     }
 
@@ -368,6 +378,25 @@ export function createApp({ db, storage, env = {} }) {
     await markLogin(db, result.user.id)
     setSessionCookie(c, token)
     return c.json({ user: result.user, adoptedSurveys: adopted }, 201)
+  })
+
+  /**
+   * Who an invitation is for, before any account exists.
+   *
+   * Public on purpose (the holder is by definition signed out) and answered
+   * from the token digest, so probing it brute-forces nothing useful.
+   */
+  app.get('/api/auth/invite/:token', async (c) => {
+    const result = await checkInvite(db, c.req.param('token'))
+    if (!result.ok) {
+      const messages = {
+        not_found: 'This invitation link is not valid.',
+        used: 'This invitation was already used. Sign in instead.',
+        expired: 'This invitation has expired. Ask for a new one.',
+      }
+      return c.json({ error: messages[result.reason], reason: result.reason }, 410)
+    }
+    return c.json({ email: result.email })
   })
 
   app.post('/api/auth/login', async (c) => {
@@ -679,6 +708,36 @@ export function createApp({ db, storage, env = {} }) {
     if (error) return error
     const body = await c.req.json().catch(() => ({}))
     return c.json({ survey: await updateShare(db, c.req.param('id'), body) })
+  })
+
+  // --- collaborators -------------------------------------------------------
+
+  app.get('/api/invites', async (c) => c.json({ invites: await listInvites(db) }))
+
+  app.post('/api/invites', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const result = await createInvite(db, {
+      email: body?.email,
+      createdBy: c.get('user')?.id ?? null,
+    })
+    if (result.error) return c.json({ error: result.error }, 400)
+
+    // The full link is assembled here so the UI never has to guess its own
+    // origin, and returned exactly once — the token is stored only as a digest.
+    const origin = new URL(c.req.url).origin
+    return c.json(
+      {
+        invite: result.invite,
+        url: `${origin}/?invite=${result.token}`,
+      },
+      201,
+    )
+  })
+
+  app.delete('/api/invites/:id', async (c) => {
+    const removed = await revokeInvite(db, c.req.param('id'))
+    if (!removed) return notFound(c, 'That invitation is gone already.')
+    return c.body(null, 204)
   })
 
   app.get('/api/share/:token', async (c) => {

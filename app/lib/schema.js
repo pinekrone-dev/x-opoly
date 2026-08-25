@@ -103,12 +103,25 @@ export const SCHEMA_STATEMENTS = [
     expires_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`,
+  // One-time signup links for collaborators. The token is stored as a digest,
+  // like sessions: a leaked database must not mint working invitations.
+  `CREATE TABLE IF NOT EXISTS invites (
+    id           TEXT PRIMARY KEY,
+    email        TEXT NOT NULL,
+    token_digest TEXT NOT NULL,
+    created_by   TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    used_at      TEXT
+  )`,
+
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
   'CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_fields_property ON property_fields(property_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id)',
   'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
   'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
 ]
 

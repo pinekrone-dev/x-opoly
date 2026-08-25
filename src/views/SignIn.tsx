@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import type { Account } from '../types'
 
@@ -11,7 +11,7 @@ import type { Account } from '../types'
  * never feels like being bounced between pages.
  */
 
-type Mode = 'signIn' | 'setup' | 'code'
+type Mode = 'signIn' | 'setup' | 'invited' | 'code'
 
 export default function SignIn({
   setupRequired,
@@ -34,6 +34,29 @@ export default function SignIn({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [inviteToken, setInviteToken] = useState<string | null>(null)
+
+  /**
+   * An invite link lands here signed out, with the token in the query string.
+   * The server says who it is addressed to before any form is shown, so a
+   * dead or forwarded link explains itself instead of failing at submit.
+   */
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get('invite')
+    if (!token) return
+    api
+      .checkInvite(token)
+      .then(({ email: invitedEmail }) => {
+        setInviteToken(token)
+        setEmail(invitedEmail)
+        setMode('invited')
+      })
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : 'This invitation link is not valid.')
+      })
+  }, [])
+
+  const registering = mode === 'setup' || mode === 'invited'
 
   const run = async (work: () => Promise<void>) => {
     setBusy(true)
@@ -54,7 +77,10 @@ export default function SignIn({
         password,
         name: name || undefined,
         phone: phone || undefined,
+        inviteToken: inviteToken || undefined,
       })
+      // A burned token must not be re-checked on reload.
+      if (inviteToken) window.history.replaceState(null, '', window.location.pathname)
       if (adoptedSurveys > 0) {
         setNotice(`${adoptedSurveys} existing survey${adoptedSurveys === 1 ? '' : 's'} moved to this account.`)
       }
@@ -95,9 +121,11 @@ export default function SignIn({
             <p className="text-xs text-muted">
               {mode === 'setup'
                 ? 'Claim this workspace'
-                : mode === 'code'
-                  ? 'Confirm it is you'
-                  : 'Sign in to your surveys'}
+                : mode === 'invited'
+                  ? 'Join this workspace'
+                  : mode === 'code'
+                    ? 'Confirm it is you'
+                    : 'Sign in to your surveys'}
             </p>
           </div>
         </div>
@@ -109,12 +137,19 @@ export default function SignIn({
           </p>
         ) : null}
 
+        {mode === 'invited' ? (
+          <p className="mb-4 rounded-lg border border-brand/30 bg-brand-tint p-3 text-xs leading-relaxed text-body">
+            You were invited to collaborate as <strong className="text-ink">{email}</strong>. Create
+            your account and you will see the team&rsquo;s surveys.
+          </p>
+        ) : null}
+
         <form
           className="space-y-3"
           onSubmit={(event) => {
             event.preventDefault()
             if (busy) return
-            if (mode === 'setup') void submitSetup()
+            if (registering) void submitSetup()
             else if (mode === 'code') void submitCode()
             else void submitSignIn()
           }}
@@ -142,7 +177,7 @@ export default function SignIn({
             </>
           ) : (
             <>
-              {mode === 'setup' ? (
+              {registering ? (
                 <label className="block">
                   <span className="label">Your name</span>
                   <input
@@ -162,9 +197,15 @@ export default function SignIn({
                   type="email"
                   autoComplete="username"
                   required
+                  readOnly={mode === 'invited'}
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
                 />
+                {mode === 'invited' ? (
+                  <span className="mt-1 block text-[11px] text-muted">
+                    The invitation is for this address, so it cannot be changed.
+                  </span>
+                ) : null}
               </label>
 
               <label className="block">
@@ -172,17 +213,17 @@ export default function SignIn({
                 <input
                   className="field"
                   type="password"
-                  autoComplete={mode === 'setup' ? 'new-password' : 'current-password'}
+                  autoComplete={registering ? 'new-password' : 'current-password'}
                   required
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                 />
-                {mode === 'setup' ? (
+                {registering ? (
                   <span className="mt-1 block text-[11px] text-muted">At least 10 characters.</span>
                 ) : null}
               </label>
 
-              {mode === 'setup' ? (
+              {registering ? (
                 <label className="block">
                   <span className="label">Mobile number (optional)</span>
                   <input
@@ -214,9 +255,11 @@ export default function SignIn({
               ? 'Working…'
               : mode === 'setup'
                 ? 'Create the account'
-                : mode === 'code'
-                  ? 'Confirm code'
-                  : 'Sign in'}
+                : mode === 'invited'
+                  ? 'Join the workspace'
+                  : mode === 'code'
+                    ? 'Confirm code'
+                    : 'Sign in'}
           </button>
 
           {mode === 'code' ? (

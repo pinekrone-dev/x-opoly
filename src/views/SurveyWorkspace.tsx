@@ -5,6 +5,7 @@ import PropertyPanel from '../components/PropertyPanel'
 import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
 import CompareSites from '../components/CompareSites'
+import InviteCollaborators from '../components/InviteCollaborators'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
@@ -345,6 +346,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             <ShareSettings survey={survey} onChange={setSurvey} />
 
             <CompareSites survey={survey} properties={properties} stages={stages} />
+
+            <InviteCollaborators />
 
             {/*
               The other half of sharing. A link is for a client at a desk; the

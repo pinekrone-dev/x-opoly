@@ -1,5 +1,6 @@
 import type {
   Account,
+  Invite,
   AppFeatures,
   DealStage,
   CompetitionResult,
@@ -61,6 +62,14 @@ export const api = {
   verifyCode: (input: { challengeId: string; code: string }) =>
     request<{ user: Account }>('/api/auth/verify', json(input)),
   signOut: () => request<void>('/api/auth/logout', { method: 'POST' }),
+
+  /** Who an invitation is addressed to; public, for the joining page. */
+  checkInvite: (token: string) =>
+    request<{ email: string }>(`/api/auth/invite/${encodeURIComponent(token)}`),
+  listInvites: () => request<{ invites: Invite[] }>('/api/invites'),
+  createInvite: (email: string) =>
+    request<{ invite: Invite; url: string }>('/api/invites', json({ email })),
+  revokeInvite: (id: string) => request<void>(`/api/invites/${id}`, { method: 'DELETE' }),
   setTwoFactor: (input: { enabled: boolean; password: string; phone?: string }) =>
     request<{ user: Account }>('/api/auth/2fa', json(input)),
   changePassword: (input: { currentPassword: string; newPassword: string }) =>
