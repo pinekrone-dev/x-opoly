@@ -78,6 +78,7 @@ export default function PropertyPanel({
   const [extracting, setExtracting] = useState(false)
   const [extraction, setExtraction] = useState<FlyerExtraction | null>(null)
   const [extractError, setExtractError] = useState<string | null>(null)
+  const [clipping, setClipping] = useState(false)
 
   /**
    * Reads the attached flyer and fills this site in.
@@ -444,12 +445,46 @@ export default function PropertyPanel({
                     {extractError}
                   </p>
                 ) : null}
-                <div className="min-h-0 flex-1">
-                  <Suspense
-                    fallback={<p className="p-4 text-xs text-muted">Loading the PDF viewer…</p>}
+                <div className="p-4">
+                  {/*
+                    Clipping happens in a full-screen dialog rather than in this
+                    column. A flyer page rendered into a 380px sidebar is too
+                    small to see what you are cropping, let alone drag a box
+                    around it accurately.
+                  */}
+                  <button
+                    type="button"
+                    className="btn-primary w-full"
+                    onClick={() => setClipping(true)}
                   >
-                    <FlyerViewer property={property} onChange={onChange} />
-                  </Suspense>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                      <path d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" />
+                    </svg>
+                    Clip photos from flyer
+                  </button>
+
+                  {property.images?.length ? (
+                    <div className="mt-3">
+                      <p className="label">Clipped photos ({property.images.length})</p>
+                      <div className="mt-1 grid grid-cols-3 gap-2">
+                        {property.images.slice(0, 6).map((image) => (
+                          <img
+                            key={image.id}
+                            src={image.url}
+                            alt={image.caption ?? ''}
+                            className={`h-16 w-full rounded-md object-cover ${
+                              property.coverImageId === image.id ? 'ring-2 ring-brand' : ''
+                            }`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-xs text-muted">
+                      No photos clipped yet. Open the flyer and drag a box around the building
+                      shot, the site plan, or anything else the tour book should show.
+                    </p>
+                  )}
                 </div>
               </>
             ) : (
@@ -484,6 +519,43 @@ export default function PropertyPanel({
             />
           </div>
         )}
+
+        {clipping ? (
+          <div
+            className="fixed inset-0 z-50 flex flex-col bg-ink/70 p-4 sm:p-8"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Clip photos from the flyer"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setClipping(false)
+            }}
+          >
+            <div className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
+              <header className="flex items-center gap-3 border-b border-line px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink">{displayName(property)}</p>
+                  <p className="truncate text-xs text-muted">
+                    Drag a box over the page to clip a photo for the tour book
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn-secondary ml-auto text-xs"
+                  onClick={() => setClipping(false)}
+                >
+                  Done
+                </button>
+              </header>
+              <div className="min-h-0 flex-1">
+                <Suspense
+                  fallback={<p className="p-4 text-xs text-muted">Loading the PDF viewer…</p>}
+                >
+                  <FlyerViewer property={property} onChange={onChange} />
+                </Suspense>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {tab === 'competition' && onCompetition && (
           <CompetitionPanel property={property} onResult={onCompetition} />

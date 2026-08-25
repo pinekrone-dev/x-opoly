@@ -238,6 +238,33 @@ try {
   check('the flyer is served back for rendering',
     Boolean(flyerAttached.body?.property?.flyerUrl), String(flyerAttached.body?.property?.flyerUrl))
 
+  // The reported bug: a flyer upload produced a property with no coordinates,
+  // so no pin appeared and the tour planner could not see it.
+  const flyerProperty = flyerAttached.body?.property
+  const flyerPin = await api(`/api/surveys/${surveyId}/flyer`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/pdf', 'x-filename': 'pin-check.pdf' },
+    body: FLYER_PDF,
+  })
+  const fromFlyer = flyerPin.body?.property
+  check('uploading a flyer creates a property', Boolean(fromFlyer), `status ${flyerPin.status}`)
+  check(
+    'and places it on the map',
+    typeof fromFlyer?.lat === 'number' && typeof fromFlyer?.lng === 'number',
+    `lat ${fromFlyer?.lat}, lng ${fromFlyer?.lng}`,
+  )
+  if (fromFlyer?.id) {
+    const tourable = await api(`/api/surveys/${surveyId}/tour`, {
+      method: 'POST',
+      body: JSON.stringify({ propertyIds: [fromFlyer.id] }),
+    })
+    check('so the tour planner can include it', tourable.body?.stops?.length === 1,
+      `${tourable.body?.stops?.length ?? 0} stops`)
+    // Removed again so the map and book checks below see the two seeded pins.
+    await api(`/api/properties/${fromFlyer.id}`, { method: 'DELETE' })
+  }
+  void flyerProperty
+
   // The extract button's endpoint. Without ANTHROPIC_API_KEY this must answer
   // with a clear "not configured" rather than a 500 — the button has to fail
   // in a way that tells the broker what to do.
@@ -406,6 +433,15 @@ try {
     check('the flyer tab could be opened', false, error.message.split('\n')[0])
   }
   await page.waitForTimeout(4000)
+  // Clipping opens in a full-screen dialog now — a flyer page rendered into a
+  // sidebar column was too small to crop accurately.
+  const clipButton = await page.$('text=Clip photos from flyer')
+  check('clipping opens in a dialog rather than the sidebar', Boolean(clipButton))
+  if (clipButton) {
+    await clipButton.click()
+    await page.waitForTimeout(3500)
+  }
+
   const flyerCanvas = await page.$('[aria-label="Flyer page"]')
   check('the flyer renders to a canvas', Boolean(flyerCanvas))
   if (flyerCanvas) {
@@ -414,6 +450,19 @@ try {
   }
   const viewerText = await page.textContent('body')
   check('the crop prompt is shown', viewerText?.includes('Drag a box') ?? false)
+  // The share tab carries the book, not just the link.
+  await page.click('text="Share"').catch(() => undefined)
+  await page.waitForTimeout(900)
+  const shareText = await page.textContent('body')
+  check('the share tab offers the tour book', shareText?.includes('Tour book') ?? false)
+  check('with a PDF download', shareText?.includes('Download tour book') ?? false)
+  await page.click('text="Map"').catch(() => undefined)
+  await page.waitForTimeout(600)
+  await page.click(`text=${PINS[0].name}`).catch(() => undefined)
+  await page.waitForTimeout(900)
+  await page.click('text="flyer"').catch(() => undefined)
+  await page.waitForTimeout(1200)
+
   const fillButton = await page.$('text=Fill in from flyer')
   check('the fill-from-flyer button is on the flyer tab', Boolean(fillButton))
 

@@ -161,6 +161,50 @@ describe('property images', () => {
     }
   })
 
+  test('uploading a flyer produces a pin, even when it cannot be read', async () => {
+    // The bug this guards: a flyer upload created a property with no
+    // coordinates, so no pin appeared on the map and the site was invisible to
+    // the tour planner. It looked like the upload had done nothing at all.
+    const { body: survey } = await call(
+      '/api/surveys',
+      asJson({ name: 'Flyer pins', centerLat: 32.7808, centerLng: -96.7972 }),
+    )
+
+    const uploaded = await call(`/api/surveys/${survey.survey.id}/flyer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/pdf', 'x-filename': 'listing.pdf' },
+      body: PNG,
+    })
+
+    // Without an API key the read fails, which is the common case — but the
+    // property must still exist and still be placed.
+    assert.ok([201, 422].includes(uploaded.status), `status ${uploaded.status}`)
+    const property = uploaded.body.property
+    assert.ok(property, 'a property is created either way')
+    assert.equal(typeof property.lat, 'number', 'and it has a latitude')
+    assert.equal(typeof property.lng, 'number', 'and a longitude')
+
+    // Which means the tour planner can see it.
+    const tour = await call(
+      `/api/surveys/${survey.survey.id}/tour`,
+      asJson({ propertyIds: [property.id] }),
+    )
+    assert.equal(tour.body.stops.length, 1, 'a flyer-created site can be toured')
+  })
+
+  test('a flyer on a survey with no centre still creates the property', async () => {
+    // Nothing to fall back to, so it stays unplaced — but losing the upload
+    // would be worse than an unplaced pin.
+    const { body: survey } = await call('/api/surveys', asJson({ name: 'No centre' }))
+    const uploaded = await call(`/api/surveys/${survey.survey.id}/flyer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/pdf', 'x-filename': 'listing.pdf' },
+      body: PNG,
+    })
+    assert.ok(uploaded.body.property, 'the upload is never wasted')
+    assert.ok(uploaded.body.property.flyerUrl, 'and the file is kept')
+  })
+
   test('a flyer attaches to a property that already exists', async () => {
     const property = await newProperty()
     const { status, body } = await call(`/api/properties/${property.id}/flyer`, {

@@ -80,6 +80,38 @@ import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
+/**
+ * Puts a newly read flyer on the map.
+ *
+ * Extraction returns an address as text, which is not a location — a property
+ * with no coordinates draws no pin and is invisible to the tour planner, so a
+ * flyer upload appeared to do nothing. Geocoding closes that gap.
+ *
+ * Falls back to the survey's centre rather than leaving the site unplaced: a
+ * pin in roughly the right city that the broker can drag is far more use than
+ * no pin at all, and it is obvious it needs moving. Never throws — a geocoder
+ * outage must not cost someone their upload.
+ */
+async function locateFromFields(fields, survey, env) {
+  const parts = [fields?.address, fields?.city, fields?.state, fields?.zip].filter(Boolean)
+
+  if (parts.length > 0) {
+    try {
+      const { results } = await geocode(parts.join(', '), { env })
+      if (results?.length > 0) {
+        return { lat: results[0].lat, lng: results[0].lng, placed: 'geocoded' }
+      }
+    } catch {
+      // Fall through to the survey centre.
+    }
+  }
+
+  if (survey?.center) {
+    return { lat: survey.center.lat, lng: survey.center.lng, placed: 'survey-centre' }
+  }
+  return { lat: null, lng: null, placed: 'unplaced' }
+}
+
 /** A tour start/end point: a real coordinate, or nothing at all. */
 function anchor(value) {
   const lat = Number(value?.lat)
@@ -697,20 +729,44 @@ export function createApp({ db, storage, env = {} }) {
 
     try {
       const { fields, model } = await extractFromFlyer(upload.bytes, upload.mimeType, { env })
+      const located = await locateFromFields(fields, survey, env)
+
       const property = await createProperty(db, survey.id, {
         ...toPropertyInput(fields),
+        lat: located.lat,
+        lng: located.lng,
         flyer_path: stored,
         flyer_name: filename,
       })
+      const rows = mergeExtraction({ fields: [] }, fields).fields
+      if (rows.length > 0) await setPropertyFields(db, property.id, rows)
+
       return c.json(
-        { property, extraction: { model, confidence: fields.confidence, uncertainFields: fields.uncertainFields } },
+        {
+          property: await getProperty(db, property.id),
+          extraction: {
+            model,
+            confidence: fields.confidence,
+            uncertainFields: fields.uncertainFields,
+            placed: located.placed,
+          },
+        },
         201,
       )
     } catch (cause) {
       if (cause instanceof FlyerExtractionError) {
-        // Keep the file and file a stub so the upload is never wasted.
-        const property = await createProperty(db, survey.id, { name: filename, flyer_path: stored, flyer_name: filename })
-        return c.json({ error: cause.message, configured: cause.configured, property }, 422)
+        // Keep the file and file a stub so the upload is never wasted — but
+        // still place it, so the broker sees a pin appear and can drag it to
+        // the right spot rather than wondering whether anything happened.
+        const located = await locateFromFields(null, survey, env)
+        const property = await createProperty(db, survey.id, {
+          name: filename,
+          lat: located.lat,
+          lng: located.lng,
+          flyer_path: stored,
+          flyer_name: filename,
+        })
+        return c.json({ error: cause.message, configured: cause.configured, property, placed: located.placed }, 422)
       }
       throw cause
     }
@@ -811,6 +867,17 @@ export function createApp({ db, storage, env = {} }) {
       const { fields, model } = await extractFromFlyer(file.body, file.contentType, { env })
 
       const { patch, filled, skipped, fields: rows } = mergeExtraction(property, fields, { overwrite })
+
+      // A site read from a flyer but never placed still needs a pin.
+      if (property.lat == null || property.lng == null) {
+        const survey = await getSurvey(db, property.surveyId)
+        const located = await locateFromFields(fields, survey, env)
+        if (located.lat != null) {
+          patch.lat = located.lat
+          patch.lng = located.lng
+          filled.push('lat', 'lng')
+        }
+      }
 
       if (Object.keys(patch).length > 0) await updateProperty(db, id, patch)
       if (rows.length > 0) await setPropertyFields(db, id, rows)

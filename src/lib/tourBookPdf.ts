@@ -1,6 +1,7 @@
 import type { DealStage, Property, Survey, TourStopSchedule } from '../types'
 import { displayName, fullAddress } from './format'
 import { directionsQr, directionsUrl } from './directions'
+import { api } from '../api'
 
 /**
  * Exports the tour book as a real PDF file.
@@ -434,4 +435,62 @@ export function hexToRgb(hex: string) {
   if (!match) return MUTED
   const value = parseInt(match[1], 16)
   return { r: (value >> 16) & 255, g: (value >> 8) & 255, b: value & 255 }
+}
+
+/**
+ * Builds and downloads the book for a survey, working out the order itself.
+ *
+ * The share tab needs this without the broker having opened the tour planner
+ * first — "send the client the book" should not require visiting another tab
+ * to establish what order the stops are in. A saved tour order wins; failing
+ * that the server optimises one, and failing that the survey's own order is
+ * used, so a book is always produced.
+ */
+export async function buildTourBookFor({
+  surveyId,
+  survey,
+  properties,
+  stages,
+}: {
+  surveyId: string
+  survey: Survey
+  properties: Property[]
+  stages: DealStage[]
+}) {
+  const located = properties.filter((property) => property.lat != null && property.lng != null)
+  if (located.length === 0) {
+    throw new Error('No sites have a location yet, so there is nothing to tour.')
+  }
+
+  const saved = located
+    .filter((property) => property.tourOrder != null)
+    .sort((a, b) => (a.tourOrder ?? 0) - (b.tourOrder ?? 0))
+
+  let stops = saved.length > 0 ? saved : located
+  let summary: { startTime: string; endTime: string; driveLabel: string } | null = null
+  let times = new Map<string, TourStopSchedule>()
+
+  try {
+    const plan = await api.planTour(surveyId, {
+      propertyIds: stops.map((property) => property.id),
+      // Only decide the order when the broker has not: their arrangement is a
+      // decision, not a draft to be improved on.
+      optimize: saved.length === 0,
+      startTime: survey.tour?.startTime,
+      stopMinutes: survey.tour?.stopMinutes,
+    })
+    if (plan.stops?.length) stops = plan.stops
+    times = new Map((plan.itinerary?.items ?? []).map((item) => [item.id, item]))
+    if (plan.itinerary) {
+      summary = {
+        startTime: plan.itinerary.startTime,
+        endTime: plan.itinerary.endTime,
+        driveLabel: plan.itinerary.driveLabel,
+      }
+    }
+  } catch {
+    // A routing outage costs the times, not the book.
+  }
+
+  await exportTourBook({ survey, stops, stages, times, summary })
 }

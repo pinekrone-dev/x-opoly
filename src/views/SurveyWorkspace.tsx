@@ -9,6 +9,7 @@ import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
 import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property, Survey, TourPlan } from '../types'
 import { colorFor } from '../components/DemographicsPanel'
+import { buildTourBookFor } from '../lib/tourBookPdf'
 import { navigate } from '../lib/router'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 
@@ -34,6 +35,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   const [fitKey, setFitKey] = useState(0)
   const [tourOrder, setTourOrder] = useState<string[]>([])
   const [tourPlan, setTourPlan] = useState<TourPlan | null>(null)
+  const [bookBusy, setBookBusy] = useState(false)
+  const [bookError, setBookError] = useState<string | null>(null)
   const [demoView, setDemoView] = useState<{
     data: Demographics | null
     colorBy: string
@@ -337,6 +340,56 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'share' && (
           <div className="h-full overflow-y-auto p-4">
             <ShareSettings survey={survey} onChange={setSurvey} />
+
+            {/*
+              The other half of sharing. A link is for a client at a desk; the
+              book is what gets emailed the night before and read in the car,
+              so it belongs beside the link rather than a tab away.
+            */}
+            <section className="panel mt-4 p-4">
+              <h3 className="panel-title">Tour book</h3>
+              <p className="mt-1 text-xs leading-relaxed text-muted">
+                A PDF in driving order — the photos clipped from each flyer, the address and
+                details, arrival times, and a QR on every stop so a client can pull up directions
+                without typing anything.
+              </p>
+
+              <button
+                type="button"
+                className="btn-primary mt-3 w-full"
+                disabled={bookBusy}
+                onClick={async () => {
+                  setBookBusy(true)
+                  setBookError(null)
+                  try {
+                    await buildTourBookFor({
+                      surveyId: survey.id,
+                      survey,
+                      properties,
+                      stages,
+                    })
+                  } catch (cause) {
+                    setBookError(
+                      cause instanceof Error ? cause.message : 'The tour book could not be built.',
+                    )
+                  } finally {
+                    setBookBusy(false)
+                  }
+                }}
+              >
+                {bookBusy ? 'Building the PDF…' : 'Download tour book (PDF)'}
+              </button>
+
+              <button
+                type="button"
+                className="btn-secondary mt-2 w-full text-xs"
+                onClick={() => navigate(`/survey/${survey.id}/book`)}
+              >
+                Preview it first
+              </button>
+
+              {bookError ? <p className="mt-2 text-xs text-rose-600">{bookError}</p> : null}
+            </section>
           </div>
         )}
       </main>
