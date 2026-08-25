@@ -599,16 +599,20 @@ export default function PropertyPanel({
                     small to see what you are cropping, let alone drag a box
                     around it accurately.
                   */}
-                  <button
-                    type="button"
-                    className="btn-primary w-full"
-                    onClick={() => setClipping(true)}
-                  >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-                      <path d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" />
-                    </svg>
-                    Clip photos from flyer
-                  </button>
+                  {/* Clipping is broker tooling; a client reading the shared
+                      link just sees the flyer and any photos already clipped. */}
+                  {!readOnly ? (
+                    <button
+                      type="button"
+                      className="btn-primary w-full"
+                      onClick={() => setClipping(true)}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                        <path d="M6 2v14a2 2 0 002 2h14M18 22V8a2 2 0 00-2-2H2" />
+                      </svg>
+                      Clip photos from flyer
+                    </button>
+                  ) : null}
 
                   {property.images?.length ? (
                     <div className="mt-3">
@@ -626,12 +630,12 @@ export default function PropertyPanel({
                         ))}
                       </div>
                     </div>
-                  ) : (
+                  ) : !readOnly ? (
                     <p className="mt-3 text-xs text-muted">
                       No photos clipped yet. Open the flyer and drag a box around the building
                       shot, the site plan, or anything else the tour book should show.
                     </p>
-                  )}
+                  ) : null}
                 </div>
               </>
             ) : (
