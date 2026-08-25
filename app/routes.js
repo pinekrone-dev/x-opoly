@@ -302,6 +302,7 @@ export function createApp({ db, storage, env = {} }) {
             census: Boolean(env.CENSUS_API_KEY),
             google: Boolean(env.GOOGLE_MAPS_API_KEY),
             sms: smsConfigured(env),
+            email: emailConfigured(env),
             // Which extraction provider will answer — anthropic, gemini or
             // grok — or null when no key is set. "misconfigured" flags an
             // AI_PROVIDER naming a provider this list does not know.
