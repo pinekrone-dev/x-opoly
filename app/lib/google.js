@@ -48,8 +48,19 @@ async function post(url, { body, headers, fetchImpl, timeout, label }) {
       body: JSON.stringify(body),
     })
     if (response.status === 401 || response.status === 403) {
+      // Google's own message names the actual problem — "billing is not
+      // enabled", "API not enabled on project N", "requests blocked by key
+      // restriction" — where a generic "rejected" sends people checking the
+      // wrong thing.
+      const detail = await response.text().catch(() => '')
+      let reason = ''
+      try {
+        reason = JSON.parse(detail)?.error?.message ?? ''
+      } catch {
+        reason = detail.slice(0, 200)
+      }
       throw new GoogleUnavailable(
-        `${label} rejected the API key. Check that the key is valid and that the API is enabled for it.`,
+        `${label} rejected the API key${reason ? `: ${reason}` : '. Check that the key is valid and that the API is enabled for it.'}`,
       )
     }
     if (response.status === 429) {
