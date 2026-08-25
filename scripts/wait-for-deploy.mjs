@@ -40,6 +40,67 @@ if (!local) {
 
 console.log(`Waiting for ${BASE} to serve ${local}`)
 
+/**
+ * The bundle hash cannot see a backend-only change: fix a server module and
+ * the frontend build is byte-identical, so the hash matches the moment the
+ * run starts and the smoke test races the rollout it thinks it waited for.
+ *
+ * /api/health reports the commit it was built from, which does move. This is
+ * a warning rather than a failure: the stamp only lands if the Cloudflare
+ * build runs `npm run build`, and turning a missing stamp into a red run
+ * would block every push on a detail that has nothing to do with the code.
+ */
+async function waitForCommit() {
+  const expected = process.env.GITHUB_SHA
+  if (!expected) return
+
+  const deadline = Date.now() + Number(process.env.COMMIT_WAIT_MS || 3 * 60 * 1000)
+  const UNSTAMPED_GRACE_MS = 90 * 1000
+  let seen = null
+  let unstampedSince = null
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${BASE}/api/health?deploy-check=${Date.now()}`, {
+        headers: { 'cache-control': 'no-cache' },
+      })
+      const body = await response.json()
+      if (body?.commit === expected) {
+        console.log(`Backend is running ${expected.slice(0, 7)}`)
+        return
+      }
+      if (body?.commit !== seen) {
+        seen = body?.commit ?? null
+        console.log(`  backend reports ${seen ?? 'no commit'}, waiting for ${expected.slice(0, 7)}…`)
+      }
+      // An unstamped build is either the one that predates this check or a
+      // deployment whose build never runs the stamp. Give it a short grace
+      // period — long enough for a rollout, short enough not to stall every
+      // push — then say so and carry on.
+      if (seen === 'dev' || seen == null) {
+        if (unstampedSince == null) unstampedSince = Date.now()
+        if (Date.now() - unstampedSince > UNSTAMPED_GRACE_MS) {
+          console.log(
+            '  this deployment does not stamp its commit, so the backend rollout cannot be ' +
+              'confirmed from here. Continuing on the bundle hash alone.',
+          )
+          return
+        }
+      } else {
+        unstampedSince = null
+      }
+    } catch (error) {
+      console.log(`  health not reachable yet (${error.message})`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, INTERVAL_MS))
+  }
+
+  console.log(
+    `  gave up waiting for the backend to report ${expected.slice(0, 7)}; ` +
+      'the checks below may be testing the previous deployment.',
+  )
+}
+
 const startedAt = Date.now()
 let lastSeen = null
 
@@ -54,6 +115,7 @@ while (Date.now() - startedAt < TIMEOUT_MS) {
     if (live === local) {
       const seconds = Math.round((Date.now() - startedAt) / 1000)
       console.log(`Live after ${seconds}s — serving ${live}`)
+      await waitForCommit()
       process.exit(0)
     }
 

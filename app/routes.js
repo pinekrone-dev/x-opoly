@@ -9,6 +9,8 @@
 
 import { Hono } from 'hono'
 
+import { BUILD_COMMIT } from './lib/build-info.js'
+
 import {
   STAGES,
   STAGE_LABELS,
@@ -217,6 +219,10 @@ export function createApp({ db, storage, env = {} }) {
       {
         ok,
         runtime: db.kind === 'd1' ? 'cloudflare' : 'node',
+        // Which commit is actually running. A backend-only change leaves the
+        // frontend bundle untouched, so without this there is no way to tell a
+        // finished rollout from a stale one still answering every request.
+        commit: BUILD_COMMIT,
         checks,
         stages: STAGES.map((id) => ({ id, label: STAGE_LABELS[id] })),
         features: {

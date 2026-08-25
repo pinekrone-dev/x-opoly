@@ -47,6 +47,11 @@ describe('http api on node', () => {
     assert.equal(body.checks.storage.ok, true, 'the file store was actually read')
     assert.equal(typeof body.features.flyerExtraction, 'boolean')
     assert.ok(body.stages.some((stage) => stage.id === 'under_contract'))
+    assert.equal(
+      typeof body.commit,
+      'string',
+      'the smoke test reads this to tell a finished rollout from a stale one',
+    )
   })
 
   test('refuses a survey with no name', async () => {

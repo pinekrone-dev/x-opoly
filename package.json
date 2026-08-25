@@ -11,6 +11,7 @@
     "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "node --watch server/index.js",
     "dev:web": "vite",
+    "prebuild": "node scripts/build-info.mjs",
     "build": "tsc -b && vite build",
     "preview": "npm run build && npm start",
     "start": "node server/index.js",
