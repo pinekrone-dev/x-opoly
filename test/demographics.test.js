@@ -217,6 +217,62 @@ describe('finding block groups', () => {
     assert.match(queried, /MapServer\/12\/query/, 'the labels layer holds no polygons to return')
   })
 
+  test('a layer that answers with nothing is not the end of the search', async () => {
+    // Live, discovery picked layer 4 and the request came back empty, which
+    // was reported as "no block groups for that area" over downtown Dallas.
+    // Several layers share the name; only one of them holds the polygons, and
+    // which one is not worth encoding. Try them.
+    resetLayerCache()
+    const asked = []
+    const fetchImpl = async (url) => {
+      if (!url.includes('/query')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            layers: [
+              { id: 4, name: 'Census Block Groups', subLayerIds: [5, 6] },
+              { id: 5, name: 'Census Block Groups Labels' },
+              { id: 6, name: 'Census Block Groups' },
+            ],
+          }),
+        }
+      }
+      const layer = Number(url.match(/MapServer\/(\d+)\/query/)[1])
+      asked.push(layer)
+      return {
+        ok: true,
+        status: 200,
+        json: async () =>
+          layer === 6
+            ? {
+                features: [
+                  {
+                    attributes: {
+                      GEOID: '484530011001',
+                      STATE: '48',
+                      COUNTY: '453',
+                      CENTLAT: '30.27',
+                      CENTLON: '-97.74',
+                    },
+                  },
+                ],
+              }
+            : { features: [] },
+      }
+    }
+
+    const groups = await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.equal(groups.length, 1)
+    assert.equal(groups[0].geoid, '484530011001')
+    assert.ok(asked.includes(6), 'the polygons were reached')
+
+    // And the layer that worked is remembered, rather than rediscovered.
+    const before = asked.length
+    await fetchBlockGroups(AUSTIN.lat, AUSTIN.lng, 5, { fetchImpl })
+    assert.deepEqual(asked.slice(before), [6])
+  })
+
   test('the geometry is asked for in the format every ArcGIS server speaks', async () => {
     // `f=geojson` is optional, and this MapServer answers it with an error
     // object and HTTP 200 — so `features` was simply absent and the failure

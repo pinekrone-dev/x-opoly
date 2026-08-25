@@ -29,8 +29,13 @@ const TIGERWEB_SERVICE =
  * Hardcoding a number was a guess, and a wrong one: layer ids shift between
  * TIGERweb vintages, and a query against the wrong layer returns zero features
  * rather than an error — which surfaced as "no census block groups cover that
- * point" over downtown Dallas. The id is discovered from the service's own
- * metadata instead, and cached for the life of the isolate.
+ * point" over downtown Dallas.
+ *
+ * Discovering it by name was a better guess and still wrong: several layers
+ * are called "Census Block Groups" — a group layer that holds the others, a
+ * labels layer, and the polygons — and only one of them answers a query.
+ * Rather than encode which, the candidates are tried in likelihood order and
+ * the one that actually returns block groups is remembered.
  */
 let blockGroupLayer = null
 
@@ -39,26 +44,30 @@ export function resetLayerCache() {
   blockGroupLayer = null
 }
 
-async function findBlockGroupLayer(fetchImpl, timeout) {
-  if (blockGroupLayer != null) return blockGroupLayer
-
+/**
+ * Block group layer ids, most likely first.
+ *
+ * A group layer carries `subLayerIds` and holds no features of its own; a
+ * labels layer draws text. Both are demoted rather than dropped, so a service
+ * that names things differently still gets tried instead of failing outright.
+ */
+async function blockGroupLayers(fetchImpl, timeout) {
   const body = await withTimeout(fetchImpl, `${TIGERWEB_SERVICE}?f=json`, timeout, 'TIGERweb')
   const layers = Array.isArray(body?.layers) ? body.layers : []
 
-  // "Census Block Groups" in current vintages; matched loosely so a rename
-  // does not break it again.
-  //
-  // Every TIGERweb theme ships twice — the polygons and a "… Labels" layer
-  // that carries the same names — and the labels come first in the list, so a
-  // loose match lands on them. Querying that layer returns nothing useful,
-  // which looks exactly like an area with no block groups in it.
   const named = layers.filter((layer) => /block\s*group/i.test(String(layer?.name ?? '')))
-  const match =
-    named.find((layer) => !/label/i.test(String(layer?.name ?? ''))) ?? named[0] ?? null
-  if (!match) throw new Error('TIGERweb has no block group layer in this service')
+  if (named.length === 0) throw new Error('TIGERweb has no block group layer in this service')
 
-  blockGroupLayer = match.id
-  return blockGroupLayer
+  const rank = (layer) => {
+    const isGroup = Array.isArray(layer?.subLayerIds) && layer.subLayerIds.length > 0
+    const isLabel = /label/i.test(String(layer?.name ?? ''))
+    return (isGroup ? 2 : 0) + (isLabel ? 1 : 0)
+  }
+
+  return named
+    .slice()
+    .sort((a, b) => rank(a) - rank(b))
+    .map((layer) => layer.id)
 }
 
 /** Rings the panel offers, in miles. */
@@ -157,11 +166,50 @@ async function withTimeout(fetchImpl, url, timeout, label) {
 export async function fetchBlockGroups(lat, lng, miles, { fetchImpl = fetch, timeout = 12000 } = {}) {
   const latSpan = miles / MILES_PER_DEGREE
   const lngSpan = miles / (MILES_PER_DEGREE * Math.max(0.01, Math.cos((lat * Math.PI) / 180)))
+  const envelope = `${lng - lngSpan},${lat - latSpan},${lng + lngSpan},${lat + latSpan}`
 
-  const layer = await findBlockGroupLayer(fetchImpl, timeout)
+  const candidates =
+    blockGroupLayer != null ? [blockGroupLayer] : await blockGroupLayers(fetchImpl, timeout)
 
+  const tried = []
+  let refusal = null
+  for (const layer of candidates) {
+    const { features, error } = await queryLayer(layer, envelope, fetchImpl, timeout)
+    tried.push(layer)
+    if (error) refusal = error
+    if (features.length === 0) continue
+
+    const groups = features.map((feature) => toGroup(feature, lat, lng)).filter(Boolean)
+    if (groups.length === 0) {
+      throw new Error(
+        `TIGERweb returned ${features.length} block groups but none carried a usable location`,
+      )
+    }
+
+    blockGroupLayer = layer
+    return groups
+  }
+
+  // A layer that refused the query said something useful about why. Only fall
+  // back to "nothing there" when every candidate answered and answered empty.
+  if (refusal) throw refusal
+
+  throw new Error(
+    `TIGERweb returned no block groups for that area (tried layer${tried.length > 1 ? 's' : ''} ${tried.join(', ')})`,
+  )
+}
+
+/**
+ * One envelope query against one layer.
+ *
+ * Returns the features and, separately, a refusal. A group layer rejects a
+ * query outright, which says something about the layer rather than the area,
+ * so the caller moves on to the next candidate — but it keeps the refusal, in
+ * case no candidate works and the reason turns out to be the only clue.
+ */
+async function queryLayer(layer, envelope, fetchImpl, timeout) {
   const url = new URL(`${TIGERWEB_SERVICE}/${layer}/query`)
-  url.searchParams.set('geometry', `${lng - lngSpan},${lat - latSpan},${lng + lngSpan},${lat + latSpan}`)
+  url.searchParams.set('geometry', envelope)
   url.searchParams.set('geometryType', 'esriGeometryEnvelope')
   url.searchParams.set('inSR', '4326')
   url.searchParams.set('outSR', '4326')
@@ -175,42 +223,39 @@ export async function fetchBlockGroups(lat, lng, miles, { fetchImpl = fetch, tim
   // already reads its `attributes` and `rings`.
   url.searchParams.set('f', 'json')
 
-  const body = await withTimeout(fetchImpl, url.toString(), timeout, 'TIGERweb')
-  const features = Array.isArray(body?.features) ? body.features : []
-  if (features.length === 0) {
-    throw new Error(`TIGERweb layer ${layer} returned no block groups for that area`)
+  try {
+    const body = await withTimeout(fetchImpl, url.toString(), timeout, 'TIGERweb')
+    return { features: Array.isArray(body?.features) ? body.features : [], error: null }
+  } catch (error) {
+    // `TIGERweb: …` is the service rejecting the request, which the next
+    // candidate may not do. Anything else — a timeout, an HTTP failure — is
+    // about the network and applies to every candidate equally.
+    if (/^TIGERweb:/.test(error.message)) return { features: [], error }
+    throw error
   }
+}
 
-  const groups = features
-    .map((feature) => {
-      // ArcGIS answers GeoJSON as `properties` and esriJSON as `attributes`.
-      // Reading only one of them drops every feature silently, which is
-      // indistinguishable from an area genuinely having no block groups.
-      const props = feature?.properties ?? feature?.attributes ?? {}
+/** One esriJSON or GeoJSON feature, as a block group. */
+function toGroup(feature, lat, lng) {
+  // ArcGIS answers GeoJSON as `properties` and esriJSON as `attributes`.
+  // Reading only one of them drops every feature silently, which is
+  // indistinguishable from an area genuinely having no block groups.
+  const props = feature?.properties ?? feature?.attributes ?? {}
 
-      const centroid = centroidOf(feature, props)
-      if (!centroid) return null
+  const centroid = centroidOf(feature, props)
+  if (!centroid) return null
 
-      return {
-        geoid: String(props.GEOID ?? props.geoid ?? ''),
-        state: String(props.STATE ?? props.state ?? ''),
-        county: String(props.COUNTY ?? props.county ?? ''),
-        tract: String(props.TRACT ?? props.tract ?? ''),
-        blockGroup: String(props.BLKGRP ?? props.blkgrp ?? ''),
-        lat: centroid.lat,
-        lng: centroid.lng,
-        miles: haversineMiles({ lat, lng }, centroid),
-        geometry: feature.geometry ?? null,
-      }
-    })
-    .filter(Boolean)
-
-  if (groups.length === 0) {
-    throw new Error(
-      `TIGERweb returned ${features.length} block groups but none carried a usable location`,
-    )
+  return {
+    geoid: String(props.GEOID ?? props.geoid ?? ''),
+    state: String(props.STATE ?? props.state ?? ''),
+    county: String(props.COUNTY ?? props.county ?? ''),
+    tract: String(props.TRACT ?? props.tract ?? ''),
+    blockGroup: String(props.BLKGRP ?? props.blkgrp ?? ''),
+    lat: centroid.lat,
+    lng: centroid.lng,
+    miles: haversineMiles({ lat, lng }, centroid),
+    geometry: feature.geometry ?? null,
   }
-  return groups
 }
 
 /**
