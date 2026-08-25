@@ -347,12 +347,27 @@ try {
    * test account would take it away from them.
    */
   if (unclaimed && !sessionCookie) {
-    await page.waitForSelector('#root *', { timeout: 20000 })
-    const wall = await page.textContent('body')
+    /*
+     * Wait for the sign-in panel itself, not merely for something to exist
+     * inside #root: the app renders a "Starting up…" placeholder while the
+     * session request is in flight, and `#root *` matches that placeholder, so
+     * the assertion used to read the loading text and report a missing login.
+     */
+    const wall = await page
+      .waitForFunction(
+        () => {
+          const text = document.body.textContent ?? ''
+          return /Claim this workspace|Sign in to your surveys/.test(text) ? text : false
+        },
+        { timeout: 20000 },
+      )
+      .then((handle) => handle.jsonValue())
+      .catch(() => null)
+    const shown = wall ?? (await page.textContent('body')) ?? ''
     check(
       'an unclaimed workspace offers the claim form',
-      wall?.includes('Claim this workspace') || wall?.includes('Create the account'),
-      (wall ?? '').slice(0, 120),
+      shown.includes('Claim this workspace'),
+      wall ? shown.slice(0, 120) : `the sign-in panel never rendered; the page showed: ${shown.slice(0, 120)}`,
     )
     check(
       'the deployment can be verified end to end',
