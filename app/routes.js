@@ -68,6 +68,17 @@ import {
   verifyEmailToken,
 } from './lib/auth.js'
 import { EmailError, emailConfigured, sendEmail, verificationEmail } from './lib/email.js'
+import {
+  addParty,
+  createRecord,
+  dealWithParties,
+  deleteRecord,
+  getRecord,
+  listRecords,
+  propertyFromPlace,
+  removeParty,
+  updateRecord,
+} from './lib/crm.js'
 import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
@@ -1116,6 +1127,122 @@ export function createApp({ db, storage, env = {} }) {
     if (!event) return c.json({ error: 'Signature verification failed.' }, 400)
     await applyWebhook(db, event)
     return c.json({ received: true })
+  })
+
+
+  // --- CRM: people, companies, places, deals -------------------------------
+
+  /*
+   * One set of handlers over four record types. They differ in their columns,
+   * not in their behaviour, and four hand-written copies of the same CRUD is
+   * four places for the team scope to be forgotten.
+   */
+  const RECORD_ROUTES = { companies: 'company', people: 'person', places: 'place', deals: 'deal' }
+
+  for (const [segment, recordType] of Object.entries(RECORD_ROUTES)) {
+    app.get(`/api/crm/${segment}`, async (c) => {
+      const user = c.get('user')
+      if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+      return c.json({
+        records: await listRecords(db, recordType, user.teamId, { search: c.req.query('q') ?? '' }),
+      })
+    })
+
+    app.post(`/api/crm/${segment}`, async (c) => {
+      const user = c.get('user')
+      if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+      const result = await createRecord(db, recordType, user.teamId, await c.req.json().catch(() => ({})))
+      if (result.error) return c.json({ error: result.error }, 400)
+      return c.json({ record: result.record }, 201)
+    })
+
+    app.get(`/api/crm/${segment}/:id`, async (c) => {
+      const user = c.get('user')
+      if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+      const record =
+        recordType === 'deal'
+          ? await dealWithParties(db, user.teamId, c.req.param('id'))
+          : await getRecord(db, recordType, user.teamId, c.req.param('id'))
+      if (!record) return notFound(c, 'That record does not exist.')
+      return c.json({ record })
+    })
+
+    app.patch(`/api/crm/${segment}/:id`, async (c) => {
+      const user = c.get('user')
+      if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+      const record = await updateRecord(
+        db,
+        recordType,
+        user.teamId,
+        c.req.param('id'),
+        await c.req.json().catch(() => ({})),
+      )
+      if (!record) return notFound(c, 'That record does not exist.')
+      return c.json({ record })
+    })
+
+    app.delete(`/api/crm/${segment}/:id`, async (c) => {
+      const user = c.get('user')
+      if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+      const removed = await deleteRecord(db, recordType, user.teamId, c.req.param('id'))
+      if (!removed) return notFound(c, 'That record does not exist.')
+      return c.body(null, 204)
+    })
+  }
+
+  app.post('/api/crm/deals/:id/parties', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await addParty(db, user.teamId, c.req.param('id'), {
+      kind: String(body?.kind ?? ''),
+      refId: String(body?.refId ?? ''),
+      role: body?.role ?? null,
+    })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ deal: await dealWithParties(db, user.teamId, c.req.param('id')) }, 201)
+  })
+
+  app.delete('/api/crm/deals/:id/parties/:partyId', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const removed = await removeParty(db, user.teamId, c.req.param('id'), c.req.param('partyId'))
+    if (!removed) return notFound(c, 'That deal does not exist.')
+    return c.body(null, 204)
+  })
+
+  /*
+   * Sends a known building into a survey, as a site the broker can then work.
+   *
+   * A copy rather than a link: the survey is what the client sees and what the
+   * broker annotates, and none of that should reach back and rewrite the
+   * record the whole team relies on.
+   */
+  app.post('/api/crm/places/:id/send', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const place = await getRecord(db, 'place', user.teamId, c.req.param('id'))
+    if (!place) return notFound(c, 'That place does not exist.')
+
+    const body = await c.req.json().catch(() => ({}))
+    const surveyId = String(body?.surveyId ?? '')
+    const survey = await getSurvey(db, surveyId)
+    if (!survey || (survey.ownerId && survey.ownerId !== user.teamId)) {
+      return notFound(c, 'That survey does not exist.')
+    }
+
+    const { fields, ...columns } = propertyFromPlace(place)
+    const property = await createProperty(db, surveyId, {
+      ...columns,
+      // Straight onto the tour when asked, which is the whole point of
+      // sending a building over rather than retyping it.
+      ...(body?.addToTour ? { tourOrder: Number.MAX_SAFE_INTEGER } : {}),
+    })
+    // The custom profile travels too: what the team recorded about a building
+    // is most of why it was worth keeping a record of it.
+    await setPropertyFields(db, property.id, fields)
+    return c.json({ property: await getProperty(db, property.id) }, 201)
   })
 
   // --- collaborators -------------------------------------------------------

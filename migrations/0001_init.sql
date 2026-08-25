@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS users (
     name           TEXT,
     phone          TEXT,
     sms_2fa        INTEGER NOT NULL DEFAULT 0,
+    team_id        TEXT,
+    verified       INTEGER NOT NULL DEFAULT 1,
+    verify_digest  TEXT,
+    verify_expires TEXT,
     failed_logins  INTEGER NOT NULL DEFAULT 0,
     locked_until   TEXT,
     created_at     TEXT NOT NULL,
@@ -105,6 +109,15 @@ CREATE TABLE IF NOT EXISTS login_challenges (
     created_at TEXT NOT NULL
   );
 
+CREATE TABLE IF NOT EXISTS billing (
+    team_id            TEXT PRIMARY KEY,
+    customer_id        TEXT,
+    subscription_id    TEXT,
+    status             TEXT NOT NULL DEFAULT 'none',
+    current_period_end TEXT,
+    updated_at         TEXT NOT NULL
+  );
+
 CREATE TABLE IF NOT EXISTS invites (
     id           TEXT PRIMARY KEY,
     email        TEXT NOT NULL,
@@ -113,6 +126,90 @@ CREATE TABLE IF NOT EXISTS invites (
     created_at   TEXT NOT NULL,
     expires_at   TEXT NOT NULL,
     used_at      TEXT
+  );
+
+CREATE TABLE IF NOT EXISTS companies (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    industry   TEXT,
+    website    TEXT,
+    phone      TEXT,
+    address    TEXT,
+    city       TEXT,
+    state      TEXT,
+    zip        TEXT,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS people (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    first_name TEXT,
+    last_name  TEXT,
+    email      TEXT,
+    phone      TEXT,
+    title      TEXT,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS places (
+    id               TEXT PRIMARY KEY,
+    team_id          TEXT NOT NULL,
+    name             TEXT,
+    address          TEXT,
+    city             TEXT,
+    state            TEXT,
+    zip              TEXT,
+    lat              REAL,
+    lng              REAL,
+    property_type    TEXT,
+    size_sqft        INTEGER,
+    acreage          REAL,
+    availability     TEXT,
+    asking_rate      REAL,
+    rate_unit        TEXT,
+    owner_company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    notes            TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS deals (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    kind       TEXT,
+    stage      TEXT NOT NULL DEFAULT 'prospect',
+    value      REAL,
+    close_date TEXT,
+    survey_id  TEXT REFERENCES surveys(id) ON DELETE SET NULL,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS deal_parties (
+    id         TEXT PRIMARY KEY,
+    deal_id    TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    ref_id     TEXT NOT NULL,
+    role       TEXT,
+    created_at TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS record_fields (
+    id          TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL,
+    record_id   TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    value       TEXT,
+    position    INTEGER NOT NULL DEFAULT 0
   );
 
 CREATE TABLE IF NOT EXISTS zones (
@@ -133,6 +230,20 @@ CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token);
 CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id);
 
 CREATE INDEX IF NOT EXISTS idx_property_fields_property ON property_fields(property_id);
+
+CREATE INDEX IF NOT EXISTS idx_companies_team ON companies(team_id);
+
+CREATE INDEX IF NOT EXISTS idx_people_team ON people(team_id);
+
+CREATE INDEX IF NOT EXISTS idx_people_company ON people(company_id);
+
+CREATE INDEX IF NOT EXISTS idx_places_team ON places(team_id);
+
+CREATE INDEX IF NOT EXISTS idx_deals_team ON deals(team_id);
+
+CREATE INDEX IF NOT EXISTS idx_deal_parties_deal ON deal_parties(deal_id);
+
+CREATE INDEX IF NOT EXISTS idx_record_fields_record ON record_fields(record_type, record_id);
 
 CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id);
 

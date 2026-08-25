@@ -135,6 +135,110 @@ export const SCHEMA_STATEMENTS = [
   // Labelled radius circles — a non-compete around an anchor tenant, a
   // delivery boundary, a "client will not cross this road" line. Drawn on the
   // broker's map and the client's alike.
+  /*
+   * The CRM side of the workspace: who, where, and what is happening between
+   * them. A survey is one deal's map; these are the records that outlive it.
+   *
+   * People and companies are separate tables rather than one "contact" with a
+   * type flag. A person changes employer, a company outlives its people, and
+   * a deal routinely needs both — collapsing them makes every one of those
+   * cases an edit to the same row.
+   */
+  `CREATE TABLE IF NOT EXISTS companies (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    industry   TEXT,
+    website    TEXT,
+    phone      TEXT,
+    address    TEXT,
+    city       TEXT,
+    state      TEXT,
+    zip        TEXT,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS people (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    first_name TEXT,
+    last_name  TEXT,
+    email      TEXT,
+    phone      TEXT,
+    title      TEXT,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  /*
+   * A place is a building the team knows about, independent of any survey.
+   * Sending one into a survey copies it to a property: the survey is a
+   * snapshot the broker then annotates and shares, and editing that must not
+   * rewrite the record the whole team relies on.
+   */
+  `CREATE TABLE IF NOT EXISTS places (
+    id               TEXT PRIMARY KEY,
+    team_id          TEXT NOT NULL,
+    name             TEXT,
+    address          TEXT,
+    city             TEXT,
+    state            TEXT,
+    zip              TEXT,
+    lat              REAL,
+    lng              REAL,
+    property_type    TEXT,
+    size_sqft        INTEGER,
+    acreage          REAL,
+    availability     TEXT,
+    asking_rate      REAL,
+    rate_unit        TEXT,
+    owner_company_id TEXT REFERENCES companies(id) ON DELETE SET NULL,
+    notes            TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS deals (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    kind       TEXT,
+    stage      TEXT NOT NULL DEFAULT 'prospect',
+    value      REAL,
+    close_date TEXT,
+    survey_id  TEXT REFERENCES surveys(id) ON DELETE SET NULL,
+    notes      TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  /*
+   * What makes a deal a deal: people, companies and places brought together,
+   * each in a named role. One row per participant rather than columns, so a
+   * deal can hold three candidate sites and two decision makers without the
+   * schema having an opinion about how many of each there may be.
+   */
+  `CREATE TABLE IF NOT EXISTS deal_parties (
+    id         TEXT PRIMARY KEY,
+    deal_id    TEXT NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,
+    ref_id     TEXT NOT NULL,
+    role       TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  /*
+   * Custom profiles, in the shape `property_fields` already uses: a row per
+   * field rather than a JSON blob, so a field can be renamed, reordered or
+   * queried without rewriting every record that carries it.
+   */
+  `CREATE TABLE IF NOT EXISTS record_fields (
+    id          TEXT PRIMARY KEY,
+    record_type TEXT NOT NULL,
+    record_id   TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    value       TEXT,
+    position    INTEGER NOT NULL DEFAULT 0
+  )`,
   `CREATE TABLE IF NOT EXISTS zones (
     id           TEXT PRIMARY KEY,
     survey_id    TEXT NOT NULL REFERENCES surveys(id) ON DELETE CASCADE,
@@ -150,6 +254,14 @@ export const SCHEMA_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
   'CREATE INDEX IF NOT EXISTS idx_stages_survey ON stages(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_fields_property ON property_fields(property_id)',
+  // Every CRM list is "this team's", so that is what the indexes serve.
+  'CREATE INDEX IF NOT EXISTS idx_companies_team ON companies(team_id)',
+  'CREATE INDEX IF NOT EXISTS idx_people_team ON people(team_id)',
+  'CREATE INDEX IF NOT EXISTS idx_people_company ON people(company_id)',
+  'CREATE INDEX IF NOT EXISTS idx_places_team ON places(team_id)',
+  'CREATE INDEX IF NOT EXISTS idx_deals_team ON deals(team_id)',
+  'CREATE INDEX IF NOT EXISTS idx_deal_parties_deal ON deal_parties(deal_id)',
+  'CREATE INDEX IF NOT EXISTS idx_record_fields_record ON record_fields(record_type, record_id)',
   'CREATE INDEX IF NOT EXISTS idx_property_images_property ON property_images(property_id)',
   'CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)',
   'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
