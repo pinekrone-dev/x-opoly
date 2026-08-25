@@ -62,6 +62,8 @@ const SURVEY_FIELDS = {
   center_lat: (v) => number(v, -90, 90),
   center_lng: (v) => number(v, -180, 180),
   zoom: (v) => integer(v, 1, 20),
+  share_demographics: (v) => (v ? 1 : 0),
+  share_qr: (v) => (v ? 1 : 0),
   tour_start_time: (v) => text(v, 20),
   tour_stop_minutes: (v) => integer(v, 0, 600),
   tour_start_address: (v) => text(v, 300),
@@ -148,6 +150,8 @@ function mapSurvey(row) {
       enabled: toBool(row.share_enabled),
       expiresAt: row.share_expires_at,
       url: row.share_token ? `/s/${row.share_token}` : null,
+      showDemographics: toBool(row.share_demographics),
+      showQr: row.share_qr == null ? true : toBool(row.share_qr),
     },
     tour: {
       startTime: row.tour_start_time || '10:00',
@@ -361,6 +365,8 @@ export async function resolveShare(db, token) {
       center: survey.center,
       zoom: survey.zoom,
       expiresAt: survey.share.expiresAt,
+      // Which extras the broker turned on for this report.
+      showDemographics: survey.share.showDemographics,
     },
     properties: (await listProperties(db, row.id))
       // What the broker hid, the client never receives — filtered here rather

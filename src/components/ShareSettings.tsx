@@ -24,6 +24,12 @@ export default function ShareSettings({ survey, onChange }: Props) {
     }
   }
 
+  /** Report options ride the general survey PATCH, not the share toggle. */
+  const save = async (input: { shareDemographics?: boolean; shareQr?: boolean }) => {
+    const { survey: updated } = await api.updateSurvey(survey.id, input)
+    onChange(updated)
+  }
+
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(link)
@@ -125,6 +131,45 @@ export default function ShareSettings({ survey, onChange }: Props) {
             Preview what the client sees
           </a>
         )}
+
+        {/*
+          What the report includes — the same choices govern the client link
+          and the tour book PDF, because they are two forms of one report.
+        */}
+        <div className="mt-4 border-t border-line pt-3">
+          <p className="label mb-2">Report options</p>
+
+          <label className="flex cursor-pointer items-start gap-2 py-1 text-xs text-body">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-brand"
+              checked={Boolean(survey.share.showDemographics)}
+              onChange={(event) => void save({ shareDemographics: event.target.checked })}
+            />
+            <span>
+              <span className="font-medium text-ink">Demographic shading on the client&rsquo;s map</span>
+              <span className="block text-muted">
+                The client link opens with census block groups shaded around your sites.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-2 py-1 text-xs text-body">
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-brand"
+              checked={survey.share.showQr !== false}
+              onChange={(event) => void save({ shareQr: event.target.checked })}
+            />
+            <span>
+              <span className="font-medium text-ink">QR directions codes in the tour book</span>
+              <span className="block text-muted">
+                Each stop carries a scannable code that opens driving directions. Turn off for a
+                cleaner page when the book is only read on screen.
+              </span>
+            </span>
+          </label>
+        </div>
       </div>
     </section>
   )

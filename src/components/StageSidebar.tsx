@@ -259,6 +259,14 @@ function SiteCard({
           <span className="block truncate text-sm text-ink">{property.name || 'Untitled site'}</span>
           <span className="block truncate text-xs text-muted">{property.address || 'No address'}</span>
         </button>
+        {property.lat == null ? (
+          <span
+            className="shrink-0 rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+            title="This site has no location yet — open it to place it"
+          >
+            Not on map
+          </span>
+        ) : null}
       </div>
     </li>
   )

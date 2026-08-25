@@ -42,6 +42,8 @@ interface BookInput {
   stages: DealStage[]
   times: Map<string, TourStopSchedule>
   summary: { startTime: string; endTime: string; driveLabel: string } | null
+  /** Print a directions QR on each stop. The broker's report option. */
+  includeQr?: boolean
 }
 
 export interface LoadedImage {
@@ -98,7 +100,7 @@ function setText(doc: Doc, size: number, colour: typeof INK, weight: 'normal' | 
   doc.setTextColor(colour.r, colour.g, colour.b)
 }
 
-export async function exportTourBook({ survey, stops, stages, times, summary }: BookInput) {
+export async function exportTourBook({ survey, stops, stages, times, summary, includeQr = true }: BookInput) {
   // Loaded on demand: dead weight on the map page otherwise.
   const { jsPDF } = await import('jspdf')
 
@@ -121,7 +123,7 @@ export async function exportTourBook({ survey, stops, stages, times, summary }: 
       const [hero, extras, qr] = await Promise.all([
         heroImage ? loadImage(heroImage.url) : Promise.resolve(null),
         Promise.all(extraImages.map((image) => loadImage(image.url))),
-        directionsQr(property),
+        includeQr ? directionsQr(property) : Promise.resolve(null),
       ])
 
       assets.set(property.id, { hero, extras: extras.filter(Boolean) as LoadedImage[], qr })
@@ -492,5 +494,12 @@ export async function buildTourBookFor({
     // A routing outage costs the times, not the book.
   }
 
-  await exportTourBook({ survey, stops, stages, times, summary })
+  await exportTourBook({
+    survey,
+    stops,
+    stages,
+    times,
+    summary,
+    includeQr: survey.share?.showQr !== false,
+  })
 }

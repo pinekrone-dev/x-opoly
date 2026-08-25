@@ -188,11 +188,30 @@ export default function MapCanvas({
     const order = routeIds ?? []
     const wanted = new Set<string>()
 
+    /*
+     * Sites that landed on the exact same coordinates — two flyers placed at
+     * the same map centre, say — would stack into what looks like a single
+     * pin, and "I added two sites and see one" is indistinguishable from a
+     * bug. Nudge the duplicates apart in a small ring so every pin is
+     * individually visible and clickable; the stored coordinates are
+     * untouched.
+     */
+    const seenAt = new Map<string, number>()
+
     for (const property of properties) {
       if (property.lat == null || property.lng == null) continue
       wanted.add(property.id)
 
-      const position: [number, number] = [property.lat, property.lng]
+      const key = `${property.lat.toFixed(5)},${property.lng.toFixed(5)}`
+      const stacked = seenAt.get(key) ?? 0
+      seenAt.set(key, stacked + 1)
+
+      let position: [number, number] = [property.lat, property.lng]
+      if (stacked > 0) {
+        const angle = (stacked - 1) * (Math.PI / 3)
+        const step = 0.00035 * Math.ceil(stacked / 6)
+        position = [property.lat + step * Math.cos(angle), property.lng + step * Math.sin(angle)]
+      }
       const routeIndex = order.indexOf(property.id)
       const icon = pinIcon(property, routeIndex >= 0 ? routeIndex : null, property.id === selectedId)
 

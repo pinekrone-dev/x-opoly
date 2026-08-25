@@ -161,6 +161,11 @@ export const COLUMN_ADDITIONS = [
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],
 
+  // What the shared report includes. Demographics shades the client's map;
+  // QR puts a directions code on each tour book stop. Both broker choices.
+  ['surveys', 'share_demographics', 'INTEGER NOT NULL DEFAULT 0'],
+  ['surveys', 'share_qr', 'INTEGER NOT NULL DEFAULT 1'],
+
   // Tour configuration lives on the survey: one planned tour per survey.
   ['surveys', 'tour_start_time', 'TEXT'],
   ['surveys', 'tour_stop_minutes', 'INTEGER'],

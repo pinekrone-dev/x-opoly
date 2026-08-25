@@ -14,6 +14,7 @@ import {
   setTourOrder,
   updateProperty,
   updateShare,
+  updateSurvey,
 } from '../app/lib/surveys.js'
 
 let db
@@ -143,6 +144,21 @@ describe('client sharing', () => {
     assert.ok(!('notes' in result.properties[0]), 'private notes are withheld')
     assert.ok(!('surveyId' in result.properties[0]), 'internal survey id is withheld')
     assert.ok(!('share' in result.survey), 'the token is not echoed back')
+  })
+
+  test('report options round-trip and reach the client payload', async () => {
+    const survey = await createSurvey(db, { name: 'Options' })
+    assert.equal(survey.share.showDemographics, false, 'shading is opt-in')
+    assert.equal(survey.share.showQr, true, 'QR codes default on')
+
+    const updated = await updateSurvey(db, survey.id, { shareDemographics: true, shareQr: false })
+    assert.equal(updated.share.showDemographics, true)
+    assert.equal(updated.share.showQr, false)
+
+    await updateShare(db, survey.id, { enabled: true })
+    const shared = await resolveShare(db, survey.share.token)
+    assert.equal(shared.survey.showDemographics, true, 'the client view knows to shade')
+    assert.ok(!('showQr' in shared.survey), 'the PDF-only option stays out of the client payload')
   })
 
   test('a hidden site never reaches the client', async () => {

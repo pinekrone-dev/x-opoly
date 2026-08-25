@@ -84,9 +84,21 @@ Rules:
 - Put the street address in address, and keep city, state and zip in their own fields.
 - List any field you were unsure about in uncertainFields so the broker can check it.`
 
-/** True when this deployment has credentials to call the API. */
+/**
+ * True when this deployment can call any extraction provider.
+ *
+ * Anthropic, Google Gemini and xAI Grok are all supported; whichever key is
+ * present decides (AI_PROVIDER forces the choice when several are set).
+ */
 export function isConfigured(env = {}) {
-  return Boolean(env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN)
+  return Boolean(
+    env.ANTHROPIC_API_KEY ||
+      env.ANTHROPIC_AUTH_TOKEN ||
+      env.GEMINI_API_KEY ||
+      env.GOOGLE_API_KEY ||
+      env.XAI_API_KEY ||
+      env.GROK_API_KEY,
+  )
 }
 
 function contentBlockFor(bytes, mimeType) {
@@ -118,9 +130,19 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
 
   if (!client && !isConfigured(env)) {
     throw new FlyerExtractionError(
-      'Reading flyers automatically needs an Anthropic API key. Set ANTHROPIC_API_KEY on the server, or enter the details by hand.',
+      'Reading flyers automatically needs an AI key. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or XAI_API_KEY on the server, or enter the details by hand.',
       { configured: false },
     )
+  }
+
+  // Gemini and Grok run over plain fetch in ai.js; Anthropic keeps its SDK
+  // path below. An injected test client always means the Anthropic shape.
+  if (!client) {
+    const { resolveProvider, extractWithProvider } = await import('./ai.js')
+    const provider = resolveProvider(env)
+    if (provider !== 'anthropic') {
+      return extractWithProvider(provider, { bytes, mimeType }, env)
+    }
   }
 
   // Only reached when a flyer is actually being read.
@@ -176,6 +198,14 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
  * flyer PDF describe the same thing, so they must fill the form identically.
  */
 export async function extractTextWithModel(text, { env = {}, client } = {}) {
+  if (!client) {
+    const { resolveProvider, extractWithProvider } = await import('./ai.js')
+    const provider = resolveProvider(env)
+    if (provider !== 'anthropic') {
+      return extractWithProvider(provider, { text }, env)
+    }
+  }
+
   const { Anthropic, zodOutputFormat, schema } = await loadSdk()
   const anthropic =
     client || new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, authToken: env.ANTHROPIC_AUTH_TOKEN })

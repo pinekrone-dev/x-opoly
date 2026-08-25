@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api'
 import type {
   CompetitionResult,
@@ -144,6 +145,39 @@ export default function PropertyPanel({
     onChange?.(updated)
   }
 
+  const [placeError, setPlaceError] = useState<string | null>(null)
+  const [placingByAddress, setPlacingByAddress] = useState(false)
+
+  /**
+   * Moves the pin to wherever the street address geocodes.
+   *
+   * This is the recovery for a site that landed at the map centre — the
+   * fallback used when a flyer named no address — or nowhere at all. One
+   * click beats dragging a pin to an address the record already knows.
+   */
+  const placeByAddress = async () => {
+    setPlacingByAddress(true)
+    setPlaceError(null)
+    try {
+      const { results } = await api.geocode(fullAddress(property))
+      if (!results.length) {
+        setPlaceError('That address could not be found. Click its spot on the map instead.')
+        return
+      }
+      const { property: updated } = await api.updateProperty(property.id, {
+        lat: results[0].lat,
+        lng: results[0].lng,
+      })
+      onChange?.(updated)
+    } catch (cause) {
+      setPlaceError(cause instanceof Error ? cause.message : 'The address lookup failed.')
+    } finally {
+      setPlacingByAddress(false)
+    }
+  }
+
+  const hasAddress = Boolean(property.address || (property.city && property.state))
+
   const loadDemographics = async () => {
     if (property.lat == null || property.lng == null) {
       setDemoError('Drop this property on the map first.')
@@ -238,6 +272,21 @@ export default function PropertyPanel({
                 {property.lat.toFixed(4)}, {property.lng?.toFixed(4)}
               </span>
             )}
+            {!readOnly && property.lat != null && hasAddress ? (
+              <button
+                type="button"
+                className="btn-ghost px-1.5 py-1 text-faint hover:text-body"
+                disabled={placingByAddress}
+                onClick={() => void placeByAddress()}
+                title="Move the pin to the street address"
+                aria-label="Move the pin to the street address"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <circle cx="12" cy="12" r="7" />
+                  <path d="M12 2v3m0 14v3M2 12h3m14 0h3" />
+                </svg>
+              </button>
+            ) : null}
             {!readOnly && (
               <button
                 type="button"
@@ -272,13 +321,26 @@ export default function PropertyPanel({
             <p className="text-[11px] leading-relaxed text-amber-700">
               This site has no location yet, so it cannot appear on the map or in a tour.
             </p>
-            <button
-              type="button"
-              className="btn-primary mt-2 w-full text-xs"
-              onClick={() => onPlaceOnMap?.()}
-            >
-              Place it on the map
-            </button>
+            <div className="mt-2 flex gap-2">
+              {hasAddress ? (
+                <button
+                  type="button"
+                  className="btn-primary flex-1 text-xs"
+                  disabled={placingByAddress}
+                  onClick={() => void placeByAddress()}
+                >
+                  {placingByAddress ? 'Finding it…' : 'Use its address'}
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={`${hasAddress ? 'btn-secondary' : 'btn-primary'} flex-1 text-xs`}
+                onClick={() => onPlaceOnMap?.()}
+              >
+                Click the map
+              </button>
+            </div>
+            {placeError ? <p className="mt-2 text-[11px] text-rose-600">{placeError}</p> : null}
           </div>
         ) : null}
 
@@ -577,9 +639,14 @@ export default function PropertyPanel({
           </div>
         )}
 
-        {clipping ? (
+        {/*
+          Portalled to <body>: rendered in place, the dialog sat inside the
+          sidebar's stacking context and Leaflet's controls (z-index 1000)
+          drew over it — the clipping popup literally came up behind the map.
+        */}
+        {clipping ? createPortal(
           <div
-            className="fixed inset-0 z-50 flex flex-col bg-ink/70 p-4 sm:p-8"
+            className="fixed inset-0 z-[1100] flex flex-col bg-ink/70 p-4 sm:p-8"
             role="dialog"
             aria-modal="true"
             aria-label="Clip photos from the flyer"
@@ -611,7 +678,8 @@ export default function PropertyPanel({
                 </Suspense>
               </div>
             </div>
-          </div>
+          </div>,
+          document.body,
         ) : null}
 
         {tab === 'competition' && onCompetition && (

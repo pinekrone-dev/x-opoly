@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
 import PropertyPanel from '../components/PropertyPanel'
 import { api } from '../api'
-import type { AppFeatures, Property, SharePayload } from '../types'
+import type { AppFeatures, Demographics, Property, SharePayload } from '../types'
+import { colorFor } from '../components/DemographicsPanel'
 import { STAGE_META, fullAddress, displayName, rate, shortDate, sqft } from '../lib/format'
 
 /**
@@ -13,6 +14,7 @@ export default function ShareView({ token, features }: { token: string; features
   const [payload, setPayload] = useState<SharePayload | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [demographics, setDemographics] = useState<Demographics | null>(null)
 
   useEffect(() => {
     api
@@ -25,6 +27,39 @@ export default function ShareView({ token, features }: { token: string; features
     () => payload?.properties.find((property) => property.id === selectedId) ?? null,
     [payload, selectedId],
   )
+
+  /*
+   * The broker turned demographic shading on for this report, so the client's
+   * map opens already shaded — no control to find, nothing to click. Anchored
+   * to the first placed site (the natural centre of a shortlist), and a
+   * census outage costs only the shading, never the map.
+   */
+  useEffect(() => {
+    if (!payload?.survey.showDemographics) return
+    const anchor = payload.properties.find((property) => property.lat != null && property.lng != null)
+    const point = anchor ?? (payload.survey.center ? { lat: payload.survey.center.lat, lng: payload.survey.center.lng } : null)
+    if (!point?.lat || !point?.lng) return
+    api
+      .demographics(point.lat, point.lng)
+      .then(setDemographics)
+      .catch(() => undefined)
+  }, [payload])
+
+  const choropleth = useMemo(() => {
+    if (!demographics) return null
+    const shapes = demographics.areas.filter((area) => area.geometry)
+    const values = shapes
+      .map((area) => area.metrics?.population)
+      .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (values.length === 0) return null
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    return shapes.map((area) => ({
+      geoid: area.geoid,
+      geometry: area.geometry,
+      color: colorFor(area.metrics?.population, min, max),
+    }))
+  }, [demographics])
 
   if (error) {
     return (
@@ -115,7 +150,8 @@ export default function ShareView({ token, features }: { token: string; features
           selectedId={selectedId}
           onSelect={setSelectedId}
           tiles={features.tiles}
-                basemaps={features.basemaps}
+          basemaps={features.basemaps}
+          choropleth={choropleth}
           fitKey={properties.length}
         />
       </div>

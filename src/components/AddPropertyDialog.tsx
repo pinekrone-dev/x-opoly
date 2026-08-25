@@ -117,7 +117,7 @@ export default function AddPropertyDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Add a property">
+    <div className="fixed inset-0 z-[1100] grid place-items-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Add a property">
       <div className="panel animate-fade-in w-full max-w-lg">
         <header className="panel-header">
           <h2 className="panel-title">Add a site</h2>
@@ -244,7 +244,7 @@ export default function AddPropertyDialog({
               />
               {!flyerExtractionEnabled && (
                 <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200">
-                  Automatic reading is switched off because this server has no Anthropic API key. The flyer will still be
+                  Automatic reading is switched off because this server has no AI key (Anthropic, Gemini, or Grok). The flyer will still be
                   filed against the site — you can fill the fields in by hand.
                 </p>
               )}

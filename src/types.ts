@@ -111,7 +111,16 @@ export interface Survey {
   brandColor: string
   center: { lat: number; lng: number } | null
   zoom: number
-  share: { token: string | null; enabled: boolean; expiresAt: string | null; url: string | null }
+  share: {
+    token: string | null
+    enabled: boolean
+    expiresAt: string | null
+    url: string | null
+    /** Shade census block groups on the client's map. */
+    showDemographics?: boolean
+    /** Print a QR directions code on each tour book stop. */
+    showQr?: boolean
+  }
   tour: {
     startTime: string
     stopMinutes: number
@@ -242,6 +251,7 @@ export interface SharePayload {
     center: { lat: number; lng: number } | null
     zoom: number
     expiresAt: string | null
+    showDemographics?: boolean
   }
   properties: Property[]
 }

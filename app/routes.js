@@ -66,6 +66,7 @@ import {
 } from './lib/auth.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
+import { resolveProvider } from './lib/ai.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -250,7 +251,16 @@ export function createApp({ db, storage, env = {} }) {
             census: Boolean(env.CENSUS_API_KEY),
             google: Boolean(env.GOOGLE_MAPS_API_KEY),
             sms: smsConfigured(env),
-            anthropic: isConfigured(env),
+            // Which extraction provider will answer — anthropic, gemini or
+            // grok — or null when no key is set. "misconfigured" flags an
+            // AI_PROVIDER naming a provider this list does not know.
+            ai: (() => {
+              try {
+                return resolveProvider(env)
+              } catch {
+                return 'misconfigured'
+              }
+            })(),
           },
         },
       },
@@ -311,7 +321,16 @@ export function createApp({ db, storage, env = {} }) {
    * client following a link has no account and must never need one. The stored
    * filenames are random UUIDs, so they are unguessable rather than listable.
    */
-  const PUBLIC_PATHS = [/^\/api\/health$/, /^\/api\/auth\//, /^\/api\/share\//, /^\/api\/tiles\//, /^\/api\/files\//]
+  const PUBLIC_PATHS = [
+    /^\/api\/health$/,
+    /^\/api\/auth\//,
+    /^\/api\/share\//,
+    /^\/api\/tiles\//,
+    /^\/api\/files\//,
+    // Public census data: the shared client map shades its block groups
+    // without a session, and nothing here is private to the workspace.
+    /^\/api\/demographics$/,
+  ]
 
   /**
    * Requires a session for everything else — unless no account exists yet.
