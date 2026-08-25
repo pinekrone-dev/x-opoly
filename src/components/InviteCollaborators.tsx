@@ -11,7 +11,7 @@ import type { Invite } from '../types'
  * is shown once, right after minting, which is why the copy field appears
  * inline instead of in the list below.
  */
-export default function InviteCollaborators() {
+export default function InviteCollaborators({ compact = false }: { compact?: boolean }) {
   const [invites, setInvites] = useState<Invite[]>([])
   const [email, setEmail] = useState('')
   const [minted, setMinted] = useState<{ email: string; url: string } | null>(null)
@@ -59,9 +59,11 @@ export default function InviteCollaborators() {
   }
 
   return (
-    <section className="panel mt-4 p-4">
-      <h3 className="panel-title">Collaborators</h3>
-      <p className="mt-1 text-xs leading-relaxed text-muted">
+    // Compact drops the panel chrome so this can live inside the account
+    // menu; the standalone form keeps its own card.
+    <section className={compact ? '' : 'panel mt-4 p-4'}>
+      {compact ? null : <h3 className="panel-title">Collaborators</h3>}
+      <p className={`${compact ? '' : 'mt-1 '}text-xs leading-relaxed text-muted`}>
         Invite a partner and they can add and edit sites alongside you. Each invitation is a
         one-time link that only works for the address it was sent to.
       </p>

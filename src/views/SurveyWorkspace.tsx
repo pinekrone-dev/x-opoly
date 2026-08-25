@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import AddPropertyDialog from '../components/AddPropertyDialog'
 import MapCanvas from '../components/MapCanvas'
 import PropertyPanel from '../components/PropertyPanel'
@@ -6,7 +6,6 @@ import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
 import CompareSites from '../components/CompareSites'
 import MapLegend from '../components/MapLegend'
-import InviteCollaborators from '../components/InviteCollaborators'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
@@ -56,6 +55,16 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     colorBy: string
     radius: number
   } | null>(null)
+  /**
+   * The phone layout's picture-in-picture map. Below `lg` the pipeline and
+   * site details own the screen and the map rides the top-right corner as a
+   * thumbnail; tapping it — or arming any action that needs a map click —
+   * expands it to fill the tab. On desktop this state is inert.
+   */
+  const [mapExpanded, setMapExpanded] = useState(false)
+  /** Census pull for the legend's demographics control, cached per survey. */
+  const mapDemoData = useRef<Demographics | null>(null)
+  const [mapDemoBusy, setMapDemoBusy] = useState(false)
   const [competition, setCompetition] = useState<(CompetitionResult & { center: { lat: number; lng: number } }) | null>(null)
 
   useEffect(() => {
@@ -75,6 +84,24 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     () => properties.find((property) => property.id === selectedId) ?? null,
     [properties, selectedId],
   )
+
+  // Anything that needs a map click gets the full map; anything that needs
+  // reading — a tapped pin's details, the just-placed zone's form — collapses
+  // it back to the corner so the content is legible again.
+  useEffect(() => {
+    if (dropPin || placing || zoneMode === 'armed') setMapExpanded(true)
+  }, [dropPin, placing, zoneMode])
+  useEffect(() => {
+    if (selectedId || pendingZone) setMapExpanded(false)
+  }, [selectedId, pendingZone])
+  useEffect(() => {
+    setMapExpanded(false)
+  }, [tab])
+  // Growing from thumbnail to full screen deserves a re-fit: the bounds that
+  // suited a 9rem box are wrong for the whole tab.
+  useEffect(() => {
+    if (mapExpanded) setFitKey((key) => key + 1)
+  }, [mapExpanded])
 
   /**
    * Pins the map should draw.
@@ -112,6 +139,43 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       color: colorFor(area.metrics?.[view.colorBy], min, max),
     }))
   }, [demoView])
+
+  /**
+   * The legend's demographics control: shading is one pick away, up front,
+   * before any site is opened. One census pull (the widest radius) serves
+   * every metric and ring choice after it.
+   */
+  const setMapDemographics = async (colorBy: string | null, radius: number) => {
+    if (!colorBy) {
+      setDemoView(null)
+      return
+    }
+    if (mapDemoData.current) {
+      setDemoView({ data: mapDemoData.current, colorBy, radius })
+      return
+    }
+    const placed = properties.find((property) => property.lat != null && property.lng != null)
+    const anchor =
+      selected?.lat != null && selected?.lng != null
+        ? { lat: selected.lat, lng: selected.lng }
+        : placed?.lat != null && placed?.lng != null
+          ? { lat: placed.lat, lng: placed.lng }
+          : mapCenter
+    if (!anchor) {
+      setError('Add a site or move the map first — demographics shade around a point.')
+      return
+    }
+    setMapDemoBusy(true)
+    try {
+      const data = await api.demographics(anchor.lat, anchor.lng)
+      mapDemoData.current = data
+      setDemoView({ data, colorBy, radius })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Census data could not be loaded.')
+    } finally {
+      setMapDemoBusy(false)
+    }
+  }
 
   const upsert = useCallback((property: Property) => {
     setProperties((current) => {
@@ -293,24 +357,24 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <nav className="flex gap-1" aria-label="Survey views">
+          <div className="flex min-w-0 items-center gap-2">
+            <nav className="scrollbar-thin flex gap-1 overflow-x-auto" aria-label="Survey views">
               {TABS.map((entry) => (
                 <button
                   key={entry.id}
                   type="button"
-                  className={`tab ${tab === entry.id ? 'tab-active' : ''}`}
+                  className={`tab shrink-0 ${tab === entry.id ? 'tab-active' : ''}`}
                   onClick={() => setTab(entry.id)}
                 >
                   {entry.label}
                 </button>
               ))}
             </nav>
-            <button type="button" className="btn-primary py-1.5" onClick={() => setAdding(true)}>
+            <button type="button" className="btn-primary shrink-0 py-1.5" onClick={() => setAdding(true)} aria-label="Add site">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
                 <path d="M12 5v14M5 12h14" />
               </svg>
-              Add site
+              <span className="hidden sm:inline">Add site</span>
             </button>
           </div>
         </div>
@@ -331,16 +395,61 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
       <main className="min-h-0 flex-1">
         {tab === 'map' && (
-          <div className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]">
-            <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">{sidebar}</div>
-            <div className={`relative ${dropPin || placing || zoneMode === 'armed' ? 'cursor-crosshair' : ''}`}>
-              <MapLegend
-                stages={stages}
-                properties={properties}
-                zones={zones}
-                onToggleStage={(stage) => void toggleStageHidden(stage)}
-                onDeleteZone={(zoneId) => void removeZone(zoneId)}
-              />
+          <div className="relative h-full min-h-0 lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]">
+            {/* The pipeline or the selected site's details: the main phone
+                surface, and the left column on desktop. */}
+            <div className="scrollbar-thin h-full min-h-0 overflow-y-auto border-line bg-surface lg:border-r">
+              {sidebar}
+            </div>
+
+            {/* The map: the right column on desktop; on a phone a floating
+                thumbnail in the top-right that expands to fill the tab. */}
+            <div
+              className={`${
+                mapExpanded
+                  ? 'absolute inset-0 z-[750]'
+                  : 'absolute right-2 top-14 z-[650] h-40 w-36 overflow-hidden rounded-xl border border-line shadow-lg'
+              } bg-paper lg:static lg:z-auto lg:h-full lg:w-full lg:overflow-visible lg:rounded-none lg:border-0 lg:shadow-none ${
+                dropPin || placing || zoneMode === 'armed' ? 'cursor-crosshair' : ''
+              }`}
+            >
+              {(() => {
+                const legend = (
+                  <MapLegend
+                    stages={stages}
+                    properties={properties}
+                    zones={zones}
+                    onToggleStage={(stage) => void toggleStageHidden(stage)}
+                    onDeleteZone={(zoneId) => void removeZone(zoneId)}
+                    demographics={{
+                      colorBy: demoView?.colorBy ?? null,
+                      radius: demoView?.radius ?? 3,
+                      busy: mapDemoBusy,
+                    }}
+                    onDemographics={(colorBy, radius) => void setMapDemographics(colorBy, radius)}
+                  />
+                )
+                return mapExpanded ? legend : <div className="hidden lg:block">{legend}</div>
+              })()}
+              {!mapExpanded ? (
+                <button
+                  type="button"
+                  className="absolute inset-0 z-[500] lg:hidden"
+                  aria-label="Expand the map"
+                  onClick={() => setMapExpanded(true)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
+                  onClick={() => setMapExpanded(false)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                  Close map
+                </button>
+              )}
               <MapCanvas
                 stages={stages}
                 zones={zones}
@@ -393,18 +502,47 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         )}
 
         {tab === 'tour' && (
-          <div className="grid h-full min-h-0 gap-4 p-4 lg:grid-cols-[24rem_minmax(0,1fr)]">
-            <TourPlanner
-              surveyId={survey.id}
-              properties={properties}
-              defaults={survey.tour}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              onOrderChange={setTourOrder}
-              onPlan={setTourPlan}
-              onAnchors={setTourAnchors}
-            />
-            <div className="panel overflow-hidden">
+          <div className="relative h-full min-h-0 lg:grid lg:grid-cols-[24rem_minmax(0,1fr)] lg:gap-4 lg:p-4">
+            {/* The planner is the phone's main surface; the route preview
+                floats top-right and expands on tap, as on the map tab. */}
+            <div className="h-full min-h-0 overflow-y-auto lg:overflow-visible">
+              <TourPlanner
+                surveyId={survey.id}
+                properties={properties}
+                defaults={survey.tour}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onOrderChange={setTourOrder}
+                onPlan={setTourPlan}
+                onAnchors={setTourAnchors}
+              />
+            </div>
+            <div
+              className={`${
+                mapExpanded
+                  ? 'absolute inset-0 z-[750]'
+                  : 'absolute right-2 top-14 z-[650] h-40 w-36 overflow-hidden rounded-xl border border-line shadow-lg'
+              } bg-paper lg:static lg:z-auto lg:h-full lg:w-full lg:overflow-hidden lg:rounded-xl lg:border lg:border-line lg:bg-surface lg:shadow-sm`}
+            >
+              {!mapExpanded ? (
+                <button
+                  type="button"
+                  className="absolute inset-0 z-[500] lg:hidden"
+                  aria-label="Expand the route map"
+                  onClick={() => setMapExpanded(true)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="absolute right-3 top-3 z-[650] flex items-center gap-1.5 rounded-full border border-line bg-surface px-3.5 py-2 text-sm font-semibold text-ink shadow-lg lg:hidden"
+                  onClick={() => setMapExpanded(false)}
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                    <path d="M18 6 6 18M6 6l12 12" />
+                  </svg>
+                  Close map
+                </button>
+              )}
               <MapCanvas
                 stages={stages}
                 properties={visibleProperties}
@@ -429,7 +567,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 routeGeometry={tourPlan?.geometry ?? null}
                 choropleth={choropleth}
                 routeColor={survey.brandColor}
-                fitKey={`tour-${properties.length}`}
+                fitKey={`tour-${properties.length}-${fitKey}`}
               />
             </div>
           </div>
@@ -438,10 +576,6 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'share' && (
           <div className="h-full overflow-y-auto p-4">
             <ShareSettings survey={survey} onChange={setSurvey} />
-
-            <CompareSites survey={survey} properties={properties} stages={stages} />
-
-            <InviteCollaborators />
 
             {/*
               The other half of sharing. A link is for a client at a desk; the

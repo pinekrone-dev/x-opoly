@@ -87,7 +87,9 @@ export default function PropertyTable({ properties, stages = [], selectedId, onS
       </header>
 
       <div className="scrollbar-thin min-h-0 flex-1 overflow-auto">
-        <table className="w-full table-fixed border-collapse text-sm">
+        {/* min-w keeps the fixed columns honest on a phone: the table scrolls
+            sideways inside its panel instead of crushing the name column. */}
+        <table className="w-full min-w-[34rem] table-fixed border-collapse text-sm">
           <thead className="sticky top-0 z-10 bg-sunken">
             <tr className="text-left text-[11px] uppercase tracking-wider text-muted">
               {columns.map((column) => (

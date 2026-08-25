@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { GeocodeResult, Property } from '../types'
 
@@ -44,6 +44,23 @@ export default function AddPropertyDialog({
       setBusy(false)
     }
   }
+
+  /**
+   * Suggestions as the address is typed: once it is long enough to plausibly
+   * geocode, the lookup runs on its own after a pause. The Search button
+   * stays for anyone who types fast and hits enter.
+   */
+  useEffect(() => {
+    if (mode !== 'search') return undefined
+    const trimmed = query.trim()
+    if (trimmed.length < 5) {
+      setResults([])
+      return undefined
+    }
+    const timer = setTimeout(() => void search(), 450)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query, mode])
 
   const addFromResult = async (result: GeocodeResult) => {
     const { property } = await api.addProperty(surveyId, {

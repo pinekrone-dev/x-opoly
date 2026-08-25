@@ -207,7 +207,9 @@ export interface TourPlan {
   legs: { fromId: string; toId: string; miles: number }[]
   itinerary: Itinerary
   geometry: [number, number][]
-  routeSource: 'osrm' | 'estimate' | 'none'
+  routeSource: 'google' | 'osrm' | 'estimate' | 'none'
+  /** Why routing fell back, when it did — shown so the broker knows. */
+  routeNote?: string | null
   driveMiles: number
   start: TourAnchor | null
   end: TourAnchor | null

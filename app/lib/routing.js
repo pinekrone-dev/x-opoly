@@ -91,7 +91,13 @@ async function osrmRoute(points, { fetchImpl, timeoutMs }) {
   try {
     response = await fetchImpl(url, {
       signal: controller?.signal,
-      headers: { accept: 'application/json' },
+      // The demo OSRM server refuses anonymous clients; a Worker's fetch
+      // sends no User-Agent at all, which reads as exactly that. Identify
+      // ourselves and the road geometry comes back instead of a refusal.
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'SiteSurveyCRE/1.0 (+https://survey.realestateaistudio.com)',
+      },
     })
   } finally {
     if (timer) clearTimeout(timer)

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../api'
+import InviteCollaborators from './InviteCollaborators'
 import type { Account, BillingStatus } from '../types'
 
 /**
@@ -130,9 +131,14 @@ export default function AccountMenu({
       </button>
 
       {open ? (
-        <div className="panel absolute right-0 z-20 mt-2 w-72 p-4 text-left">
+        <div className="panel scrollbar-thin absolute right-0 z-20 mt-2 max-h-[min(80vh,42rem)] w-80 overflow-y-auto p-4 text-left">
           <p className="truncate text-sm font-semibold text-ink">{account.name || 'Signed in'}</p>
           <p className="truncate text-xs text-muted">{account.email}</p>
+
+          <div className="mt-4 border-t border-line pt-3">
+            <p className="label mb-2">Collaborators</p>
+            <InviteCollaborators compact />
+          </div>
 
           <div className="mt-4 border-t border-line pt-3">
             <p className="label mb-2">Authenticator app</p>

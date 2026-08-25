@@ -366,8 +366,10 @@ export default function TourPlanner({
           </p>
         ) : null}
 
-        {plan?.routeSource === 'estimate' && stops.length > 1 ? (
-          <p className="mt-2 text-xs text-amber-400/80">
+        {plan?.routeNote && stops.length > 1 ? (
+          <p className="mt-2 text-xs text-amber-500/90">{plan.routeNote}</p>
+        ) : plan?.routeSource === 'estimate' && stops.length > 1 ? (
+          <p className="mt-2 text-xs text-amber-500/90">
             Drive times are estimated — the routing service could not be reached, so these are
             straight-line distances with an allowance for streets.
           </p>

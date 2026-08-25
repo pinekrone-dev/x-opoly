@@ -84,7 +84,7 @@
   }
 
   .tab {
-    @apply relative flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium text-muted transition
+    @apply relative flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium text-muted transition
       hover:text-ink;
   }
 
@@ -243,6 +243,22 @@
 .site-pin--selected .site-pin__body {
   transform: rotate(-45deg) scale(1.25);
   border-color: #0f172a;
+}
+
+/* The always-visible name beside a pin on the client's shared map. */
+.site-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 9999px;
+  padding: 2px 8px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
+  white-space: nowrap;
+}
+.site-label::before {
+  display: none;
 }
 
 /* -------------------------------------------------------------------------- */

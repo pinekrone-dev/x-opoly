@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { METRIC_DEFINITIONS } from './DemographicsPanel'
 import type { DealStage, Property, Zone } from '../types'
 
 /**
@@ -16,14 +17,20 @@ export default function MapLegend({
   zones,
   onToggleStage,
   onDeleteZone,
+  demographics,
+  onDemographics,
 }: {
   stages: DealStage[]
   properties: Property[]
   zones: Zone[]
   onToggleStage: (stage: DealStage) => void
   onDeleteZone: (id: string) => void
+  /** The choropleth control: which metric shades the map, over what radius. */
+  demographics?: { colorBy: string | null; radius: number; busy: boolean } | null
+  onDemographics?: (colorBy: string | null, radius: number) => void
 }) {
-  const [open, setOpen] = useState(true)
+  // Collapsed by default on a phone: an open legend covers half the map.
+  const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024)
 
   const countFor = (stage: DealStage) =>
     properties.filter((property) => property.stageId === stage.id).length
@@ -108,6 +115,40 @@ export default function MapLegend({
             ))}
 
           </div>
+
+          {demographics && onDemographics ? (
+            <div className="mt-2 border-t border-line pt-2">
+              <p className="label mb-1">Demographics</p>
+              <select
+                className="field w-full px-2 py-1 text-xs"
+                aria-label="Shade the map by a census metric"
+                value={demographics.colorBy ?? ''}
+                onChange={(event) => onDemographics(event.target.value || null, demographics.radius)}
+              >
+                <option value="">Off</option>
+                {METRIC_DEFINITIONS.map((metric) => (
+                  <option key={metric.key} value={metric.key}>
+                    {metric.label}
+                  </option>
+                ))}
+              </select>
+              {demographics.colorBy ? (
+                <div className="mt-1.5 flex gap-1">
+                  {[1, 3, 5].map((miles) => (
+                    <button
+                      key={miles}
+                      type="button"
+                      className={`tab px-2 py-0.5 text-xs ${demographics.radius === miles ? 'tab-active' : ''}`}
+                      onClick={() => onDemographics(demographics.colorBy, miles)}
+                    >
+                      {miles} mi
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {demographics.busy ? <p className="mt-1 text-[11px] text-faint">Loading census data…</p> : null}
+            </div>
+          ) : null}
         </div>
       )}
     </div>

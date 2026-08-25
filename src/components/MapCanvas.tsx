@@ -41,6 +41,8 @@ interface Props {
   competitors?: { id: string; name: string; lat: number; lng: number; miles: number }[]
   /** Changing this refits the view to the current pins. */
   fitKey?: string | number
+  /** Show each site's name beside its pin, always — the client share map. */
+  labelPins?: boolean
   className?: string
 }
 
@@ -138,6 +140,7 @@ export default function MapCanvas({
   rings = null,
   competitors,
   fitKey,
+  labelPins = false,
   className = 'h-full w-full',
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
@@ -248,10 +251,22 @@ export default function MapCanvas({
         markers.current.set(property.id, marker)
       }
 
-      marker.bindTooltip(
-        `<strong>${displayName(property)}</strong><br>${fullAddress(property)}`,
-        { direction: 'top', offset: [0, -24], className: 'site-tooltip' },
-      )
+      if (labelPins) {
+        // The name rides the pin permanently: a client reading the shared
+        // map should never have to hover or tap to learn which site is which.
+        marker.unbindTooltip()
+        marker.bindTooltip(displayName(property), {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -26],
+          className: 'site-label',
+        })
+      } else {
+        marker.bindTooltip(
+          `<strong>${displayName(property)}</strong><br>${fullAddress(property)}`,
+          { direction: 'top', offset: [0, -24], className: 'site-tooltip' },
+        )
+      }
     }
 
     for (const [id, marker] of markers.current) {
@@ -260,7 +275,7 @@ export default function MapCanvas({
         markers.current.delete(id)
       }
     }
-  }, [properties, selectedId, routeIds, stages])
+  }, [properties, selectedId, routeIds, stages, labelPins])
 
   useEffect(() => {
     const instance = map.current
