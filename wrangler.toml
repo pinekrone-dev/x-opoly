@@ -33,13 +33,19 @@ custom_domain = true
 # and query. Nothing else in the app changes: every link it builds —
 # verification emails, Stripe return URLs, client share links — is derived
 # from the host the request arrived on.
-[[routes]]
-pattern = "landquotient.com"
-custom_domain = true
-
-[[routes]]
-pattern = "www.landquotient.com"
-custom_domain = true
+# HELD BACK: landquotient.com is registered in a different Cloudflare account
+# (pinekrone) than the one running this Worker. A custom domain can only name a
+# zone the Worker's own account holds, so enabling these before the domain and
+# the Worker live in the same account fails the deploy — which would block
+# every future update. Re-enable once they are together.
+#
+# [[routes]]
+# pattern = "landquotient.com"
+# custom_domain = true
+#
+# [[routes]]
+# pattern = "www.landquotient.com"
+# custom_domain = true
 
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.
