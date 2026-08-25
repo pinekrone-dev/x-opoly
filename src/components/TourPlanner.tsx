@@ -104,7 +104,13 @@ export default function TourPlanner({
 
   // Re-time whenever a setting changes, keeping the broker's chosen order.
   useEffect(() => {
-    const ids = order.length > 0 ? order.filter((id) => chosen.includes(id)) : chosen
+    // Keep the arranged order for sites already in it — but a newly ticked
+    // site is in `chosen` and not yet in `order`, and filtering alone
+    // silently dropped it: the box checked, the route never changed. New
+    // picks join at the end of the existing order.
+    const kept = order.filter((id) => chosen.includes(id))
+    const added = chosen.filter((id) => !order.includes(id))
+    const ids = order.length > 0 ? [...kept, ...added] : chosen
     void schedule(ids, false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTime, stopMinutes, start, end, chosen])

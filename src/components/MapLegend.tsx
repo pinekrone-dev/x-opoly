@@ -15,40 +15,19 @@ export default function MapLegend({
   properties,
   zones,
   onToggleStage,
-  onStartZone,
-  pendingZone,
-  onSaveZone,
-  onCancelZone,
   onDeleteZone,
 }: {
   stages: DealStage[]
   properties: Property[]
   zones: Zone[]
   onToggleStage: (stage: DealStage) => void
-  /** Arms click-to-place; the next map click becomes the zone's centre. */
-  onStartZone: () => void
-  /** Set once the broker has clicked the map; the form below fills it in. */
-  pendingZone: { lat: number; lng: number } | null
-  onSaveZone: (zone: { label: string; radiusMiles: number }) => void
-  onCancelZone: () => void
   onDeleteZone: (id: string) => void
 }) {
   const [open, setOpen] = useState(true)
-  const [label, setLabel] = useState('')
-  const [radius, setRadius] = useState(1)
-  const [arming, setArming] = useState(false)
 
   const countFor = (stage: DealStage) =>
     properties.filter((property) => property.stageId === stage.id).length
   const unstaged = properties.filter((property) => !property.stageId).length
-
-  const save = () => {
-    if (!label.trim()) return
-    onSaveZone({ label: label.trim(), radiusMiles: radius })
-    setLabel('')
-    setRadius(1)
-    setArming(false)
-  }
 
   return (
     <div className="absolute bottom-6 left-3 z-[500]">
@@ -128,61 +107,6 @@ export default function MapLegend({
               </div>
             ))}
 
-            {pendingZone ? (
-              <div className="mt-1 rounded-lg bg-sunken p-2">
-                <input
-                  className="field text-xs"
-                  placeholder="Starbucks non-compete"
-                  aria-label="Zone label"
-                  autoFocus
-                  value={label}
-                  onChange={(event) => setLabel(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') save()
-                  }}
-                />
-                <div className="mt-1.5 flex items-center gap-1">
-                  {[0.5, 1, 2, 3, 5].map((miles) => (
-                    <button
-                      key={miles}
-                      type="button"
-                      className={`tab px-1.5 py-0.5 text-[11px] ${radius === miles ? 'tab-active' : ''}`}
-                      aria-pressed={radius === miles}
-                      onClick={() => setRadius(miles)}
-                    >
-                      {miles}
-                    </button>
-                  ))}
-                  <span className="text-[10px] text-muted">mi</span>
-                </div>
-                <div className="mt-1.5 flex gap-1.5">
-                  <button type="button" className="btn-primary flex-1 text-xs" disabled={!label.trim()} onClick={save}>
-                    Add zone
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary text-xs"
-                    onClick={() => {
-                      setArming(false)
-                      onCancelZone()
-                    }}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className={`btn-secondary mt-1 w-full text-xs ${arming ? 'border-brand text-brand-deep' : ''}`}
-                onClick={() => {
-                  setArming(true)
-                  onStartZone()
-                }}
-              >
-                {arming ? 'Click the map to place it…' : '+ Draw a zone'}
-              </button>
-            )}
           </div>
         </div>
       )}

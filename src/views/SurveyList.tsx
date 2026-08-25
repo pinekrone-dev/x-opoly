@@ -48,6 +48,25 @@ export default function SurveyList({
     return {}
   }
 
+  /**
+   * Deleting a survey takes its sites, flyers, tour and share link with it,
+   * so the browser's own confirm stands guard — typed, not one-click.
+   */
+  const removeSurvey = async (survey: Survey) => {
+    const sites = survey.pinCount ?? 0
+    const ok = window.confirm(
+      `Delete "${survey.name}"${sites ? ` and its ${sites} site${sites === 1 ? '' : 's'}` : ''}? ` +
+        'The share link stops working and this cannot be undone.',
+    )
+    if (!ok) return
+    try {
+      await api.deleteSurvey(survey.id)
+      setSurveys((current) => current.filter((entry) => entry.id !== survey.id))
+    } catch {
+      window.alert('That survey could not be deleted. Reload and try again.')
+    }
+  }
+
   const create = async (form: HTMLFormElement) => {
     const data = new FormData(form)
     const { survey } = await api.createSurvey({
@@ -131,7 +150,7 @@ export default function SurveyList({
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {surveys.map((survey) => (
-            <li key={survey.id}>
+            <li key={survey.id} className="group relative">
               <button
                 type="button"
                 className="panel w-full p-5 text-left transition hover:border-brand/40"
@@ -143,7 +162,7 @@ export default function SurveyList({
                     {survey.clientName && <p className="truncate text-sm text-muted">for {survey.clientName}</p>}
                   </div>
                   {survey.share.enabled && (
-                    <span className="pill bg-brand/15 text-brand ring-brand/30">shared</span>
+                    <span className="pill mr-7 bg-brand/15 text-brand ring-brand/30">shared</span>
                   )}
                 </div>
                 <p className="mt-4 flex items-center gap-3 text-xs text-muted">
@@ -151,6 +170,20 @@ export default function SurveyList({
                   <span aria-hidden>·</span>
                   updated {shortDate(survey.updatedAt)}
                 </p>
+              </button>
+              <button
+                type="button"
+                className="btn-ghost absolute right-3 top-3 px-1.5 py-1 text-faint opacity-0 transition hover:text-rose-600 focus:opacity-100 group-hover:opacity-100"
+                aria-label={`Delete ${survey.name}`}
+                title="Delete this survey"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void removeSurvey(survey)
+                }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                </svg>
               </button>
             </li>
           ))}

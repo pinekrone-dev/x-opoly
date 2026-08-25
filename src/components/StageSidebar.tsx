@@ -11,6 +11,12 @@ import type { DealStage, Property } from '../types'
  */
 
 interface Props {
+  /** Arms click-to-place for a new zone; the map click opens the form. */
+  onStartZone?: () => void
+  /** Set once the map has been clicked; the zone form renders here. */
+  pendingZone?: { lat: number; lng: number } | null
+  onSaveZone?: (zone: { label: string; radiusMiles: number }) => void
+  onCancelZone?: () => void
   stages: DealStage[]
   properties: Property[]
   selectedId: string | null
@@ -30,6 +36,10 @@ export default function StageSidebar({
   onMove,
   onToggleHidden,
   onAddStage,
+  onStartZone,
+  pendingZone = null,
+  onSaveZone,
+  onCancelZone,
   onRenameStage,
   onDeleteStage,
 }: Props) {
@@ -67,6 +77,18 @@ export default function StageSidebar({
 
   const isOver = (target: string | null) => dragOver === (target ?? '__unstaged__')
 
+  const [zoneLabel, setZoneLabel] = useState('')
+  const [zoneRadius, setZoneRadius] = useState(1)
+  const [armingZone, setArmingZone] = useState(false)
+
+  const saveZone = () => {
+    if (!zoneLabel.trim()) return
+    onSaveZone?.({ label: zoneLabel.trim(), radiusMiles: zoneRadius })
+    setZoneLabel('')
+    setZoneRadius(1)
+    setArmingZone(false)
+  }
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-2 border-b border-line px-3 py-3">
@@ -80,7 +102,76 @@ export default function StageSidebar({
         >
           + Stage
         </button>
+        {onStartZone ? (
+          <button
+            type="button"
+            className={`btn-secondary px-2 py-1 text-xs ${armingZone && !pendingZone ? 'border-brand text-brand-deep' : ''}`}
+            onClick={() => {
+              setArmingZone(true)
+              onStartZone()
+            }}
+            aria-label="Draw a zone on the map"
+            title="A labelled radius circle — a non-compete, a boundary"
+          >
+            + Zone
+          </button>
+        ) : null}
       </header>
+
+      {armingZone && !pendingZone ? (
+        <p className="border-b border-line bg-brand-tint px-3 py-2 text-[11px] text-body">
+          Click the spot on the map where the zone is centred.
+        </p>
+      ) : null}
+
+      {pendingZone ? (
+        <div className="border-b border-line bg-sunken px-3 py-2">
+          <input
+            autoFocus
+            className="field py-1 text-sm"
+            placeholder="Starbucks non-compete"
+            aria-label="Zone label"
+            value={zoneLabel}
+            onChange={(event) => setZoneLabel(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveZone()
+              if (event.key === 'Escape') {
+                setArmingZone(false)
+                onCancelZone?.()
+              }
+            }}
+          />
+          <div className="mt-1.5 flex items-center gap-1">
+            {[0.5, 1, 2, 3, 5].map((miles) => (
+              <button
+                key={miles}
+                type="button"
+                className={`tab px-1.5 py-0.5 text-[11px] ${zoneRadius === miles ? 'tab-active' : ''}`}
+                aria-pressed={zoneRadius === miles}
+                onClick={() => setZoneRadius(miles)}
+              >
+                {miles}
+              </button>
+            ))}
+            <span className="text-[10px] text-muted">mi radius</span>
+          </div>
+          <div className="mt-1.5 flex gap-1.5">
+            <button type="button" className="btn-primary flex-1 py-1 text-xs" disabled={!zoneLabel.trim()} onClick={saveZone}>
+              Add zone
+            </button>
+            <button
+              type="button"
+              className="btn-secondary py-1 text-xs"
+              onClick={() => {
+                setArmingZone(false)
+                onCancelZone?.()
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {adding ? (
         <div className="flex gap-2 border-b border-line px-3 py-2">

@@ -248,6 +248,13 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       stages={stages}
       properties={properties}
       selectedId={selectedId}
+      onStartZone={() => setZoneMode('armed')}
+      pendingZone={pendingZone}
+      onSaveZone={(zone) => void saveZone(zone)}
+      onCancelZone={() => {
+        setPendingZone(null)
+        setZoneMode('off')
+      }}
       onSelect={setSelectedId}
       onMove={(propertyId, stageId) => void moveToStage(propertyId, stageId)}
       onToggleHidden={(stage) => void toggleStageHidden(stage)}
@@ -332,13 +339,6 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                 properties={properties}
                 zones={zones}
                 onToggleStage={(stage) => void toggleStageHidden(stage)}
-                onStartZone={() => setZoneMode('armed')}
-                pendingZone={pendingZone}
-                onSaveZone={(zone) => void saveZone(zone)}
-                onCancelZone={() => {
-                  setPendingZone(null)
-                  setZoneMode('off')
-                }}
                 onDeleteZone={(zoneId) => void removeZone(zoneId)}
               />
               <MapCanvas
@@ -371,19 +371,24 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'list' && (
           <div className="grid h-full min-h-0 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
             <PropertyTable properties={properties} stages={stages} selectedId={selectedId} onSelect={setSelectedId} />
-            {selected && (
-              <div className="panel min-h-0 overflow-hidden">
-                <PropertyPanel
-                  property={selected}
-                  stages={stages}
-                  onChange={upsert}
-                  onDelete={(propertyId) => void remove(propertyId)}
-                  onClose={() => setSelectedId(null)}
-                  onCompetition={setCompetition}
-      onDemographics={setDemoView}
-                />
-              </div>
-            )}
+            <div className="scrollbar-thin min-h-0 overflow-y-auto">
+              {selected && (
+                <div className="panel mb-4 overflow-hidden">
+                  <PropertyPanel
+                    property={selected}
+                    stages={stages}
+                    onChange={upsert}
+                    onDelete={(propertyId) => void remove(propertyId)}
+                    onClose={() => setSelectedId(null)}
+                    onCompetition={setCompetition}
+                    onDemographics={setDemoView}
+                  />
+                </div>
+              )}
+              {/* Side-by-side lives with the list: pick finalists from the
+                  table, compare them right here. (It stays on Share too.) */}
+              <CompareSites survey={survey} properties={properties} stages={stages} />
+            </div>
           </div>
         )}
 
