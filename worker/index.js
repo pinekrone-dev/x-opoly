@@ -14,6 +14,7 @@
 import { createApp } from '../app/routes.js'
 import { d1Adapter } from '../app/lib/sql.js'
 import { r2Storage } from '../app/lib/storage.js'
+import { isHtml, withPreviewOrigin } from '../app/lib/preview.js'
 
 /**
  * Built once per environment and reused for the life of the isolate.
@@ -162,6 +163,13 @@ export default {
         status: 503,
         headers: { 'content-type': 'text/html; charset=utf-8' },
       })
+    }
+
+    // Point the link-preview tags at the host that actually answered, so a
+    // shared URL previews as itself whichever domain it was handed out on.
+    if (isHtml(response)) {
+      const html = withPreviewOrigin(await response.text(), url.origin)
+      return new Response(html, { status: response.status, headers: response.headers })
     }
 
     return response

@@ -15,6 +15,7 @@ import { Hono } from 'hono'
 import { createApp } from '../app/routes.js'
 import { nodeAdapter } from '../app/lib/sql.js'
 import { diskStorage } from '../app/lib/storage.js'
+import { withPreviewOrigin } from '../app/lib/preview.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const distDir = path.join(here, '..', 'dist')
@@ -46,7 +47,7 @@ export async function createServer(env = process.env) {
           'cache-control': requested.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
         })
       }
-      return c.html(indexHtml())
+      return c.html(withPreviewOrigin(indexHtml(), new URL(c.req.url).origin))
     })
   }
 

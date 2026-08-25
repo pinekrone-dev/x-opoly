@@ -29,7 +29,7 @@ export default function Welcome({
     <div className="grid min-h-full place-items-center overflow-y-auto bg-paper p-6">
       <div className="panel w-full max-w-lg p-7 text-center">
         <span className="mx-auto mb-5 flex justify-center">
-          <BrandMark />
+          <BrandMark tagline />
         </span>
 
         <span
