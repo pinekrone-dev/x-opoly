@@ -4,7 +4,7 @@ import { navigate } from '../lib/router'
 import type { Survey } from '../types'
 
 /**
- * Pushes a known building into a survey, optionally straight onto the tour.
+ * Pushes a known building into a survey, and onto its tour.
  *
  * The point of keeping places at the team level: a building the broker
  * already recorded should never be retyped into the next client's search.
@@ -15,7 +15,6 @@ export default function SendPlaceToSurvey({ placeId }: { placeId: string }) {
   const [open, setOpen] = useState(false)
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [surveyId, setSurveyId] = useState('')
-  const [addToTour, setAddToTour] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState<string | null>(null)
@@ -35,7 +34,7 @@ export default function SendPlaceToSurvey({ placeId }: { placeId: string }) {
     setBusy(true)
     setError(null)
     try {
-      await api.crm.sendPlace(placeId, { surveyId, addToTour })
+      await api.crm.sendPlace(placeId, { surveyId })
       setSent(surveyId)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'That could not be sent.')
@@ -54,7 +53,7 @@ export default function SendPlaceToSurvey({ placeId }: { placeId: string }) {
         <div className="panel absolute right-0 z-20 mt-2 w-72 p-3 text-left shadow-lg">
           {sent ? (
             <>
-              <p className="text-sm text-body">Added to the survey.</p>
+              <p className="text-sm text-body">Added to the survey and its tour.</p>
               <button
                 type="button"
                 className="btn-primary mt-3 w-full text-xs"
@@ -93,14 +92,9 @@ export default function SendPlaceToSurvey({ placeId }: { placeId: string }) {
                 </select>
               </label>
 
-              <label className="mt-2 flex items-center gap-2 text-xs text-body">
-                <input
-                  type="checkbox"
-                  checked={addToTour}
-                  onChange={(event) => setAddToTour(event.target.checked)}
-                />
-                Add to the tour as well
-              </label>
+              <p className="mt-2 text-[11px] text-muted">
+                Lands on the survey and on its tour.
+              </p>
 
               {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
 

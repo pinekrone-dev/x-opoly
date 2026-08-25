@@ -15,7 +15,16 @@ export interface ObjectSpec {
   /** What an empty list should say, in the broker's terms. */
   empty: string
   /** The fields the "new record" form asks for. */
-  create: { key: string; label: string; placeholder?: string; type?: 'text' | 'number' }[]
+  create: DetailField[]
+  /** Every typed column the profile shows and edits. */
+  details: DetailField[]
+}
+
+export interface DetailField {
+  key: string
+  label: string
+  placeholder?: string
+  type?: 'text' | 'number' | 'date' | 'textarea'
 }
 
 export const OBJECTS: ObjectSpec[] = [
@@ -28,6 +37,14 @@ export const OBJECTS: ObjectSpec[] = [
     create: [
       { key: 'name', label: 'Deal name', placeholder: 'Vega Foods — Costa Mesa' },
       { key: 'kind', label: 'Type', placeholder: 'Tenant Rep' },
+    ],
+    details: [
+      { key: 'name', label: 'Deal name' },
+      { key: 'kind', label: 'Type', placeholder: 'Tenant Rep' },
+      { key: 'stage', label: 'Stage', placeholder: 'prospect' },
+      { key: 'value', label: 'Value', type: 'number' },
+      { key: 'closeDate', label: 'Expected close', type: 'date' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
   },
   {
@@ -43,6 +60,14 @@ export const OBJECTS: ObjectSpec[] = [
       { key: 'phone', label: 'Phone', placeholder: '(714) 555-0134' },
       { key: 'title', label: 'Title', placeholder: 'Director of Real Estate' },
     ],
+    details: [
+      { key: 'firstName', label: 'First name' },
+      { key: 'lastName', label: 'Last name' },
+      { key: 'title', label: 'Title' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
   },
   {
     type: 'company',
@@ -55,6 +80,17 @@ export const OBJECTS: ObjectSpec[] = [
       { key: 'industry', label: 'Industry', placeholder: 'Grocery' },
       { key: 'website', label: 'Website', placeholder: 'vegafoods.com' },
       { key: 'phone', label: 'Phone' },
+    ],
+    details: [
+      { key: 'name', label: 'Company name' },
+      { key: 'industry', label: 'Industry' },
+      { key: 'website', label: 'Website' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'address', label: 'Address' },
+      { key: 'city', label: 'City' },
+      { key: 'state', label: 'State' },
+      { key: 'zip', label: 'ZIP' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
   },
   {
@@ -70,6 +106,22 @@ export const OBJECTS: ObjectSpec[] = [
       { key: 'state', label: 'State', placeholder: 'CA' },
       { key: 'sizeSqft', label: 'Size (SF)', type: 'number' },
       { key: 'askingRate', label: 'Asking rate', type: 'number' },
+    ],
+    details: [
+      { key: 'name', label: 'Name' },
+      { key: 'address', label: 'Address' },
+      { key: 'city', label: 'City' },
+      { key: 'state', label: 'State' },
+      { key: 'zip', label: 'ZIP' },
+      { key: 'propertyType', label: 'Property type', placeholder: 'Retail' },
+      { key: 'sizeSqft', label: 'Size (SF)', type: 'number' },
+      { key: 'acreage', label: 'Acreage', type: 'number' },
+      { key: 'askingRate', label: 'Asking rate', type: 'number' },
+      { key: 'rateUnit', label: 'Rate unit', placeholder: 'sf-yr' },
+      { key: 'availability', label: 'Availability' },
+      { key: 'lat', label: 'Latitude', type: 'number' },
+      { key: 'lng', label: 'Longitude', type: 'number' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
     ],
   },
 ]

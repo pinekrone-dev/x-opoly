@@ -4,6 +4,7 @@ import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
+import type { DetailField } from '../lib/crm'
 import type { CrmRecord, Deal, DealParty, RecordField, RecordType } from '../types'
 
 /**
@@ -40,6 +41,22 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
     try {
       const { record: updated } = await api.crm.update(spec.segment, id, {
         fields: next.filter((field) => field.label.trim()),
+      })
+      setRecord(updated)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That could not be saved.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /** One typed column, saved when the input loses focus. */
+  const saveColumn = async (key: string, value: string, type?: string) => {
+    setSaving(true)
+    try {
+      const trimmed = value.trim()
+      const { record: updated } = await api.crm.update(spec.segment, id, {
+        [key]: type === 'number' ? (trimmed === '' ? null : Number(trimmed)) : trimmed,
       })
       setRecord(updated)
     } catch (cause) {
@@ -109,12 +126,69 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
 
         <section className="panel mt-4 p-4">
           <div className="mb-2 flex items-center justify-between">
-            <p className="label">Profile</p>
+            <p className="label">Details</p>
             {saving ? <span className="text-[11px] text-faint">Saving…</span> : null}
           </div>
+          <Details record={record} spec={spec} onSave={saveColumn} />
+        </section>
+
+        <section className="panel mt-4 p-4">
+          <p className="label mb-2">Custom fields</p>
           <CustomFields fields={fields} onChange={saveFields} />
         </section>
       </main>
+    </div>
+  )
+}
+
+/**
+ * The typed columns this object carries.
+ *
+ * Saved on blur rather than behind an edit/save mode: every field is already
+ * an input, so a separate "edit" step would only add a click between the
+ * broker and the change they came to make.
+ */
+function Details({
+  record,
+  spec,
+  onSave,
+}: {
+  record: CrmRecord
+  spec: { details: DetailField[] }
+  onSave: (key: string, value: string, type?: string) => void
+}) {
+  const values = record as unknown as Record<string, unknown>
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {spec.details.map((field) => {
+        const raw = values[field.key]
+        const initial = raw == null ? '' : String(raw)
+        return (
+          <label key={field.key} className={field.type === 'textarea' ? 'sm:col-span-2' : ''}>
+            <span className="mb-1 block text-xs text-muted">{field.label}</span>
+            {field.type === 'textarea' ? (
+              <textarea
+                className="field min-h-[72px] text-sm"
+                defaultValue={initial}
+                placeholder={field.placeholder}
+                onBlur={(event) => {
+                  if (event.target.value !== initial) onSave(field.key, event.target.value)
+                }}
+              />
+            ) : (
+              <input
+                className="field text-sm"
+                type={field.type === 'number' ? 'number' : field.type === 'date' ? 'date' : 'text'}
+                defaultValue={initial}
+                placeholder={field.placeholder}
+                onBlur={(event) => {
+                  if (event.target.value !== initial) onSave(field.key, event.target.value, field.type)
+                }}
+              />
+            )}
+          </label>
+        )
+      })}
     </div>
   )
 }

@@ -32,7 +32,6 @@ export default function AccountMenu({
   const [notice, setNotice] = useState<string | null>(null)
   const [enrolment, setEnrolment] = useState<{ secret: string; uri: string; qr: string } | null>(null)
   const [totpCode, setTotpCode] = useState('')
-  const [freeCode, setFreeCode] = useState<string | null>(null)
 
   /** Mints a secret and renders it as a QR for the authenticator to scan. */
   const startTotp = async () => {
@@ -303,46 +302,6 @@ export default function AccountMenu({
                       }.`
                     : 'Not active.'}
               </p>
-              {billing.status === 'exempt' ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn-secondary mt-2 w-full text-xs"
-                    disabled={busy}
-                    onClick={async () => {
-                      setBusy(true)
-                      setError(null)
-                      try {
-                        // A one-person gift: single use, 100% off, forever.
-                        // They enter it at checkout and never see a card form.
-                        const { code } = await api.mintFreeCode()
-                        setFreeCode(code)
-                      } catch (cause) {
-                        setError(cause instanceof Error ? cause.message : 'The code could not be created.')
-                      } finally {
-                        setBusy(false)
-                      }
-                    }}
-                  >
-                    {busy ? 'Creating…' : 'Create a free-signup code'}
-                  </button>
-                  {freeCode ? (
-                    <div className="mt-2">
-                      <input
-                        readOnly
-                        className="field font-mono text-xs"
-                        value={freeCode}
-                        aria-label="Free signup code"
-                        onFocus={(event) => event.target.select()}
-                      />
-                      <p className="mt-1 text-[11px] text-muted">
-                        Single use. They sign up, pick the plan, and enter this at checkout — total $0,
-                        no card asked.
-                      </p>
-                    </div>
-                  ) : null}
-                </>
-              ) : null}
               {billing.portalAvailable ? (
                 <button
                   type="button"

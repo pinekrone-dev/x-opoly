@@ -268,3 +268,55 @@ export function propertyFromPlace(place) {
     fields: (place.fields ?? []).map(({ label, value }) => ({ label, value })),
   }
 }
+
+/** Address, flattened for comparison: case, spacing and punctuation dropped. */
+function addressKey(input = {}) {
+  return [input.address, input.city, input.state]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+}
+
+/**
+ * Files a building worked on a survey into the team's places.
+ *
+ * The survey is where a broker discovers buildings; the CRM is where the team
+ * remembers them. Without this, everything learned on a survey dies with it.
+ *
+ * Creates only. An address the team already has is left exactly as it is —
+ * that record may have been curated over months, and a half-filled site from
+ * a flyer must not overwrite it. Never throws: failing to file a place is not
+ * a reason to fail the upload that produced it.
+ */
+export async function rememberPlace(db, teamId, property) {
+  try {
+    if (!teamId) return null
+    const key = addressKey(property)
+    // Nothing to match on, and nothing worth remembering.
+    if (!key) return null
+
+    const existing = await db.all('SELECT id, address, city, state FROM places WHERE team_id = ?', [teamId])
+    const match = existing.find((row) => addressKey(row) === key)
+    if (match) return match.id
+
+    const result = await createRecord(db, 'place', teamId, {
+      name: property.name ?? null,
+      address: property.address ?? null,
+      city: property.city ?? null,
+      state: property.state ?? null,
+      zip: property.zip ?? null,
+      lat: property.lat ?? null,
+      lng: property.lng ?? null,
+      sizeSqft: property.sizeSqft ?? null,
+      acreage: property.acreage ?? null,
+      availability: property.availability ?? null,
+      askingRate: property.rentRate ?? null,
+      rateUnit: property.rentUnit ?? null,
+    })
+    return result.record?.id ?? null
+  } catch {
+    return null
+  }
+}

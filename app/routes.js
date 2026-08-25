@@ -76,6 +76,7 @@ import {
   getRecord,
   listRecords,
   propertyFromPlace,
+  rememberPlace,
   removeParty,
   updateRecord,
 } from './lib/crm.js'
@@ -83,7 +84,7 @@ import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
-import { createZone, deleteZone, listZones } from './lib/zones.js'
+import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
   BillingError,
   applyWebhook,
@@ -837,6 +838,9 @@ export function createApp({ db, storage, env = {} }) {
     const body = await c.req.json().catch(() => ({}))
     const property = await createProperty(db, survey.id, body)
     if (Array.isArray(body?.fields)) await setPropertyFields(db, property.id, body.fields)
+    // A building worked on a survey is filed back into the team's places, so
+    // what the broker learns here is not lost when the survey is archived.
+    await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
     return c.json({ property: await getProperty(db, property.id) }, 201)
   })
 
@@ -1017,6 +1021,20 @@ export function createApp({ db, storage, env = {} }) {
     const result = await createZone(db, survey.id, await c.req.json().catch(() => ({})))
     if (result.error) return c.json({ error: result.error }, 400)
     return c.json({ zone: result.zone }, 201)
+  })
+
+  app.patch('/api/zones/:id', async (c) => {
+    const zone = await db.get('SELECT survey_id FROM zones WHERE id = ?', [c.req.param('id')])
+    if (!zone) return notFound(c, 'That zone does not exist.')
+    // Scoped through the survey it belongs to, exactly as delete is.
+    const survey = await getSurvey(db, zone.survey_id)
+    const user = c.get('user')
+    if (!survey || (user && survey.ownerId && survey.ownerId !== user.teamId)) {
+      return notFound(c, 'That zone does not exist.')
+    }
+    const result = await updateZone(db, c.req.param('id'), await c.req.json().catch(() => ({})))
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json(result)
   })
 
   app.delete('/api/zones/:id', async (c) => {
@@ -1233,12 +1251,12 @@ export function createApp({ db, storage, env = {} }) {
     }
 
     const { fields, ...columns } = propertyFromPlace(place)
-    const property = await createProperty(db, surveyId, {
-      ...columns,
-      // Straight onto the tour when asked, which is the whole point of
-      // sending a building over rather than retyping it.
-      ...(body?.addToTour ? { tourOrder: Number.MAX_SAFE_INTEGER } : {}),
-    })
+    // Onto the tour as well as the map. Sending a building to a survey is
+    // saying "we are looking at this one", and there is no second intent
+    // worth asking about. Appended rather than inserted: the broker's
+    // existing order is theirs, and the planner can re-optimise on request.
+    const onTour = (await listProperties(db, surveyId)).filter((row) => row.tourOrder != null).length
+    const property = await createProperty(db, surveyId, { ...columns, tourOrder: onTour })
     // The custom profile travels too: what the team recorded about a building
     // is most of why it was worth keeping a record of it.
     await setPropertyFields(db, property.id, fields)
@@ -1389,6 +1407,7 @@ export function createApp({ db, storage, env = {} }) {
       })
       const rows = mergeExtraction({ fields: [] }, fields).fields
       if (rows.length > 0) await setPropertyFields(db, property.id, rows)
+      await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
 
       return c.json(
         {
@@ -1440,6 +1459,7 @@ export function createApp({ db, storage, env = {} }) {
       })
       const rows = mergeExtraction({ fields: [] }, fields).fields
       if (rows.length > 0) await setPropertyFields(db, property.id, rows)
+      await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
 
       return c.json(
         {

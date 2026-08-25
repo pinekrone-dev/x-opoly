@@ -65,6 +65,31 @@ export async function createZone(db, surveyId, input = {}) {
   return { zone: mapZone(zone) }
 }
 
+/**
+ * Renames or recolours a zone.
+ *
+ * Position and radius stay put: those are drawn on the map, and changing them
+ * from a text field would be a worse way to say the same thing.
+ */
+export async function updateZone(db, id, patch = {}) {
+  const columns = {}
+  if (patch.label !== undefined) {
+    const label = String(patch.label ?? '').trim().slice(0, 120)
+    if (!label) return { error: 'Give the zone a label — that is the point of drawing it.' }
+    columns.label = label
+  }
+  if (patch.color !== undefined) {
+    if (!COLOR.test(String(patch.color))) return { error: 'That is not a colour.' }
+    columns.color = patch.color
+  }
+  if (Object.keys(columns).length === 0) {
+    return { zone: mapZone(await db.get('SELECT * FROM zones WHERE id = ?', [id])) }
+  }
+  const assignments = Object.keys(columns).map((column) => `${column} = ?`)
+  await db.run(`UPDATE zones SET ${assignments.join(', ')} WHERE id = ?`, [...Object.values(columns), id])
+  return { zone: mapZone(await db.get('SELECT * FROM zones WHERE id = ?', [id])) }
+}
+
 export async function deleteZone(db, id) {
   const { changes } = await db.run('DELETE FROM zones WHERE id = ?', [id])
   return changes > 0

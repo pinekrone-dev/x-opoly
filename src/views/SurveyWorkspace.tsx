@@ -65,6 +65,19 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
   /** Census pull for the legend's demographics control, cached per survey. */
   const mapDemoData = useRef<Demographics | null>(null)
   const [mapDemoBusy, setMapDemoBusy] = useState(false)
+
+  /*
+   * What the broker picked, held apart from what has actually loaded.
+   *
+   * Driving the control from the loaded layer meant the first pick snapped
+   * back to "Off" until the census answered, which reads as the click not
+   * registering. The selection is theirs the moment they make it; the busy
+   * note carries the wait.
+   */
+  const [demoChoice, setDemoChoice] = useState<{ colorBy: string | null; radius: number }>({
+    colorBy: null,
+    radius: 3,
+  })
   const [competition, setCompetition] = useState<(CompetitionResult & { center: { lat: number; lng: number } }) | null>(null)
 
   useEffect(() => {
@@ -156,6 +169,7 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
    * every metric and ring choice after it.
    */
   const setMapDemographics = async (colorBy: string | null, radius: number) => {
+    setDemoChoice({ colorBy, radius })
     if (!colorBy) {
       setDemoView(null)
       return
@@ -182,6 +196,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       setDemoView({ data, colorBy, radius })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Census data could not be loaded.')
+      // Nothing to show, so do not leave the control claiming a live layer.
+      setDemoChoice({ colorBy: null, radius })
     } finally {
       setMapDemoBusy(false)
     }
@@ -266,6 +282,17 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
     setStages((current) => [...current, stage])
   }
 
+  /** Stage colour, which is also the colour of its pins. */
+  const recolourStage = async (stage: DealStage, color: string) => {
+    setStages((current) => current.map((entry) => (entry.id === stage.id ? { ...entry, color } : entry)))
+    await api.updateStage(stage.id, { color }).catch(() => undefined)
+  }
+
+  const recolourZone = async (zone: Zone, color: string) => {
+    setZones((current) => current.map((entry) => (entry.id === zone.id ? { ...entry, color } : entry)))
+    await api.updateZone(zone.id, { color }).catch(() => undefined)
+  }
+
   const renameStage = async (stage: DealStage, name: string) => {
     const trimmed = name.trim()
     if (!trimmed || trimmed === stage.name) return
@@ -325,8 +352,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       zones={zones}
       onDeleteZone={(zoneId) => void removeZone(zoneId)}
       demographics={{
-        colorBy: demoView?.colorBy ?? null,
-        radius: demoView?.radius ?? 3,
+        colorBy: demoChoice.colorBy,
+        radius: demoChoice.radius,
         busy: mapDemoBusy,
         scale: choropleth ? { min: choropleth.min, max: choropleth.max, median: choropleth.median } : null,
       }}
@@ -343,6 +370,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       onToggleHidden={(stage) => void toggleStageHidden(stage)}
       onAddStage={(name) => void addStage(name)}
       onRenameStage={(stage, name) => void renameStage(stage, name)}
+      onRecolourStage={(stage, color) => void recolourStage(stage, color)}
+      onRecolourZone={(zone, color) => void recolourZone(zone, color)}
       onDeleteStage={(stage) => void removeStage(stage)}
     />
   )
@@ -459,8 +488,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
                   onToggleStage={(stage) => void toggleStageHidden(stage)}
                   onDeleteZone={(zoneId) => void removeZone(zoneId)}
                   demographics={{
-                    colorBy: demoView?.colorBy ?? null,
-                    radius: demoView?.radius ?? 3,
+                    colorBy: demoChoice.colorBy,
+                    radius: demoChoice.radius,
                     busy: mapDemoBusy,
                     scale: choropleth ? { min: choropleth.min, max: choropleth.max, median: choropleth.median } : null,
                   }}

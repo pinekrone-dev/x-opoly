@@ -18,6 +18,7 @@ interface Props {
   /** The survey's zones, listed in the data catalog below the pipeline. */
   zones?: Zone[]
   onDeleteZone?: (id: string) => void
+  onRecolourZone?: (zone: Zone, color: string) => void
   /** The demographics layer control, part of the data catalog. */
   demographics?: {
     colorBy: string | null
@@ -38,6 +39,8 @@ interface Props {
   onToggleHidden: (stage: DealStage) => void
   onAddStage: (name: string) => void
   onRenameStage: (stage: DealStage, name: string) => void
+  /** Stage colour drives its pins on the map, so it is edited here. */
+  onRecolourStage?: (stage: DealStage, color: string) => void
   onDeleteStage: (stage: DealStage) => void
 }
 
@@ -52,12 +55,14 @@ export default function StageSidebar({
   onStartZone,
   zones,
   onDeleteZone,
+  onRecolourZone,
   demographics,
   onDemographics,
   pendingZone = null,
   onSaveZone,
   onCancelZone,
   onRenameStage,
+  onRecolourStage,
   onDeleteStage,
 }: Props) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
@@ -225,11 +230,21 @@ export default function StageSidebar({
               {...dropHandlers(stage.id)}
             >
               <div className="flex items-center gap-2 px-3 py-2">
-                <span
-                  className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ background: stage.color }}
-                  aria-hidden
-                />
+                {/*
+                  * The dot is the colour input. A separate swatch button would
+                  * be one more click for something the dot already stands for,
+                  * and the pins on the map take this colour.
+                  */}
+                <label className="relative h-3 w-3 shrink-0 cursor-pointer">
+                  <span className="block h-3 w-3 rounded-full" style={{ background: stage.color }} aria-hidden />
+                  <input
+                    type="color"
+                    className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                    value={stage.color}
+                    aria-label={`Colour for ${stage.name}`}
+                    onChange={(event) => onRecolourStage?.(stage, event.target.value)}
+                  />
+                </label>
                 {renaming === stage.id ? (
                   <input
                     autoFocus
@@ -337,10 +352,10 @@ export default function StageSidebar({
 
             {demographics && onDemographics ? (
               <div className="mt-2">
-                <p className="mb-1 text-[11px] font-medium text-body">Demographics</p>
+                <p className="mb-1 text-[11px] font-medium text-body">Data enrichment</p>
                 <select
                   className="field w-full px-2 py-1 text-xs"
-                  aria-label="Shade the map by a census metric"
+                  aria-label="Enrich the map with a census metric"
                   value={demographics.colorBy ?? ''}
                   onChange={(event) => onDemographics(event.target.value || null, demographics.radius)}
                 >
@@ -377,11 +392,20 @@ export default function StageSidebar({
                 <p className="mb-1 text-[11px] font-medium text-body">Zones</p>
                 {zones.map((zone) => (
                   <div key={zone.id} className="flex items-center gap-2 py-1 text-xs">
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-dashed"
-                      style={{ borderColor: zone.color }}
-                      aria-hidden
-                    />
+                    <label className="relative h-3 w-3 shrink-0 cursor-pointer">
+                      <span
+                        className="block h-3 w-3 rounded-full border-2 border-dashed"
+                        style={{ borderColor: zone.color }}
+                        aria-hidden
+                      />
+                      <input
+                        type="color"
+                        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                        value={zone.color}
+                        aria-label={`Colour for ${zone.label}`}
+                        onChange={(event) => onRecolourZone?.(zone, event.target.value)}
+                      />
+                    </label>
                     <span className="min-w-0 flex-1 truncate text-body">
                       {zone.label} · {zone.radiusMiles} mi
                     </span>

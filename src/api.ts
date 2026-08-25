@@ -72,8 +72,6 @@ export const api = {
   confirmCheckout: (sessionId: string) =>
     request<{ active: boolean; status: string }>(`/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`),
   billingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),
-  /** Operator only: a single-use 100%-off signup code, no card required. */
-  mintFreeCode: () => request<{ code: string }>('/api/billing/free-code', { method: 'POST' }),
   signIn: (input: { email: string; password: string }) =>
     request<{
       user?: Account
@@ -99,6 +97,8 @@ export const api = {
   listInvites: () => request<{ invites: Invite[] }>('/api/invites'),
   createZone: (surveyId: string, zone: { label: string; lat: number; lng: number; radiusMiles: number; color?: string }) =>
     request<{ zone: Zone }>(`/api/surveys/${surveyId}/zones`, json(zone)),
+  updateZone: (id: string, patch: { label?: string; color?: string }) =>
+    request<{ zone: Zone }>(`/api/zones/${id}`, { ...json(patch), method: 'PATCH' }),
   deleteZone: (id: string) => request<void>(`/api/zones/${id}`, { method: 'DELETE' }),
   createInvite: (email: string) =>
     request<{ invite: Invite; url: string }>('/api/invites', json({ email })),
@@ -123,8 +123,8 @@ export const api = {
       request<{ deal: Deal }>(`/api/crm/deals/${dealId}/parties`, json(input)),
     removeParty: (dealId: string, partyId: string) =>
       request<void>(`/api/crm/deals/${dealId}/parties/${partyId}`, { method: 'DELETE' }),
-    /** Copies a known building into a survey, optionally straight onto the tour. */
-    sendPlace: (placeId: string, input: { surveyId: string; addToTour?: boolean }) =>
+    /** Copies a known building into a survey and onto that survey's tour. */
+    sendPlace: (placeId: string, input: { surveyId: string }) =>
       request<{ property: Property }>(`/api/crm/places/${placeId}/send`, json(input)),
   },
 

@@ -170,7 +170,7 @@ export default function MapLegend({
 
           {demographics && (readOnly ? demographics.colorBy : onDemographics) ? (
             <div className="mt-2 border-t border-line pt-2">
-              <p className="label mb-1">Demographics</p>
+              <p className="label mb-1">Data enrichment</p>
               {readOnly ? (
                 <p className="px-0.5 text-xs text-body">
                   {METRIC_DEFINITIONS.find((metric) => metric.key === demographics.colorBy)?.label ??
@@ -180,7 +180,7 @@ export default function MapLegend({
                 <>
                   <select
                     className="field w-full px-2 py-1 text-xs"
-                    aria-label="Shade the map by a census metric"
+                    aria-label="Enrich the map with a census metric"
                     value={demographics.colorBy ?? ''}
                     onChange={(event) => onDemographics?.(event.target.value || null, demographics.radius)}
                   >

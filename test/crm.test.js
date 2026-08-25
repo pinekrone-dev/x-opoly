@@ -177,12 +177,15 @@ describe('sending a place into a survey', () => {
     surveyId = body.survey.id
   })
 
-  test('the building arrives as a site, with its profile', async () => {
+  test('the building arrives as a site on the tour, with its profile', async () => {
     const sent = await alice(`/api/crm/places/${place.id}/send`, asJson({ surveyId }))
     assert.equal(sent.status, 201)
     assert.equal(sent.body.property.address, '2101 Harbor Blvd')
     assert.equal(sent.body.property.lat, 33.66)
     assert.equal(sent.body.property.rentRate, 38)
+    // Sending a building to a survey is saying "we are looking at this one",
+    // so it lands on the tour as well as the map.
+    assert.ok(sent.body.property.tourOrder != null, 'it is on the tour')
 
     const { body } = await alice(`/api/surveys/${surveyId}`)
     assert.equal(body.properties.length, 1)
@@ -203,6 +206,61 @@ describe('sending a place into a survey', () => {
     const { body } = await mallory('/api/surveys', asJson({ name: 'Mallory deal' }))
     const sent = await alice(`/api/crm/places/${place.id}/send`, asJson({ surveyId: body.survey.id }))
     assert.equal(sent.status, 404)
+  })
+})
+
+describe('a survey informs the CRM back', () => {
+  let surveyId
+
+  before(async () => {
+    const { body } = await alice('/api/surveys', asJson({ name: 'Back-fill search' }))
+    surveyId = body.survey.id
+  })
+
+  test('a site added on a survey becomes a place the team keeps', async () => {
+    await alice(
+      `/api/surveys/${surveyId}/properties`,
+      asJson({ name: 'Found on tour', address: '900 Bristol St', city: 'Costa Mesa', state: 'CA', lat: 33.6, lng: -117.9 }),
+    )
+    const { body } = await alice('/api/crm/places')
+    const found = body.records.find((place) => place.address === '900 Bristol St')
+    assert.ok(found, 'the building is now in places')
+    assert.equal(found.city, 'Costa Mesa')
+    assert.equal(found.lat, 33.6)
+  })
+
+  test('the same address twice does not duplicate the place', async () => {
+    await alice(
+      `/api/surveys/${surveyId}/properties`,
+      // Same building, typed differently — punctuation and case must not
+      // decide whether the team ends up with one record or two.
+      asJson({ name: 'Same building', address: '900 bristol st.', city: 'COSTA MESA', state: 'ca' }),
+    )
+    const { body } = await alice('/api/crm/places')
+    const matches = body.records.filter((place) => /bristol/i.test(place.address ?? ''))
+    assert.equal(matches.length, 1, 'one building, one place')
+  })
+
+  test('a curated place is never overwritten by a survey site', async () => {
+    const { body: before } = await alice('/api/crm/places')
+    const bristol = before.records.find((place) => /bristol/i.test(place.address ?? ''))
+    await alice(`/api/crm/places/${bristol.id}`, asJson({ name: 'Bristol Retail Center', notes: 'Owner is motivated' }, 'PATCH'))
+
+    await alice(
+      `/api/surveys/${surveyId}/properties`,
+      asJson({ name: 'Yet another label', address: '900 Bristol St', city: 'Costa Mesa', state: 'CA' }),
+    )
+
+    const { body: after } = await alice(`/api/crm/places/${bristol.id}`)
+    assert.equal(after.record.name, 'Bristol Retail Center', 'the curated name stands')
+    assert.equal(after.record.notes, 'Owner is motivated', 'and the notes with it')
+  })
+
+  test('a site with no address is not filed as a place', async () => {
+    const { body: before } = await alice('/api/crm/places')
+    await alice(`/api/surveys/${surveyId}/properties`, asJson({ name: 'Just a dropped pin', lat: 33.7, lng: -117.8 }))
+    const { body: after } = await alice('/api/crm/places')
+    assert.equal(after.records.length, before.records.length, 'nothing to match on, nothing filed')
   })
 })
 
