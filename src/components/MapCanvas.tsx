@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
+import { METERS_PER_MILE } from '../lib/geo'
 
 interface Props {
   tiles: TileConfig
@@ -389,7 +390,7 @@ export default function MapCanvas({
     const group = L.layerGroup()
     for (const zone of zones) {
       const circle = L.circle([zone.lat, zone.lng], {
-        radius: zone.radiusMiles * 1609.34,
+        radius: zone.radiusMiles * METERS_PER_MILE,
         color: zone.color,
         weight: 2,
         dashArray: '6 4',
@@ -426,7 +427,7 @@ export default function MapCanvas({
     // Largest first so the smaller rings draw on top of the bigger fills.
     for (const miles of [...rings.miles].sort((a, b) => b - a)) {
       L.circle([rings.lat, rings.lng], {
-        radius: miles * 1609.34,
+        radius: miles * METERS_PER_MILE,
         color: '#0f766e',
         weight: 1.6,
         opacity: 0.75,

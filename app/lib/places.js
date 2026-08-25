@@ -191,7 +191,7 @@ export async function nearbyBusinesses({
     }
   }
 
-  const query = buildQuery({ lat, lng, radiusMeters: Math.round(radius * 1609.34), category, keyword })
+  const query = buildQuery({ lat, lng, radiusMeters: Math.round(radius * 1609.344), category, keyword })
   const endpoint = env.OVERPASS_URL || DEFAULT_OVERPASS
 
   const controller = new AbortController()
