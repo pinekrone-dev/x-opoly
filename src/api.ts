@@ -175,6 +175,13 @@ export const api = {
     return request<CompetitionResult>(`/api/places/nearby?${query.toString()}`)
   },
 
+  /** Pasted listing text → a filled-in, placed property. */
+  pasteProperty: (surveyId: string, text: string, mapCenter?: { lat: number; lng: number } | null) =>
+    request<{ property: Property; extraction: { source: string; confidence: string; uncertainFields: string[] } }>(
+      `/api/surveys/${surveyId}/paste`,
+      json({ text, mapCenter: mapCenter ?? undefined }),
+    ),
+
   demographics: (lat: number, lng: number) => request<Demographics>(`/api/demographics?lat=${lat}&lng=${lng}`),
 
   /** Uploads the raw file body; the filename travels in a header. */

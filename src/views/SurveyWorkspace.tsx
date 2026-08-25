@@ -6,6 +6,7 @@ import PropertyTable from '../components/PropertyTable'
 import ShareSettings from '../components/ShareSettings'
 import CompareSites from '../components/CompareSites'
 import InviteCollaborators from '../components/InviteCollaborators'
+import MapDemographics from '../components/MapDemographics'
 import StageSidebar from '../components/StageSidebar'
 import TourPlanner from '../components/TourPlanner'
 import { api } from '../api'
@@ -296,7 +297,8 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
         {tab === 'map' && (
           <div className="grid h-full min-h-0 lg:grid-cols-[22rem_minmax(0,1fr)]">
             <div className="scrollbar-thin min-h-0 overflow-y-auto border-r border-line bg-surface">{sidebar}</div>
-            <div className={dropPin || placing ? 'cursor-crosshair' : ''}>
+            <div className={`relative ${dropPin || placing ? 'cursor-crosshair' : ''}`}>
+              <MapDemographics selected={selected} mapCenter={mapCenter} onView={setDemoView} />
               <MapCanvas
                 properties={visibleProperties}
                 selectedId={selectedId}

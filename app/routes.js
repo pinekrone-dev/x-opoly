@@ -65,6 +65,7 @@ import {
   verifyChallenge,
 } from './lib/auth.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
+import { extractFromText } from './lib/paste.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -100,7 +101,10 @@ async function locateFromFields(fields, survey, env, { hint = null, siblings = [
 
   if (parts.length > 0) {
     try {
-      const { results } = await geocode(parts.join(', '), { env })
+      // geocode() returns the candidate array itself. Destructuring a
+      // `results` property off it silently yielded undefined, so a flyer
+      // naming a full street address still landed at the map centre.
+      const results = await geocode(parts.join(', '), { env })
       if (results?.length > 0) {
         return { lat: results[0].lat, lng: results[0].lng, placed: 'geocoded' }
       }
@@ -809,6 +813,54 @@ export function createApp({ db, storage, env = {} }) {
     if (bytes.length > MAX_UPLOAD_BYTES) return { error: c.json({ error: 'That file is too large. The limit is 12 MB.' }, 413) }
     return { bytes, mimeType: (c.req.header('content-type') || '').split(';')[0].trim() }
   }
+
+  /**
+   * Pasted listing text becomes a filled-in, placed site.
+   *
+   * Works with or without an Anthropic key: text is parseable by heuristics
+   * where a flyer image is not, so this endpoint never answers "set a key".
+   */
+  app.post('/api/surveys/:id/paste', async (c) => {
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+
+    const body = await c.req.json().catch(() => ({}))
+
+    try {
+      const { fields, source, model } = await extractFromText(body?.text, { env })
+      const located = await locateFromFields(fields, survey, env, {
+        hint: body?.mapCenter ?? null,
+        siblings: await listProperties(db, survey.id),
+      })
+
+      const property = await createProperty(db, survey.id, {
+        ...toPropertyInput(fields),
+        lat: located.lat,
+        lng: located.lng,
+      })
+      const rows = mergeExtraction({ fields: [] }, fields).fields
+      if (rows.length > 0) await setPropertyFields(db, property.id, rows)
+
+      return c.json(
+        {
+          property: await getProperty(db, property.id),
+          extraction: {
+            source,
+            model,
+            confidence: fields.confidence,
+            uncertainFields: fields.uncertainFields ?? [],
+            placed: located.placed,
+          },
+        },
+        201,
+      )
+    } catch (cause) {
+      if (cause instanceof FlyerExtractionError) {
+        return c.json({ error: cause.message }, 422)
+      }
+      throw cause
+    }
+  })
 
   app.post('/api/surveys/:id/flyer', async (c) => {
     const { survey, error } = await requireSurvey(c)

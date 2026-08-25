@@ -169,6 +169,53 @@ export async function extractFromFlyer(bytes, mimeType, { env = {}, client } = {
   }
 }
 
+/**
+ * The flyer extractor pointed at plain text instead of a document.
+ *
+ * Same model, same schema, same field semantics — a pasted email blurb and a
+ * flyer PDF describe the same thing, so they must fill the form identically.
+ */
+export async function extractTextWithModel(text, { env = {}, client } = {}) {
+  const { Anthropic, zodOutputFormat, schema } = await loadSdk()
+  const anthropic =
+    client || new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, authToken: env.ANTHROPIC_AUTH_TOKEN })
+
+  try {
+    const response = await anthropic.messages.parse({
+      model: env.ANTHROPIC_MODEL || DEFAULT_MODEL,
+      max_tokens: 16000,
+      system: SYSTEM_PROMPT,
+      output_config: {
+        effort: 'medium',
+        format: zodOutputFormat(schema),
+      },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text },
+            { type: 'text', text: 'Extract the site survey fields from this pasted listing text.' },
+          ],
+        },
+      ],
+    })
+
+    if (!response.parsed_output) {
+      throw new FlyerExtractionError('That text could not be read into structured fields.')
+    }
+    return { fields: response.parsed_output, model: response.model }
+  } catch (error) {
+    if (error instanceof FlyerExtractionError) throw error
+    if (error?.status === 401 || error?.status === 403) {
+      throw new FlyerExtractionError('The Anthropic API key was rejected. Check ANTHROPIC_API_KEY on the server.', { configured: false })
+    }
+    if (error?.status === 429) {
+      throw new FlyerExtractionError('The API is rate limiting us right now. Try again in a moment.')
+    }
+    throw new FlyerExtractionError(`The text could not be processed: ${error.message}`)
+  }
+}
+
 /** Maps extracted fields onto the columns a property record accepts. */
 export function toPropertyInput(fields) {
   return {

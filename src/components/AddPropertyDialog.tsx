@@ -12,7 +12,7 @@ interface Props {
   onDropPinMode: () => void
 }
 
-type Mode = 'search' | 'flyer' | 'manual'
+type Mode = 'search' | 'paste' | 'flyer' | 'manual'
 
 export default function AddPropertyDialog({
   surveyId,
@@ -24,6 +24,7 @@ export default function AddPropertyDialog({
 }: Props) {
   const [mode, setMode] = useState<Mode>('search')
   const [query, setQuery] = useState('')
+  const [pasted, setPasted] = useState('')
   const [results, setResults] = useState<GeocodeResult[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -72,6 +73,27 @@ export default function AddPropertyDialog({
     onAdded(property)
   }
 
+  const addFromPaste = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { property, extraction } = await api.pasteProperty(surveyId, pasted, mapCenter)
+      const uncertain = extraction.uncertainFields?.length
+        ? ` Double-check: ${extraction.uncertainFields.join(', ')}.`
+        : ''
+      onAdded(
+        property,
+        extraction.source === 'ai'
+          ? `Read the listing with ${extraction.confidence} confidence.${uncertain}`
+          : `Pulled what was recognisable — give the numbers a glance.${uncertain}`,
+      )
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That text could not be read.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const uploadFlyer = async (file: File) => {
     setBusy(true)
     setError(null)
@@ -109,6 +131,7 @@ export default function AddPropertyDialog({
         <nav className="flex gap-1 border-b border-line px-3 py-2">
           {([
             ['search', 'Search address'],
+            ['paste', 'Paste details'],
             ['flyer', 'Drop a flyer'],
             ['manual', 'Enter by hand'],
           ] as [Mode, string][]).map(([id, label]) => (
@@ -162,6 +185,33 @@ export default function AddPropertyDialog({
                 </ul>
               )}
             </>
+          )}
+
+          {mode === 'paste' && (
+            <div>
+              <textarea
+                className="field min-h-[10rem] resize-y font-mono text-xs leading-relaxed"
+                placeholder={'Paste the listing blurb — an email, a brochure page, anything.\n\nThe address, rate, size, contacts and the rest are pulled out for you.'}
+                aria-label="Listing text to read"
+                autoFocus
+                value={pasted}
+                onChange={(event) => setPasted(event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-primary mt-3 w-full"
+                disabled={busy || pasted.trim().length < 20}
+                onClick={() => void addFromPaste()}
+              >
+                {busy ? 'Reading…' : 'Read it and add the site'}
+              </button>
+              {!flyerExtractionEnabled && (
+                <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                  No AI key on this server, so a plainer parser runs — it still finds the address,
+                  rate, size and contacts in ordinary listing copy.
+                </p>
+              )}
+            </div>
           )}
 
           {mode === 'flyer' && (
