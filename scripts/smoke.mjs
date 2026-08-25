@@ -219,8 +219,8 @@ try {
     (tour.body?.itinerary?.items ?? []).every((item) => /^\d{1,2}:\d{2} (AM|PM)$/.test(item.arrive)),
     JSON.stringify(tour.body?.itinerary?.items?.map((item) => item.arrive)),
   )
-  check('the route reports its source', ['osrm', 'estimate'].includes(tour.body?.routeSource),
-    String(tour.body?.routeSource))
+  check('the route reports its source', ['google', 'osrm', 'estimate'].includes(tour.body?.routeSource),
+    `${tour.body?.routeSource}${tour.body?.routeNote ? ` — ${tour.body.routeNote}` : ''}`)
 
   // Address search, against the real geocoders. This exact path failed live
   // while passing every test: Nominatim refuses cloud IPs, which only a

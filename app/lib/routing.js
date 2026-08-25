@@ -45,6 +45,15 @@ export async function routeLegs(points, { fetchImpl = fetch, timeoutMs = 8000, e
     return { legs: [], geometry: points.map((point) => [point.lat, point.lng]), source: 'none' }
   }
 
+  /*
+   * Why the router that should have answered did not. A key that is set but
+   * silently falling through looks identical to no key at all — the broker
+   * pays for traffic-aware times and gets straight-line guesses with no clue
+   * why. The note rides on the plan so the reason is one glance away
+   * (usually: the Routes API is not enabled on the key).
+   */
+  let note = null
+
   // Google first when a key is configured — it is the only one of the three
   // that accounts for traffic, which is the whole reason to pay for it.
   if (hasGoogleKey(env)) {
@@ -54,17 +63,20 @@ export async function routeLegs(points, { fetchImpl = fetch, timeoutMs = 8000, e
         fetchImpl,
         timeout: timeoutMs,
       })
-    } catch {
-      // Fall through. A key that is misconfigured, over quota, or rejected
-      // should degrade to the free router rather than break the tour.
+    } catch (error) {
+      // Degrade to the free router rather than break the tour — but say why.
+      note = `Google routing failed (${error?.message ?? 'unknown error'}); using the free router.`
     }
   }
 
   try {
-    return await osrmRoute(points, { fetchImpl, timeoutMs })
-  } catch {
+    const routed = await osrmRoute(points, { fetchImpl, timeoutMs })
+    return note ? { ...routed, note } : routed
+  } catch (error) {
     // A routing outage must not take the itinerary with it.
-    return estimateLegs(points)
+    const estimated = estimateLegs(points)
+    const osrmNote = `Road routing was unreachable (${error?.message ?? 'unknown error'}); times are straight-line estimates.`
+    return { ...estimated, note: note ? `${note} ${osrmNote}` : osrmNote }
   }
 }
 

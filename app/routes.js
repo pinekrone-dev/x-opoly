@@ -712,6 +712,7 @@ export function createApp({ db, storage, env = {} }) {
       itinerary,
       geometry: routed.geometry,
       routeSource: routed.source,
+      routeNote: routed.note ?? null,
       driveMiles: Math.round(routed.legs.reduce((total, leg) => total + leg.miles, 0) * 10) / 10,
       start,
       end,

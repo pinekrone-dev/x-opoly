@@ -147,8 +147,15 @@ function parseModelJson(text, label) {
 
 // --- Google Gemini ---------------------------------------------------------
 
+/**
+ * Google's rolling alias for the newest flash model. Pinning a versioned
+ * name broke live the day Google retired it ("gemini-2.5-flash is no longer
+ * available to new users"); the alias survives retirements.
+ */
+const GEMINI_DEFAULT = 'gemini-flash-latest'
+
 export async function geminiExtract({ text, bytes, mimeType }, env = {}, { fetchImpl = fetch } = {}) {
-  const model = env.GEMINI_MODEL || 'gemini-2.5-flash'
+  const model = env.GEMINI_MODEL || GEMINI_DEFAULT
   const parts = []
   if (bytes) parts.push({ inline_data: { mime_type: mimeType, data: toBase64(bytes) } })
   if (text) parts.push({ text })
@@ -169,6 +176,12 @@ export async function geminiExtract({ text, bytes, mimeType }, env = {}, { fetch
       }),
     },
   )
+
+  // A retired or mistyped model answers 404. When the caller pinned one,
+  // retry once on the rolling alias rather than failing the whole read.
+  if (response.status === 404 && model !== GEMINI_DEFAULT) {
+    return geminiExtract({ text, bytes, mimeType }, { ...env, GEMINI_MODEL: GEMINI_DEFAULT }, { fetchImpl })
+  }
 
   const body = await readJson(response, 'Gemini')
   const answer = body?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')
