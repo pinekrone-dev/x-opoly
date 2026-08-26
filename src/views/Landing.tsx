@@ -9,35 +9,55 @@ import { BrandPin } from '../components/BrandMark'
  * after the email is verified, inside the app's own frame.
  */
 
+/** The product as it actually looks, once, under the fold. */
+const HERO_SHOT = {
+  src: '/shots/map.jpg',
+  caption: 'Map view \u00b7 stage rail, radius ring, street map',
+  alt: 'Map view with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring.',
+}
+
 /**
- * The three features a screenshot can actually show. Each shot is the product
- * itself rather than a mockup, so the caption names what is in the frame
- * instead of describing the feature a second time.
+ * The run of work, in the order a broker actually does it, each step showing
+ * the corner of the interface it happens in. Numbered because it is a real
+ * sequence — a site cannot be toured before it is staged, or staged before it
+ * is on the map.
  */
-const SHOWN = [
+const STEPS = [
   {
-    kicker: 'Map',
-    title: 'Every site on one map',
-    body: 'Drop pins by address, paste a listing, or upload the flyer \u2014 the AI reads it and fills the site profile in for review.',
-    shot: '/shots/map.jpg',
-    caption: 'Map view \u00b7 stage rail, radius ring, street map',
-    alt: 'Map view with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring.',
+    title: 'Add the sites',
+    body: 'Every candidate goes in one place. Drop a pin by address, paste a listing, or upload the flyer and let the AI fill the profile in. The views across the top are the same survey seen four ways.',
+    src: '/steps/1-add.jpg',
+    alt: 'The survey toolbar: Map, List, Plan tour and Share views, with an Add site button.',
   },
   {
-    kicker: 'Plan tour',
-    title: 'Tours planned, not guessed',
-    body: 'Pick the sites, get the drive order, times and directions \u2014 then hand the client a polished tour book PDF.',
-    shot: '/shots/tour.jpg',
-    caption: 'Plan tour \u00b7 optimized route, arrival times, tour book',
-    alt: 'Plan tour view with a start address departing at 10 AM, two numbered stops showing drive time and arrival time, an adjustable time at each stop, and the route drawn on the map.',
+    title: 'Draw the trade area',
+    body: 'Set a radius or draw a zone around where the client actually needs to be, and see which buildings fall inside it. The ring carries its own distance, so half a mile stays half a mile for whoever opens it next.',
+    src: '/steps/2-area.jpg',
+    alt: 'A dashed radius ring drawn on the street map, labelled Test \u00b7 0.5 mi, with a site pin inside it.',
   },
   {
-    kicker: 'Compare',
-    title: 'Compare sites side by side',
-    body: 'Rates, sizes, parking and demographics lined up across sites \u2014 on screen and in a comparison PDF.',
-    shot: '/shots/list.jpg',
-    caption: 'List view \u00b7 stage, asking, size, built',
-    alt: 'List view showing a table of sites with address, stage pill, asking rate, size in square feet and year built, with filter chips above it.',
+    title: 'Stage every candidate',
+    body: 'Drag a site between stages and its pin recolours on the map. Hide a stage to clear the noise. The count beside each label is how you know where the search really stands.',
+    src: '/steps/3-stage.jpg',
+    alt: 'The stage rail showing Unqualified and Qualified/Touring groups, each with a count and a site card that can be dragged.',
+  },
+  {
+    title: 'Compare on the numbers',
+    body: 'Switch to the list when comparing matters more than locating. Stage, asking, size and year built line up in a column you can sort. Rate on request stays rate on request.',
+    src: '/steps/4-compare.jpg',
+    alt: 'The list view table with columns for site, stage, asking rate, size and year built.',
+  },
+  {
+    title: 'Order the tour',
+    body: 'Optimize route puts the stops in driving order and works out the arrival time at each one. Change how long you spend at a stop and everything after it moves with it.',
+    src: '/steps/5-order.jpg',
+    alt: 'A tour stop card showing eight minutes drive, arrive 10:08 AM, and an editable twenty minute time at stop, beside an Optimize route button.',
+  },
+  {
+    title: 'Hand over the day',
+    body: 'Tour book prints the run as a leave-behind. The share link shows the client the live map instead, so moving a site to LOI updates the link they already have.',
+    src: '/steps/6-handover.jpg',
+    alt: 'The tour configuration header with a Tour book button.',
   },
 ]
 
@@ -128,6 +148,13 @@ export default function Landing({
               See what it does
             </a>
           </div>
+
+          <figure className="panel mt-12 overflow-hidden text-left">
+            <img src={HERO_SHOT.src} alt={HERO_SHOT.alt} width={1440} className="block w-full" />
+            <figcaption className="border-t border-line px-4 py-2.5 font-mono text-[11px] tracking-wide text-faint">
+              {HERO_SHOT.caption}
+            </figcaption>
+          </figure>
         </section>
 
         <section id="features" className="border-t border-line bg-surface">
@@ -137,37 +164,32 @@ export default function Landing({
               From the first pin to the tour book the client takes home.
             </p>
 
-            {/* The three the product can show for itself. Alternating sides so a
-                run of screenshots reads as a sequence rather than a stack. */}
-            <div className="mt-12 space-y-14">
-              {SHOWN.map((feature, i) => (
-                <div
-                  key={feature.title}
-                  className={`grid items-center gap-8 ${
-                    // The screenshot always takes the wide track. Reordering alone
-                    // would leave it in whichever column the template sized first,
-                    // so the template flips with the order.
-                    i % 2 === 1
-                      ? 'lg:grid-cols-[minmax(0,11fr)_minmax(0,7fr)]'
-                      : 'lg:grid-cols-[minmax(0,7fr)_minmax(0,11fr)]'
-                  }`}
-                >
-                  <div className={i % 2 === 1 ? 'lg:order-2' : ''}>
-                    <p className="font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-brand">
-                      {feature.kicker}
-                    </p>
-                    <p className="mt-2 text-lg font-semibold text-ink">{feature.title}</p>
-                    <p className="mt-2 text-[13px] leading-relaxed text-muted">{feature.body}</p>
+            {/* Each step shows the corner of the interface it happens in. The
+                number column is the sequence itself, so it stays put on every
+                width rather than becoming decoration. */}
+            <ol className="mt-12 space-y-10">
+              {STEPS.map((step, i) => (
+                <li key={step.title} className="grid gap-x-6 gap-y-3 sm:grid-cols-[auto_minmax(0,1fr)]">
+                  <span
+                    className="grid h-8 w-8 shrink-0 place-items-center self-start rounded-full bg-brand-tint font-mono text-[13px] font-medium text-brand-deep"
+                    aria-hidden
+                  >
+                    {i + 1}
+                  </span>
+                  <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)] lg:gap-8">
+                    <div className="min-w-0">
+                      <p className="text-base font-semibold text-ink">{step.title}</p>
+                      <p className="mt-2 text-[13px] leading-relaxed text-muted">{step.body}</p>
+                    </div>
+                    {/* Held near life size — a UI detail blown up past its own
+                        scale reads as a zoom rather than a pointer at the thing. */}
+                    <figure className="panel overflow-hidden">
+                      <img src={step.src} alt={step.alt} width={1280} loading="lazy" className="block w-full" />
+                    </figure>
                   </div>
-                  <figure className={`panel overflow-hidden ${i % 2 === 1 ? 'lg:order-1' : ''}`}>
-                    <img src={feature.shot} alt={feature.alt} width={1440} loading="lazy" className="block w-full" />
-                    <figcaption className="border-t border-line px-4 py-2.5 font-mono text-[11px] tracking-wide text-faint">
-                      {feature.caption}
-                    </figcaption>
-                  </figure>
-                </div>
+                </li>
               ))}
-            </div>
+            </ol>
 
             <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((feature) => (
