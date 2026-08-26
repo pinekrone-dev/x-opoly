@@ -3,13 +3,14 @@ import ShareView from './views/ShareView'
 import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
+import Faq from './views/Faq'
 import Landing from './views/Landing'
 import Welcome from './views/Welcome'
 import Home from './views/Home'
 import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
-import { matchRoute, usePath } from './lib/router'
+import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
 
 /**
@@ -111,6 +112,27 @@ export default function App() {
    */
   if (route.view === 'share' && route.token) {
     return <ShareView token={route.token} features={features} />
+  }
+
+  /*
+   * The FAQ is public: readable without an account, and reachable while
+   * signed in without dropping the session. Its two doors send the visitor
+   * back to the landing page with the right form already open.
+   */
+  if (route.view === 'faq') {
+    return (
+      <Faq
+        selfServe={session.billing.selfServe}
+        onSignIn={() => {
+          setDoor('signIn')
+          navigate('/')
+        }}
+        onGetStarted={() => {
+          setDoor('signUp')
+          navigate('/')
+        }}
+      />
+    )
   }
 
   /*

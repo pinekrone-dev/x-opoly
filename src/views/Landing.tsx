@@ -1,4 +1,4 @@
-import { BrandPin } from '../components/BrandMark'
+import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 
 /**
  * The public face of the product.
@@ -104,10 +104,6 @@ const INCLUDED = [
   'Team members by invitation',
 ]
 
-function Logo({ tone = 'brand' }: { tone?: 'brand' | 'inverse' }) {
-  return <BrandPin size={36} tone={tone} />
-}
-
 export default function Landing({
   selfServe,
   onSignIn,
@@ -120,31 +116,16 @@ export default function Landing({
   const primaryCta = selfServe ? onGetStarted : onSignIn
 
   return (
-    <div className="min-h-full overflow-y-auto bg-surface">
-      <header className="sticky top-0 z-20 border-b border-line bg-paper/90 backdrop-blur">
-        <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-3">
-          <Logo />
-          {/* The mark spells the name itself, so the wordmark stands down
-              on narrow screens rather than wrapping the header onto two lines. */}
-          <p className="hidden text-sm font-semibold text-ink sm:block">Land Quotient</p>
-          <nav className="ml-auto flex items-center gap-1.5 text-sm">
-            <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="#how">
-              How it works
-            </a>
-            <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="#pricing">
-              Pricing
-            </a>
-            <button type="button" className="btn-ghost px-3 py-1.5" onClick={onSignIn}>
-              Sign in
-            </button>
-            {selfServe ? (
-              <button type="button" className="btn-primary px-3.5 py-1.5" onClick={onGetStarted}>
-                Get started
-              </button>
-            ) : null}
-          </nav>
-        </div>
-      </header>
+    /*
+     * No overflow container here. The app shell fixes html, body and #root at
+     * 100% height and lets each view scroll itself, which is right for the map
+     * but wrong for a long marketing page: the wrapper grew to its content
+     * instead of scrolling, so it was never the scroller, yet `sticky` still
+     * resolved against it and the header rode away with the document. Letting
+     * the document scroll puts the header back on the viewport.
+     */
+    <div className="min-h-full bg-surface">
+      <MarketingHeader selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} />
 
       <main>
         {/*
@@ -367,15 +348,7 @@ export default function Landing({
         </section>
       </main>
 
-      <footer className="bg-brand-night">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-4 px-5 py-10 text-xs text-slate-400">
-          <Logo tone="inverse" />
-          <span>Land Quotient — site surveys for tenant rep brokers.</span>
-          <button type="button" className="ml-auto underline hover:text-brand-soft" onClick={onSignIn}>
-            Sign in
-          </button>
-        </div>
-      </footer>
+      <MarketingFooter onSignIn={onSignIn} />
     </div>
   )
 }

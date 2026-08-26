@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq'
   id?: string
   token?: string
   /** Which CRM object a `record` route is showing. */
@@ -34,6 +34,9 @@ export interface Route {
 export function matchRoute(path: string): Route {
   const shared = path.match(/^\/s\/([\w-]+)\/?$/)
   if (shared) return { view: 'share', token: shared[1] }
+
+  // Public, and matched before anything that needs a session.
+  if (/^\/faq\/?$/.test(path)) return { view: 'faq' }
 
   // Where Stripe sends the buyer back; the session id rides the query string.
   if (/^\/billing\/return\/?$/.test(path)) return { view: 'billingReturn' }
