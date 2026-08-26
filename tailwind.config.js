@@ -19,12 +19,15 @@ export default {
         muted: '#64748b', // labels and captions
         faint: '#94a3b8', // the quietest legible text
         brand: {
-          DEFAULT: '#14b8a6',
+          // Sampled from the logo file: the teal in QUOTIENT and the navy in LAND.
+          DEFAULT: '#01A3A8',
           // Teal on white is too light to read as text, so links and emphasis
-          // use the deep shade; the bright one stays for fills.
-          soft: '#5eead4',
-          deep: '#0f766e',
-          tint: '#f0fdfa',
+          // use the deep shade; the bright one stays for fills. The deep shade
+          // is the logo's navy rather than a darker teal, which is what puts
+          // the second half of the mark into the interface.
+          soft: '#7fd9db',
+          deep: '#143366',
+          tint: '#e9f5f6',
         },
         stage: {
           prospect: '#94a3b8',

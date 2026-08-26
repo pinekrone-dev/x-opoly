@@ -9,12 +9,39 @@ import { BrandPin } from '../components/BrandMark'
  * after the email is verified, inside the app's own frame.
  */
 
-const FEATURES = [
+/**
+ * The three features a screenshot can actually show. Each shot is the product
+ * itself rather than a mockup, so the caption names what is in the frame
+ * instead of describing the feature a second time.
+ */
+const SHOWN = [
   {
+    kicker: 'Map',
     title: 'Every site on one map',
-    body: 'Drop pins by address, paste a listing, or upload the flyer — the AI reads it and fills the site profile in for review.',
-    icon: 'M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z M12 10m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0',
+    body: 'Drop pins by address, paste a listing, or upload the flyer \u2014 the AI reads it and fills the site profile in for review.',
+    shot: '/shots/map.jpg',
+    caption: 'Map view \u00b7 stage rail, radius ring, street map',
+    alt: 'Map view with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring.',
   },
+  {
+    kicker: 'Plan tour',
+    title: 'Tours planned, not guessed',
+    body: 'Pick the sites, get the drive order, times and directions \u2014 then hand the client a polished tour book PDF.',
+    shot: '/shots/tour.jpg',
+    caption: 'Plan tour \u00b7 optimized route, arrival times, tour book',
+    alt: 'Plan tour view with a start address departing at 10 AM, two numbered stops showing drive time and arrival time, an adjustable time at each stop, and the route drawn on the map.',
+  },
+  {
+    kicker: 'Compare',
+    title: 'Compare sites side by side',
+    body: 'Rates, sizes, parking and demographics lined up across sites \u2014 on screen and in a comparison PDF.',
+    shot: '/shots/list.jpg',
+    caption: 'List view \u00b7 stage, asking, size, built',
+    alt: 'List view showing a table of sites with address, stage pill, asking rate, size in square feet and year built, with filter chips above it.',
+  },
+]
+
+const FEATURES = [
   {
     title: 'Demographics that answer clients',
     body: 'Census choropleths — population, income, growth — shade the map around every site, with the numbers in a side panel.',
@@ -26,19 +53,9 @@ const FEATURES = [
     icon: 'M4 6h16 M4 12h10 M4 18h7',
   },
   {
-    title: 'Tours planned, not guessed',
-    body: 'Pick the sites, get the drive order, times and directions — then hand the client a polished tour book PDF.',
-    icon: 'M9 20l-5.5 2.5V6L9 3.5m0 16.5l6-3m-6 3V3.5m6 13.5l5.5 2.5V3l-5.5 2.5m0 11.5V5.5m-6-2l6 2',
-  },
-  {
     title: 'Share links clients open',
     body: 'One link shows the live survey map — with demographics and QR codes if you switch them on. No login, no attachment.',
     icon: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7 M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
-  },
-  {
-    title: 'Compare sites side by side',
-    body: 'Rates, sizes, parking and demographics lined up across sites — on screen and in a comparison PDF.',
-    icon: 'M9 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4 M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4 M12 3v18',
   },
 ]
 
@@ -116,7 +133,43 @@ export default function Landing({
         <section id="features" className="border-t border-line bg-surface">
           <div className="mx-auto max-w-5xl px-5 py-14">
             <h2 className="text-center text-xl font-semibold text-ink">The whole survey, one tool</h2>
-            <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <p className="mx-auto mt-2 max-w-md text-center text-sm text-muted">
+              From the first pin to the tour book the client takes home.
+            </p>
+
+            {/* The three the product can show for itself. Alternating sides so a
+                run of screenshots reads as a sequence rather than a stack. */}
+            <div className="mt-12 space-y-14">
+              {SHOWN.map((feature, i) => (
+                <div
+                  key={feature.title}
+                  className={`grid items-center gap-8 ${
+                    // The screenshot always takes the wide track. Reordering alone
+                    // would leave it in whichever column the template sized first,
+                    // so the template flips with the order.
+                    i % 2 === 1
+                      ? 'lg:grid-cols-[minmax(0,11fr)_minmax(0,7fr)]'
+                      : 'lg:grid-cols-[minmax(0,7fr)_minmax(0,11fr)]'
+                  }`}
+                >
+                  <div className={i % 2 === 1 ? 'lg:order-2' : ''}>
+                    <p className="font-mono text-[11px] font-medium uppercase tracking-[0.16em] text-brand">
+                      {feature.kicker}
+                    </p>
+                    <p className="mt-2 text-lg font-semibold text-ink">{feature.title}</p>
+                    <p className="mt-2 text-[13px] leading-relaxed text-muted">{feature.body}</p>
+                  </div>
+                  <figure className={`panel overflow-hidden ${i % 2 === 1 ? 'lg:order-1' : ''}`}>
+                    <img src={feature.shot} alt={feature.alt} width={1440} loading="lazy" className="block w-full" />
+                    <figcaption className="border-t border-line px-4 py-2.5 font-mono text-[11px] tracking-wide text-faint">
+                      {feature.caption}
+                    </figcaption>
+                  </figure>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-14 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((feature) => (
                 <div key={feature.title} className="panel p-5">
                   <span className="mb-3 grid h-9 w-9 place-items-center rounded-lg bg-brand-tint text-brand-deep" aria-hidden>

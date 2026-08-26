@@ -1,35 +1,26 @@
 /**
- * The Land Quotient mark: a map pin split the way the logo is, navy above the
+ * The Land Quotient mark: the pin built out of the letterforms, navy above the
  * curve and teal below it, with the wordmark set in the same two colours.
  *
- * One component rather than an SVG pasted into every entry screen, so the
+ * One component rather than an image pasted into every entry screen, so the
  * brand is changed in a single place.
  */
 
-const NAVY = '#1B3668'
-const TEAL = '#12AEB6'
+const NAVY = '#143366'
+const TEAL = '#01A3A8'
 
 /** The pin on its own — for favicons, avatars, and anywhere the name is already present. */
 export function BrandPin({ size = 36, className = '' }: { size?: number; className?: string }) {
+  // The real mark, not a redraw of it. It is taller than it is wide, so `size`
+  // sets the height and the width follows; a square box would letterbox it.
   return (
-    <svg
-      width={size}
+    <img
+      src="/brand/lq-mark.png"
+      alt="Land Quotient"
       height={size}
-      viewBox="0 0 32 32"
       className={className}
-      role="img"
-      aria-label="Land Quotient"
-    >
-      <defs>
-        <clipPath id="lq-pin-clip">
-          <path d="M16 31 3.6 16.4A12.6 12.6 0 1 1 28.4 16.4Z" />
-        </clipPath>
-      </defs>
-      <g clipPath="url(#lq-pin-clip)">
-        <rect width="32" height="32" fill={NAVY} />
-        <path d="M2 15.2Q16 21.6 30 15.2L30 32 2 32Z" fill={TEAL} />
-      </g>
-    </svg>
+      style={{ height: size, width: 'auto', display: 'block' }}
+    />
   )
 }
 
