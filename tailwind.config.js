@@ -28,6 +28,11 @@ export default {
           soft: '#7fd9db',
           deep: '#143366',
           tint: '#e9f5f6',
+          // The navy pushed darker, for grounds the mark sits on: the marketing
+          // hero and footer. Deep enough that white type clears AA comfortably.
+          night: '#0c1f42',
+          // Hairlines and outlined buttons on that ground.
+          edge: '#22406f',
         },
         stage: {
           prospect: '#94a3b8',

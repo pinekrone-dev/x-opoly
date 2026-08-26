@@ -10,12 +10,23 @@ const NAVY = '#143366'
 const TEAL = '#01A3A8'
 
 /** The pin on its own — for favicons, avatars, and anywhere the name is already present. */
-export function BrandPin({ size = 36, className = '' }: { size?: number; className?: string }) {
+export function BrandPin({
+  size = 36,
+  tone = 'brand',
+  className = '',
+}: {
+  size?: number
+  /** `inverse` is the reversed lockup, for navy and other dark grounds. */
+  tone?: 'brand' | 'inverse'
+  className?: string
+}) {
   // The real mark, not a redraw of it. It is taller than it is wide, so `size`
   // sets the height and the width follows; a square box would letterbox it.
+  // On a dark ground the navy half of the lockup vanishes, so that half
+  // reverses to white and the teal lifts — the same mark, read the other way.
   return (
     <img
-      src="/brand/lq-mark.png"
+      src={tone === 'inverse' ? '/brand/lq-mark-inverse.png' : '/brand/lq-mark.png'}
       alt="Land Quotient"
       height={size}
       className={className}
@@ -44,7 +55,7 @@ export default function BrandMark({
 }) {
   return (
     <span className={`flex items-center gap-2.5 ${className}`}>
-      <BrandPin size={size} />
+      <BrandPin size={size} tone={tone} />
       <span className="leading-tight">
         <span className="block text-[15px] font-bold tracking-tight">
           {tone === 'inverse' ? (
