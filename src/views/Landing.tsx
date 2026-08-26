@@ -1,3 +1,5 @@
+import { useEffect } from 'react'
+
 import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 
 /**
@@ -12,6 +14,8 @@ import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 /** The product as it actually looks, once, under the fold. */
 const HERO_SHOT = {
   src: '/shots/map.jpg',
+      w: 1440,
+      h: 660,
   caption: 'Map view \u00b7 stage rail, radius ring, street map',
   alt: 'Map view with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring.',
 }
@@ -33,6 +37,8 @@ const CHAPTERS = [
       title: 'Add the sites',
       body: 'Every candidate goes in one place. Drop a pin by address, paste a listing, or upload the flyer and let the AI fill the profile in. The views across the top are the same survey seen four ways.',
       src: '/steps/1-add.jpg',
+      w: 1280,
+      h: 124,
       alt: 'The survey toolbar: Map, List, Plan tour and Share views, with an Add site button.',
     },
     cards: [
@@ -40,12 +46,16 @@ const CHAPTERS = [
         title: 'Draw the trade area',
         body: 'Set a radius or draw a zone around where the client needs to be. The ring carries its own distance, so half a mile stays half a mile for whoever opens it next.',
         src: '/steps/2-area.jpg',
+      w: 1280,
+      h: 985,
         alt: 'A dashed radius ring drawn on the street map, labelled Test \u00b7 0.5 mi, with a site pin inside it.',
       },
       {
         title: 'Stage every candidate',
         body: 'Drag a site between stages and its pin recolours on the map. Hide a stage to clear the noise. The count beside each label is how you know where the search really stands.',
         src: '/steps/3-stage.jpg',
+      w: 1280,
+      h: 717,
         alt: 'The stage rail showing Unqualified and Qualified/Touring groups, each with a count and a draggable site card.',
       },
     ],
@@ -58,6 +68,8 @@ const CHAPTERS = [
       title: 'Compare on the numbers',
       body: 'Switch to the list when comparing matters more than locating. Stage, asking, size and year built line up in a column you can sort. Rate on request stays rate on request.',
       src: '/steps/4-compare.jpg',
+      w: 1280,
+      h: 169,
       alt: 'The list view table with columns for site, stage, asking rate, size and year built.',
     },
     cards: [
@@ -65,12 +77,16 @@ const CHAPTERS = [
         title: 'Order the tour',
         body: 'Optimize route puts the stops in driving order and works out the arrival time at each one. Change how long you spend at a stop and everything after it moves with it.',
         src: '/steps/5-order.jpg',
+      w: 1280,
+      h: 539,
         alt: 'A tour stop card showing eight minutes drive, arrive 10:08 AM, and an editable twenty minute time at stop, beside an Optimize route button.',
       },
       {
         title: 'Hand over the day',
         body: 'Tour book prints the run as a leave-behind. The share link shows the client the live map instead, so moving a site to LOI updates the link they already have.',
         src: '/steps/6-handover.jpg',
+      w: 1280,
+      h: 144,
         alt: 'The tour configuration header with a Tour book button.',
       },
     ],
@@ -114,6 +130,19 @@ export default function Landing({
   onGetStarted: () => void
 }) {
   const primaryCta = selfServe ? onGetStarted : onSignIn
+
+  /*
+   * A link like /#pricing from another page arrives before React has rendered
+   * anything, so the browser finds no such element and leaves you at the top.
+   * The hash survives the navigation, so the scroll is done here instead, once
+   * the sections it names actually exist.
+   */
+  useEffect(() => {
+    const id = window.location.hash.slice(1)
+    if (!id) return
+    const target = document.getElementById(id)
+    if (target) target.scrollIntoView()
+  }, [])
 
   return (
     /*
@@ -184,12 +213,12 @@ export default function Landing({
 
             {/* Bleeds off the bottom edge: the product continues past the fold. */}
             <figure className="mt-14 overflow-hidden rounded-t-xl border border-brand-edge border-b-0 bg-white shadow-2xl shadow-black/40">
-              <img src={HERO_SHOT.src} alt={HERO_SHOT.alt} width={1440} className="block w-full" />
+              <img src={HERO_SHOT.src} alt={HERO_SHOT.alt} width={HERO_SHOT.w} height={HERO_SHOT.h} className="block w-full" />
             </figure>
           </div>
         </section>
 
-        <section id="how" className="border-b border-line bg-surface">
+        <section id="how" className="scroll-mt-20 border-b border-line bg-surface">
           <div className="mx-auto max-w-5xl px-5 py-20">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">How it works</p>
             <h2 className="mt-3 max-w-xl text-3xl font-bold tracking-tight text-ink">
@@ -223,7 +252,8 @@ export default function Landing({
                       <img
                         src={chapter.band.src}
                         alt={chapter.band.alt}
-                        width={1280}
+                        width={chapter.band.w}
+                        height={chapter.band.h}
                         loading="lazy"
                         className="block w-full"
                       />
@@ -241,7 +271,8 @@ export default function Landing({
                           <img
                             src={card.src}
                             alt={card.alt}
-                            width={1280}
+                            width={card.w}
+                            height={card.h}
                             loading="lazy"
                             className="block w-full"
                           />
@@ -283,7 +314,7 @@ export default function Landing({
           </div>
         </section>
 
-        <section id="pricing" className="bg-surface">
+        <section id="pricing" className="scroll-mt-20 bg-surface">
           <div className="mx-auto max-w-5xl px-5 py-20">
             <div className="text-center">
               <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">Pricing</p>
