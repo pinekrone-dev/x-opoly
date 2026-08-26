@@ -17,47 +17,63 @@ const HERO_SHOT = {
 }
 
 /**
- * The run of work, in the order a broker actually does it, each step showing
- * the corner of the interface it happens in. Numbered because it is a real
- * sequence — a site cannot be toured before it is staged, or staged before it
- * is on the map.
+ * The work in two chapters rather than one long count to six. Each chapter
+ * opens with the wide, thin part of the interface it starts from \u2014 a toolbar,
+ * a table row \u2014 run as a full-width band, then the two chunkier panels beside
+ * each other. Shape follows the crop: a strip of toolbar and a stage rail want
+ * different room, and forcing both into the same frame wasted most of it.
  */
-const STEPS = [
+const CHAPTERS = [
   {
-    title: 'Add the sites',
-    body: 'Every candidate goes in one place. Drop a pin by address, paste a listing, or upload the flyer and let the AI fill the profile in. The views across the top are the same survey seen four ways.',
-    src: '/steps/1-add.jpg',
-    alt: 'The survey toolbar: Map, List, Plan tour and Share views, with an Add site button.',
+    label: '01',
+    title: 'Build the survey',
+    intro:
+      'Get every candidate onto one map, inside the area that actually matters, sorted by where it stands.',
+    band: {
+      title: 'Add the sites',
+      body: 'Every candidate goes in one place. Drop a pin by address, paste a listing, or upload the flyer and let the AI fill the profile in. The views across the top are the same survey seen four ways.',
+      src: '/steps/1-add.jpg',
+      alt: 'The survey toolbar: Map, List, Plan tour and Share views, with an Add site button.',
+    },
+    cards: [
+      {
+        title: 'Draw the trade area',
+        body: 'Set a radius or draw a zone around where the client needs to be. The ring carries its own distance, so half a mile stays half a mile for whoever opens it next.',
+        src: '/steps/2-area.jpg',
+        alt: 'A dashed radius ring drawn on the street map, labelled Test \u00b7 0.5 mi, with a site pin inside it.',
+      },
+      {
+        title: 'Stage every candidate',
+        body: 'Drag a site between stages and its pin recolours on the map. Hide a stage to clear the noise. The count beside each label is how you know where the search really stands.',
+        src: '/steps/3-stage.jpg',
+        alt: 'The stage rail showing Unqualified and Qualified/Touring groups, each with a count and a draggable site card.',
+      },
+    ],
   },
   {
-    title: 'Draw the trade area',
-    body: 'Set a radius or draw a zone around where the client actually needs to be, and see which buildings fall inside it. The ring carries its own distance, so half a mile stays half a mile for whoever opens it next.',
-    src: '/steps/2-area.jpg',
-    alt: 'A dashed radius ring drawn on the street map, labelled Test \u00b7 0.5 mi, with a site pin inside it.',
-  },
-  {
-    title: 'Stage every candidate',
-    body: 'Drag a site between stages and its pin recolours on the map. Hide a stage to clear the noise. The count beside each label is how you know where the search really stands.',
-    src: '/steps/3-stage.jpg',
-    alt: 'The stage rail showing Unqualified and Qualified/Touring groups, each with a count and a site card that can be dragged.',
-  },
-  {
-    title: 'Compare on the numbers',
-    body: 'Switch to the list when comparing matters more than locating. Stage, asking, size and year built line up in a column you can sort. Rate on request stays rate on request.',
-    src: '/steps/4-compare.jpg',
-    alt: 'The list view table with columns for site, stage, asking rate, size and year built.',
-  },
-  {
-    title: 'Order the tour',
-    body: 'Optimize route puts the stops in driving order and works out the arrival time at each one. Change how long you spend at a stop and everything after it moves with it.',
-    src: '/steps/5-order.jpg',
-    alt: 'A tour stop card showing eight minutes drive, arrive 10:08 AM, and an editable twenty minute time at stop, beside an Optimize route button.',
-  },
-  {
-    title: 'Hand over the day',
-    body: 'Tour book prints the run as a leave-behind. The share link shows the client the live map instead, so moving a site to LOI updates the link they already have.',
-    src: '/steps/6-handover.jpg',
-    alt: 'The tour configuration header with a Tour book button.',
+    label: '02',
+    title: 'Run the deal',
+    intro: 'Compare on the numbers, order the day, and hand the client something that stays current.',
+    band: {
+      title: 'Compare on the numbers',
+      body: 'Switch to the list when comparing matters more than locating. Stage, asking, size and year built line up in a column you can sort. Rate on request stays rate on request.',
+      src: '/steps/4-compare.jpg',
+      alt: 'The list view table with columns for site, stage, asking rate, size and year built.',
+    },
+    cards: [
+      {
+        title: 'Order the tour',
+        body: 'Optimize route puts the stops in driving order and works out the arrival time at each one. Change how long you spend at a stop and everything after it moves with it.',
+        src: '/steps/5-order.jpg',
+        alt: 'A tour stop card showing eight minutes drive, arrive 10:08 AM, and an editable twenty minute time at stop, beside an Optimize route button.',
+      },
+      {
+        title: 'Hand over the day',
+        body: 'Tour book prints the run as a leave-behind. The share link shows the client the live map instead, so moving a site to LOI updates the link they already have.',
+        src: '/steps/6-handover.jpg',
+        alt: 'The tour configuration header with a Tour book button.',
+      },
+    ],
   },
 ]
 
@@ -110,7 +126,7 @@ export default function Landing({
           <Logo />
           {/* The mark spells the name itself, so the wordmark stands down
               on narrow screens rather than wrapping the header onto two lines. */}
-          <p className="hidden text-sm font-semibold text-ink xs:block sm:block">Land Quotient</p>
+          <p className="hidden text-sm font-semibold text-ink sm:block">Land Quotient</p>
           <nav className="ml-auto flex items-center gap-1.5 text-sm">
             <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="#how">
               How it works
@@ -202,38 +218,59 @@ export default function Landing({
               From the first pin to the tour book the client takes home.
             </p>
 
-            {/*
-              Each step shows the corner of the interface it happens in. The rule
-              running down the number column is the sequence itself — a site
-              cannot be toured before it is staged, or staged before it is mapped.
-            */}
-            <ol className="relative mt-14 space-y-14">
-              <span
-                aria-hidden
-                className="absolute left-[15px] top-2 hidden h-[calc(100%-2rem)] w-px bg-gradient-to-b from-brand/40 via-line to-transparent sm:block"
-              />
-              {STEPS.map((step, i) => (
-                <li key={step.title} className="relative grid gap-x-6 gap-y-4 sm:grid-cols-[auto_minmax(0,1fr)]">
-                  <span
-                    className="z-10 grid h-8 w-8 shrink-0 place-items-center self-start rounded-full bg-brand font-mono text-[13px] font-medium text-white ring-4 ring-surface"
-                    aria-hidden
-                  >
-                    {i + 1}
-                  </span>
-                  <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(0,4fr)_minmax(0,6fr)] lg:gap-10">
+            <div className="mt-16 space-y-20">
+              {CHAPTERS.map((chapter) => (
+                <section key={chapter.label} aria-labelledby={`ch-${chapter.label}`}>
+                  <div className="flex items-baseline gap-4 border-t border-line pt-6">
+                    <span className="font-mono text-[13px] font-medium text-brand">{chapter.label}</span>
                     <div className="min-w-0">
-                      <p className="text-lg font-semibold tracking-tight text-ink">{step.title}</p>
-                      <p className="mt-2.5 text-[13px] leading-relaxed text-muted">{step.body}</p>
+                      <h3 id={`ch-${chapter.label}`} className="text-2xl font-bold tracking-tight text-ink">
+                        {chapter.title}
+                      </h3>
+                      <p className="mt-2 max-w-xl text-[14px] leading-relaxed text-muted">{chapter.intro}</p>
                     </div>
-                    {/* Held near life size — a UI detail blown up past its own
-                        scale reads as a zoom rather than a pointer at the thing. */}
-                    <figure className="overflow-hidden rounded-xl border border-line bg-surface shadow-lg shadow-slate-900/[0.07] ring-1 ring-slate-900/[0.03]">
-                      <img src={step.src} alt={step.alt} width={1280} loading="lazy" className="block w-full" />
+                  </div>
+
+                  {/* The wide, thin crop runs the full width; it has nowhere to go
+                      in a column and everything to gain from the room. */}
+                  <div className="mt-8 rounded-xl border border-line bg-paper p-6 sm:p-8">
+                    <div className="max-w-2xl">
+                      <p className="text-[15px] font-semibold text-ink">{chapter.band.title}</p>
+                      <p className="mt-2 text-[13px] leading-relaxed text-muted">{chapter.band.body}</p>
+                    </div>
+                    <figure className="mt-6 max-w-3xl overflow-hidden rounded-lg border border-line bg-surface shadow-md shadow-slate-900/[0.06]">
+                      <img
+                        src={chapter.band.src}
+                        alt={chapter.band.alt}
+                        width={1280}
+                        loading="lazy"
+                        className="block w-full"
+                      />
                     </figure>
                   </div>
-                </li>
+
+                  {/* Text above the image so two cards of different crop heights
+                      still start their sentences on the same line. */}
+                  <div className="mt-4 grid items-start gap-4 md:grid-cols-2">
+                    {chapter.cards.map((card) => (
+                      <div key={card.title} className="rounded-xl border border-line bg-paper p-6 sm:p-8">
+                        <p className="text-[15px] font-semibold text-ink">{card.title}</p>
+                        <p className="mt-2 text-[13px] leading-relaxed text-muted">{card.body}</p>
+                        <figure className="mt-6 overflow-hidden rounded-lg border border-line bg-surface shadow-md shadow-slate-900/[0.06]">
+                          <img
+                            src={card.src}
+                            alt={card.alt}
+                            width={1280}
+                            loading="lazy"
+                            className="block w-full"
+                          />
+                        </figure>
+                      </div>
+                    ))}
+                  </div>
+                </section>
               ))}
-            </ol>
+            </div>
           </div>
         </section>
 
