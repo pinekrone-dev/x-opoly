@@ -1,0 +1,60 @@
+# Deploys the staging Worker (landquotient-staging) on every push to gis.
+#
+# Staging carries no routes — wrangler.toml pins `routes = []` for it — and
+# runs on its own D1 and R2, so this can never touch production or its data.
+# Uses the same CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID repository
+# secrets as deploy.yml; without them the run builds and tests but says so
+# instead of failing red.
+
+name: Deploy staging to Cloudflare
+
+on:
+  push:
+    branches:
+      - gis
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is a deploy token configured?
+        id: token
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+      - name: Deploy the staging Worker
+        if: steps.token.outputs.present == 'true'
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --env staging
+
+      - name: Note that deploying was skipped
+        if: steps.token.outputs.present == 'false'
+        run: |
+          echo "CLOUDFLARE_API_TOKEN is not set, so this run built and tested"
+          echo "the app but did not deploy staging. Add CLOUDFLARE_API_TOKEN"
+          echo "and CLOUDFLARE_ACCOUNT_ID as repository secrets (see the top"
+          echo "of deploy.yml), or deploy from a terminal with:"
+          echo "  npx wrangler deploy --env staging"
