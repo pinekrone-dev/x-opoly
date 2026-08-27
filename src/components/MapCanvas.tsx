@@ -94,6 +94,8 @@ export interface ParcelLayer {
   filterIds?: (number | string)[] | null
   /** Fill opacity for an unselected parcel. */
   opacity?: number
+  /** The ramp to paint a value with, light to dark. Defaults to the house one. */
+  valueRamp?: string[]
 }
 
 /** Land-use buckets, in the same colours the parcel map uses. */
@@ -139,6 +141,8 @@ interface Props {
    * already resolved, so the map does not need to know what is being shown.
    */
   choropleth?: { geoid: string; geometry: unknown; color: string | null; info?: string | null }[] | null
+  /** How strongly the shaded areas paint. The viewer's call, not the map's. */
+  choroplethOpacity?: number
   /** Rings drawn around a point, in miles. */
   rings?: { lat: number; lng: number; miles: number[] } | null
   /** Nearby businesses plotted as small secondary markers. */
@@ -262,6 +266,7 @@ export default function MapCanvas({
   routeGeometry,
   routeColor = '#14b8a6',
   choropleth = null,
+  choroplethOpacity = 0.45,
   rings = null,
   competitors,
   fitKey,
@@ -706,19 +711,36 @@ export default function MapCanvas({
         source: 'shading',
         paint: {
           'fill-color': ['get', 'color'],
-          // Kept translucent so the streets underneath stay legible — the
-          // shading is context for the map, not a replacement for it.
-          'fill-opacity': 0.45,
+          // Translucent by default so the streets underneath stay legible —
+          // the shading is context for the map, not a replacement for it —
+          // but how translucent is the viewer's to decide.
+          'fill-opacity': choroplethOpacity,
         },
       },
       {
         id: 'shading-line',
         type: 'line',
         source: 'shading',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 },
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 1,
+          // Outlines track the fill so a faded layer fades whole.
+          'line-opacity': Math.min(1, choroplethOpacity + 0.15),
+        },
       },
     ])
-  }, [loaded, choropleth])
+
+    // upsert only refreshes an existing source's data — the paint above is
+    // read once, when the layer is first added. So an opacity the viewer
+    // changes afterwards has to be pushed onto the live layer, or the slider
+    // moves and the map does not.
+    if (instance.getLayer('shading-fill')) {
+      instance.setPaintProperty('shading-fill', 'fill-opacity', choroplethOpacity)
+    }
+    if (instance.getLayer('shading-line')) {
+      instance.setPaintProperty('shading-line', 'line-opacity', Math.min(1, choroplethOpacity + 0.15))
+    }
+  }, [loaded, choropleth, choroplethOpacity])
 
   // A tract says what it is worth saying — but never while a map click is
   // armed for dropping a pin or placing a zone, when the click must fall
@@ -1036,8 +1058,9 @@ export default function MapCanvas({
       // Where a county publishes no land use, every parcel lands in one bucket
       // and the map renders as a single grey mass — honest and useless. Value
       // is the other thing every roll carries.
-      const steps: unknown[] = ['step', ['get', 'mv'], VALUE_RAMP[0]]
-      parcels.valueBreaks.forEach((cut, i) => steps.push(cut, VALUE_RAMP[i + 1] ?? VALUE_RAMP[VALUE_RAMP.length - 1]))
+      const ramp = parcels.valueRamp?.length ? parcels.valueRamp : VALUE_RAMP
+      const steps: unknown[] = ['step', ['get', 'mv'], ramp[0]]
+      parcels.valueBreaks.forEach((cut, i) => steps.push(cut, ramp[i + 1] ?? ramp[ramp.length - 1]))
       color = steps as maplibregl.ExpressionSpecification
     } else {
       const match: unknown[] = ['match', ['get', 'gp']]
@@ -1063,7 +1086,7 @@ export default function MapCanvas({
       '#C4A6FF',
       color,
     ])
-  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity])
+  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp])
 
   // Which parcels are shown. One filter expression for the whole layer beats
   // restyling features one at a time.

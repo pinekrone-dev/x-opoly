@@ -142,6 +142,103 @@ const LEGEND: [string, string][] = [
 
 const VALUE_RAMP = ['#EDE7FA', '#D6C6F3', '#BBA0EA', '#9D77DD', '#7F4FCB', '#6031AE', '#43208A']
 
+/*
+ * Ramps for the shaded layers.
+ *
+ * Every one is a single hue running light to dark, because these carry
+ * magnitudes: a rainbow would invent categories where there is only more and
+ * less. Which hue to use is a real choice though — it has to survive being
+ * printed, projected in a lit room, and laid over whichever basemap the
+ * viewer picked — so it belongs to the viewer, not to this file.
+ */
+const RAMPS: { id: string; label: string; colors: string[] }[] = [
+  { id: 'violet', label: 'Violet', colors: VALUE_RAMP },
+  {
+    id: 'teal',
+    label: 'Teal',
+    colors: ['#E0F2F1', '#B2DFDB', '#80CBC4', '#4DB6AC', '#26A69A', '#00897B', '#00695C'],
+  },
+  {
+    id: 'amber',
+    label: 'Amber',
+    colors: ['#FFF3E0', '#FFE0B2', '#FFCC80', '#FFB74D', '#FB8C00', '#EF6C00', '#E65100'],
+  },
+  {
+    id: 'blue',
+    label: 'Blue',
+    colors: ['#E3F2FD', '#BBDEFB', '#90CAF9', '#64B5F6', '#2196F3', '#1976D2', '#0D47A1'],
+  },
+  {
+    id: 'slate',
+    label: 'Neutral',
+    colors: ['#F1F3F6', '#DDE1E8', '#C3C9D4', '#A3ABBB', '#7F899C', '#5C6377', '#3B4152'],
+  },
+]
+
+const rampOf = (id: string) => RAMPS.find((r) => r.id === id)?.colors ?? VALUE_RAMP
+
+/** A percentage slider for a layer's opacity. The one control every layer has. */
+function OpacityRow({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  id: string
+  label: string
+  value: number
+  onChange: (next: number) => void
+}) {
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between">
+        <label className="text-[11px] font-medium text-body" htmlFor={id}>
+          {label}
+        </label>
+        <span className="text-[10px] tabular-nums text-muted">{Math.round(value * 100)}%</span>
+      </div>
+      <input
+        id={id}
+        type="range"
+        min={0}
+        max={1}
+        step={0.02}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full accent-accent"
+      />
+    </div>
+  )
+}
+
+/** The ramp picker: each option shown as the gradient it actually paints. */
+function RampRow({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-body">Colour</p>
+      <div className="flex flex-wrap gap-1.5">
+        {RAMPS.map((ramp) => (
+          <button
+            key={ramp.id}
+            type="button"
+            title={ramp.label}
+            aria-label={ramp.label}
+            aria-pressed={value === ramp.id}
+            onClick={() => onChange(ramp.id)}
+            className={`flex h-6 w-12 overflow-hidden rounded border ${
+              value === ramp.id ? 'border-accent ring-1 ring-accent/40' : 'border-line'
+            }`}
+          >
+            {ramp.colors.map((hue) => (
+              <span key={hue} className="flex-1" style={{ backgroundColor: hue }} />
+            ))}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /** The columns worth handing to someone else, in the order they read. */
 const CSV_COLUMNS: [string, string][] = [
   ['gid', 'Parcel'],
@@ -227,6 +324,17 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    */
   const [owners, setOwners] = useState<OwnerIndex | null>(null)
   const [ownerPick, setOwnerPick] = useState<{ kind: 'p' | 'b'; id: string } | null>(null)
+  /*
+   * How each layer draws. Every layer that paints something owns its opacity
+   * and, where it shades by magnitude, its ramp — because two layers stacked
+   * over a satellite basemap is a judgement about legibility that only the
+   * person looking at it can make.
+   */
+  const [censusOpacity, setCensusOpacity] = useState(0.45)
+  const [censusRamp, setCensusRamp] = useState('violet')
+  const [parcelRamp, setParcelRamp] = useState('violet')
+  /** 'auto' follows what the county publishes; the rest override it. */
+  const [parcelColorBy, setParcelColorBy] = useState<'auto' | 'group' | 'value'>('auto')
   const [showCensus, setShowCensus] = useState(false)
   const [showZoning, setShowZoning] = useState(false)
   const [metric, setMetric] = useState('inc')
@@ -416,6 +524,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * hues are blue, orange, green and grey, and a sequential ramp has to be a
    * part of the wheel nothing else occupies.
    */
+  /** What the parcels end up coloured by, after any override. */
+  const effectiveColorBy: 'group' | 'value' =
+    parcelColorBy === 'auto' ? (meta?.colorBy === 'value' ? 'value' : 'group') : parcelColorBy
+
   const choropleth = useMemo(() => {
     if (!showCensus || !census) return null
     const values = census.shapes
@@ -423,9 +535,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       .filter((v) => Number.isFinite(v) && v > 0)
       .sort((a, b) => a - b)
     if (!values.length) return null
+    const ramp = rampOf(censusRamp)
     const breaks: number[] = []
-    for (let i = 1; i < VALUE_RAMP.length; i += 1) {
-      breaks.push(values[Math.floor((i * values.length) / VALUE_RAMP.length)])
+    for (let i = 1; i < ramp.length; i += 1) {
+      breaks.push(values[Math.floor((i * values.length) / ramp.length)])
     }
     const field = census.fields.find(([key]) => key === metric)
     const label = field?.[1] ?? metric
@@ -437,7 +550,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       if (Number.isFinite(value) && value > 0) {
         let step = 0
         while (step < breaks.length && value >= breaks[step]) step += 1
-        color = VALUE_RAMP[step]
+        color = ramp[step]
       }
       return {
         geoid: shape.tr,
@@ -462,7 +575,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         max: values[values.length - 1],
       },
     }
-  }, [showCensus, census, metric])
+  }, [showCensus, census, metric, censusRamp])
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
@@ -710,7 +823,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return [
       {
         id: 'parcels',
-        label: 'County parcels',
+        label: 'Assessor parcels',
         state: showParcels ? 'on' : 'off',
         note: meta?.count ? `${meta.count.toLocaleString()} parcels` : undefined,
         icon: LAYER_ICONS.parcels,
@@ -874,21 +987,23 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             showParcels
               ? {
                   url: `${viaProxy(meta.heavyBase)}parcels.pmtiles`,
-                  colorBy: meta.colorBy === 'value' ? 'value' : 'group',
+                  colorBy: parcelColorBy === 'auto' ? (meta.colorBy === 'value' ? 'value' : 'group') : parcelColorBy,
                   valueBreaks,
                   selectedParcelId: selected,
                   onSelectParcel: setSelected,
                   filterIds,
                   // Dimmed while the census shading is on: a choropleth under
                   // three hundred thousand full-strength parcel fills reads
-                  // as nothing at all. The lot lines stay, so the ground is
-                  // still there to click.
-                  opacity: choropleth ? Math.min(opacity, 0.12) : opacity,
+                  // as nothing at all — so switching demographics on drops
+                  // this once, below, and the slider takes it back.
+                  opacity,
+                  valueRamp: rampOf(parcelRamp),
                 }
               : null
           }
           view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
           choropleth={choropleth?.areas ?? null}
+          choroplethOpacity={censusOpacity}
         />
       ) : stale ? (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
@@ -959,7 +1074,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                       if (on) setOwnerPick(null)
                       return !on
                     })
-                  if (id === 'demographics') setShowCensus((on) => !on)
+                  if (id === 'demographics')
+                    setShowCensus((on) => {
+                      // Shading a county through opaque parcels shows nothing,
+                      // so the first time it goes on the parcels step back —
+                      // once, as a starting point the slider can undo.
+                      if (!on) setOpacity((current) => (current > 0.2 ? 0.12 : current))
+                      return !on
+                    })
                   if (id === 'zoning') setShowZoning((on) => !on)
                 }}
               />
@@ -1040,43 +1162,71 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                     </option>
                   ))}
                 </select>
-                <p className="mt-1 text-[11px] text-faint">
+                <p className="mt-1 mb-2 text-[11px] text-faint">
                   {census
                     ? `American Community Survey ${'' + (censusYear ?? '')}, by census tract.`
                     : 'Loading tracts…'}
                 </p>
+                <div className="space-y-2 border-t border-line pt-2">
+                  <OpacityRow
+                    id="gis-census-opacity"
+                    label="Shading opacity"
+                    value={censusOpacity}
+                    onChange={setCensusOpacity}
+                  />
+                  <RampRow value={censusRamp} onChange={setCensusRamp} />
+                </div>
               </div>
             )}
 
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-body">Parcel opacity</label>
-              <input
-                type="range"
-                className="w-full accent-brand"
-                min={0.08}
-                max={0.85}
-                step={0.01}
-                value={opacity}
-                disabled={!showParcels}
-                onChange={(event) => setOpacity(Number(event.target.value))}
-              />
-              {choropleth && showParcels && (
-                <p className="mt-1 text-[11px] leading-snug text-faint">
-                  Parcels are dimmed while demographics shading is on, so the tracts read.
+            {showParcels && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                  Assessor parcels
                 </p>
-              )}
-            </div>
+                <OpacityRow
+                  id="gis-parcel-opacity"
+                  label="Fill opacity"
+                  value={opacity}
+                  onChange={setOpacity}
+                />
+                <div>
+                  <label
+                    className="mb-1 block text-[11px] font-medium text-body"
+                    htmlFor="gis-parcel-colorby"
+                  >
+                    Colour parcels by
+                  </label>
+                  <select
+                    id="gis-parcel-colorby"
+                    className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+                    value={parcelColorBy}
+                    onChange={(event) =>
+                      setParcelColorBy(event.target.value as 'auto' | 'group' | 'value')
+                    }
+                  >
+                    <option value="auto">
+                      What this county publishes
+                      {meta?.colorBy === 'value' ? ' (value)' : ' (land use)'}
+                    </option>
+                    <option value="group">Land use</option>
+                    <option value="value">{meta?.valueLabel || 'Assessed value'}</option>
+                  </select>
+                </div>
+                {effectiveColorBy === 'value' && <RampRow value={parcelRamp} onChange={setParcelRamp} />}
+              </div>
+            )}
 
             {/* The legend says what the colours mean, and says plainly when a
                 county publishes no land use to colour by. */}
             <div className="border-t border-line pt-2">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                {meta?.colorBy === 'value' ? meta.valueLabel || 'Value' : 'Land use'}
+                {effectiveColorBy === 'value' ? meta?.valueLabel || 'Value' : 'Land use'}
               </p>
-              {meta?.colorBy === 'value' ? (
+              {effectiveColorBy === 'value' ? (
                 <>
                   <div className="flex h-2 overflow-hidden rounded">
-                    {VALUE_RAMP.map((hue) => (
+                    {rampOf(parcelRamp).map((hue) => (
                       <i key={hue} className="flex-1" style={{ background: hue }} />
                     ))}
                   </div>
@@ -1286,7 +1436,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             {choropleth.label}
           </p>
           <div className="mt-1.5 flex h-2 overflow-hidden rounded-full" aria-hidden>
-            {VALUE_RAMP.map((hue) => (
+            {rampOf(censusRamp).map((hue) => (
               <i key={hue} className="flex-1" style={{ background: hue }} />
             ))}
           </div>
