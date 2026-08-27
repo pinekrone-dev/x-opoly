@@ -96,11 +96,18 @@ describe('placeholder tiles', () => {
 describe('the basemap switcher', () => {
   test('offers only basemaps this deployment can actually load', () => {
     const keyless = availableBasemaps({})
-    assert.ok(keyless.length >= 4, 'several keyless basemaps are offered')
+    assert.ok(keyless.length >= 2, 'the reliable keyless basemaps are offered')
     assert.match(keyless[0].label, /street/i, 'a plain street map is offered first')
     assert.ok(keyless.every((option) => !option.url.includes('{key}')), 'no option has an unfilled key')
     assert.ok(!keyless.some((option) => option.provider === 'mapbox'), 'a keyed provider is hidden without a key')
     assert.ok(!keyless.some((option) => option.placeholder), 'the placeholder grid is not offered as a real basemap')
+    // CARTO answers anonymous traffic with "API required" tiles; the picker
+    // never lists it uninvited, but a deployment that names it still gets it.
+    for (const carto of ['carto-light', 'carto-voyager', 'carto-dark']) {
+      assert.ok(!keyless.some((option) => option.provider === carto), `${carto} not offered uninvited`)
+    }
+    const explicit = availableBasemaps({ TILE_PROVIDER: 'carto-light' })
+    assert.ok(explicit.some((option) => option.provider === 'carto-light'), 'an explicit carto choice is honoured')
   })
 
   test('a keyed provider is offered only when it is the configured one', () => {

@@ -94,7 +94,7 @@ export default function WorkspaceNav({
            */}
           <div className="group relative">
             <Tab label="CRM" active={current === 'crm'} caret onClick={() => navigate('/deals')} />
-            <ul className="invisible absolute left-0 top-full z-30 w-52 overflow-hidden rounded-lg border border-line bg-surface opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+            <ul className="invisible absolute left-0 top-full z-[700] w-52 overflow-hidden rounded-lg border border-line bg-surface opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
               {OBJECTS.map((object) => (
                 <li key={object.segment}>
                   <button

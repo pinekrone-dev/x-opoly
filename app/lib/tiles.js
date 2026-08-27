@@ -29,6 +29,10 @@ export const TILE_PRESETS = {
   },
   'carto-voyager': {
     label: 'Street map (clean)',
+    // 2026-08-27: CARTO throttles anonymous use with "API required" tiles
+    // served as 200s. Kept resolvable for a deployment that explicitly asks,
+    // never offered in the switcher.
+    unreliable: true,
     url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
     attribution: '© OpenStreetMap contributors, © CARTO',
     maxZoom: 20,
@@ -47,6 +51,7 @@ export const TILE_PRESETS = {
   },
   'carto-light': {
     label: 'Muted',
+    unreliable: true,
     url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
     attribution: '© OpenStreetMap contributors, © CARTO',
     maxZoom: 20,
@@ -54,6 +59,7 @@ export const TILE_PRESETS = {
   },
   'carto-dark': {
     label: 'Dark',
+    unreliable: true,
     url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
     attribution: '© OpenStreetMap contributors, © CARTO',
     maxZoom: 20,
@@ -162,6 +168,10 @@ export function availableBasemaps(env = {}) {
     // and Stadia answers a wrong key with tiles that read "API key
     // required", which both maps then faithfully drew.
     if (preset.keyRequired && !(key && chosen === id)) continue
+    // A host known to refuse anonymous traffic is only offered when the
+    // deployment explicitly configured it — a picker must never list a
+    // basemap that draws "API required" instead of a map.
+    if (preset.unreliable && chosen !== id) continue
     if (preset.placeholder && env.TILE_PROVIDER !== 'offline') continue
     options.push(toConfig(id, preset, key, env))
   }
