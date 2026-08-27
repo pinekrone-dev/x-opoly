@@ -297,6 +297,166 @@ function RampRow({ value, onChange }: { value: string; onChange: (id: string) =>
   )
 }
 
+/**
+ * A point to fly to, from any geometry a layer might hold.
+ *
+ * The mean of the coordinates rather than a true centroid: a true one needs
+ * the polygon's area and would put the camera fractionally better on a
+ * crescent-shaped parcel, which is not a difference anyone flying to a
+ * building can see.
+ */
+function featureCentre(geometry: unknown): [number, number] | null {
+  const geom = geometry as { coordinates?: unknown } | null
+  if (!geom?.coordinates) return null
+  let sx = 0
+  let sy = 0
+  let n = 0
+  const walk = (part: unknown): void => {
+    const arr = part as unknown[]
+    if (typeof arr[0] === 'number' && typeof arr[1] === 'number') {
+      sx += arr[0] as number
+      sy += arr[1] as number
+      n += 1
+      return
+    }
+    for (const piece of arr) walk(piece)
+  }
+  walk(geom.coordinates)
+  return n ? [sx / n, sy / n] : null
+}
+
+/**
+ * What is actually in a layer, listed.
+ *
+ * Switching a layer on used to paint shapes and say nothing about them: the
+ * panel offered colour, opacity and a legend, which is how a layer looks
+ * rather than what it holds. A hundred and eight city lots for sale with
+ * asking prices on them are worth reading as a list, and a zoning layer is
+ * worth searching.
+ *
+ * Bounded deliberately. Some layers run to twenty thousand points and a list
+ * that long is neither useful nor survivable, so the first two hundred show
+ * and the search narrows past that — with the count of what matched, so a
+ * short list is never mistaken for a small layer.
+ */
+const RECORD_LIMIT = 200
+
+function LayerRecords({
+  features,
+  fields,
+  picked,
+  onPick,
+}: {
+  features: GeoJSON.Feature[]
+  fields: string[]
+  picked: number | null
+  onPick: (index: number | null, centre: [number, number] | null) => void
+}) {
+  const [needle, setNeedle] = useState('')
+
+  const matches = useMemo(() => {
+    const want = needle.trim().toLowerCase()
+    const out: number[] = []
+    for (let i = 0; i < features.length; i += 1) {
+      if (!want) {
+        out.push(i)
+        if (out.length > RECORD_LIMIT * 4) break
+        continue
+      }
+      const props = features[i]?.properties ?? {}
+      if (Object.values(props).some((v) => String(v ?? '').toLowerCase().includes(want))) {
+        out.push(i)
+      }
+    }
+    return out
+  }, [features, needle])
+
+  const shown = matches.slice(0, RECORD_LIMIT)
+  const lead = fields[0]
+  const second = fields[1]
+  const chosen = picked != null ? features[picked] : null
+
+  return (
+    <div className="space-y-1.5">
+      <input
+        type="search"
+        value={needle}
+        onChange={(event) => setNeedle(event.target.value)}
+        placeholder={`Search ${features.length.toLocaleString()} records`}
+        className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+        aria-label="Search this layer"
+      />
+      {chosen && (
+        <div className="rounded-md border border-accent/40 bg-accent/5 p-2">
+          {/* The close control gets its own row rather than floating: a
+              float here wrapped the first field around it, which put the
+              value and the × on top of each other. */}
+          <div className="mb-1 flex items-start justify-between gap-2">
+            <p className="text-[11px] font-medium text-ink">
+              {String((lead && (chosen.properties ?? {})[lead]) || 'Selected record')}
+            </p>
+            <button
+              type="button"
+              className="shrink-0 leading-none text-muted hover:text-ink"
+              aria-label="Clear the selected record"
+              onClick={() => onPick(null, null)}
+            >
+              ×
+            </button>
+          </div>
+          <dl className="space-y-0.5">
+            {fields.map((field) => {
+              const value = (chosen.properties ?? {})[field]
+              if (value == null || value === '') return null
+              return (
+                <div key={field} className="flex justify-between gap-3 text-[11px]">
+                  <dt className="shrink-0 text-muted">{field}</dt>
+                  <dd className="min-w-0 truncate text-right text-ink">{String(value)}</dd>
+                </div>
+              )
+            })}
+          </dl>
+        </div>
+      )}
+      <ul className="max-h-56 space-y-0.5 overflow-y-auto pr-1">
+        {shown.map((index) => {
+          const props = features[index]?.properties ?? {}
+          return (
+            <li key={index}>
+              <button
+                type="button"
+                onClick={() => onPick(index, featureCentre(features[index]?.geometry))}
+                className={`w-full rounded-md border px-2 py-1 text-left hover:border-accent/50 ${
+                  picked === index ? 'border-accent/60 bg-accent/5' : 'border-line'
+                }`}
+              >
+                <span className="block truncate text-[11px] font-medium text-ink">
+                  {String((lead && props[lead]) || `Record ${index + 1}`)}
+                </span>
+                {second && props[second] != null && props[second] !== '' && (
+                  <span className="block truncate text-[11px] text-muted">
+                    {String(props[second])}
+                  </span>
+                )}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+      {matches.length > shown.length && (
+        <p className="text-[11px] text-faint">
+          {needle.trim()
+            ? `${matches.length.toLocaleString()} match; showing the first ${RECORD_LIMIT}.`
+            : `Showing the first ${RECORD_LIMIT} of ${features.length.toLocaleString()}. Search to narrow.`}
+        </p>
+      )}
+      {needle.trim() && matches.length === 0 && (
+        <p className="text-[11px] text-faint">Nothing in this layer matches.</p>
+      )}
+    </div>
+  )
+}
+
 /** The columns worth handing to someone else, in the order they read. */
 const CSV_COLUMNS: [string, string][] = [
   ['gid', 'Parcel'],
@@ -400,6 +560,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
   /** Which field, if any, each layer is coloured by. '' means one colour. */
   const [layerColorBy, setLayerColorBy] = useState<Record<string, string>>({})
+  /**
+   * The record chosen from a layer's list, and where the map should look.
+   *
+   * Two pieces of state rather than one because they change for different
+   * reasons: the pick decides what the panel shows and stays put while the
+   * map is panned, and the view carries a key so that choosing the same
+   * record twice flies there again rather than being deduplicated away.
+   */
+  const [layerPick, setLayerPick] = useState<{ layer: string; index: number } | null>(null)
+  const [layerView, setLayerView] = useState<{ center: [number, number]; zoom: number; key: number } | null>(null)
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -1232,7 +1402,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 }
               : null
           }
-          view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
+          // A record chosen in the panel takes the camera; otherwise the
+          // market's own centre does, keyed on the slug so switching county
+          // reframes and panning around within one does not.
+          view={layerView ?? { center: meta.center, zoom: meta.zoom, key: active ?? '' }}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
           extras={extras}
@@ -1492,6 +1665,35 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                     {layer.attribution && (
                       <p className="text-[11px] text-faint">Source: {layer.attribution}</p>
                     )}
+
+                    {/* What the layer holds, not only how it is painted.
+                        Everything above this line describes the drawing;
+                        switching a layer on ought to hand over the records
+                        as well, because a hundred and eight city lots with
+                        asking prices are a list somebody wants to read. */}
+                    {layerData[layer.id]?.features?.length ? (
+                      <LayerRecords
+                        features={layerData[layer.id].features}
+                        fields={
+                          layer.fields?.length
+                            ? layer.fields
+                            : Object.keys(layerData[layer.id].features[0]?.properties ?? {})
+                        }
+                        picked={layerPick?.layer === layer.id ? layerPick.index : null}
+                        onPick={(index, centre) => {
+                          setLayerPick(index == null ? null : { layer: layer.id, index })
+                          if (centre) {
+                            setLayerView({
+                              center: centre,
+                              // Close enough to read the building, wide
+                              // enough to see what it sits next to.
+                              zoom: 16.5,
+                              key: Date.now(),
+                            })
+                          }
+                        }}
+                      />
+                    ) : null}
                   </div>
                 )
               })}
