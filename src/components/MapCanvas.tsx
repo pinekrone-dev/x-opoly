@@ -179,10 +179,13 @@ function homeView(): { center: LngLat; zoom: number } {
     const raw = window.localStorage.getItem(HOME_STORAGE_KEY)
     if (raw) {
       const parsed = JSON.parse(raw)
+      // Range-checked, not just finite: a stored latitude of 120 from some
+      // earlier build makes the map constructor throw, and a map that throws
+      // before it draws is a blank rectangle with no explanation.
       if (
-        Number.isFinite(parsed?.lat) &&
-        Number.isFinite(parsed?.lng) &&
-        Number.isFinite(parsed?.zoom)
+        Number.isFinite(parsed?.lat) && Math.abs(parsed.lat) <= 90 &&
+        Number.isFinite(parsed?.lng) && Math.abs(parsed.lng) <= 180 &&
+        Number.isFinite(parsed?.zoom) && parsed.zoom >= 0 && parsed.zoom <= 22
       ) {
         return { center: [parsed.lng, parsed.lat], zoom: parsed.zoom }
       }
@@ -281,6 +284,11 @@ export default function MapCanvas({
   })
   /** Basemaps whose tiles have failed here; never chosen automatically again. */
   const [brokenIds, setBrokenIds] = useState<string[]>([])
+  // Set when the map engine itself cannot start or never finishes starting —
+  // WebGL refused, storage poisoned, anything that would otherwise be a
+  // silent blank rectangle. Rendered as a card with a reset, because the
+  // person looking at it cannot open a console.
+  const [engineNote, setEngineNote] = useState<string | null>(null)
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
@@ -340,10 +348,26 @@ export default function MapCanvas({
   // Create the map once; React never re-renders into this subtree.
   useEffect(() => {
     if (!container.current || map.current) return
+    const host = container.current
 
     const home = homeView()
-    const instance = new maplibregl.Map({
-      container: container.current,
+    let instance: maplibregl.Map
+    try {
+      instance = buildMap()
+    } catch (cause) {
+      // Usually WebGL being unavailable to this tab. Without this catch the
+      // whole view survives — panels, pickers, legends — around a map that
+      // simply is not there, which reads as data missing rather than the
+      // engine failing.
+      setEngineNote(
+        `The map engine could not start${cause instanceof Error && cause.message ? ` — ${cause.message}` : ''}.`,
+      )
+      return
+    }
+
+    function buildMap() {
+      return new maplibregl.Map({
+      container: host,
       style: {
         version: 8,
         sources: { [BASEMAP_SOURCE]: emptySource() as never },
@@ -360,7 +384,8 @@ export default function MapCanvas({
       center: home.center,
       zoom: home.zoom,
       attributionControl: false,
-    })
+      })
+    }
 
     instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left')
     instance.on('click', (event) => clickHandler.current?.(event.lngLat.lat, event.lngLat.lng))
@@ -368,7 +393,16 @@ export default function MapCanvas({
     instance.on('load', () => {
       ready.current = true
       setLoaded(true)
+      setEngineNote(null)
     })
+
+    // A start that hangs is as blank as one that throws. Long enough that a
+    // slow connection never sees it; the note clears itself if load lands.
+    const slowStart = window.setTimeout(() => {
+      if (!ready.current) {
+        setEngineNote('The map is taking unusually long to start. Reloading the page usually fixes it.')
+      }
+    }, 12000)
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
     map.current = instance
@@ -378,6 +412,7 @@ export default function MapCanvas({
     resize.observe(container.current)
 
     return () => {
+      window.clearTimeout(slowStart)
       resize.disconnect()
       popup.current?.remove()
       instance.remove()
@@ -1182,6 +1217,30 @@ export default function MapCanvas({
         * Said out loud rather than silently swapped. A basemap changing under
         * the viewer is confusing; a blank map with no explanation is worse.
         */}
+      {engineNote ? (
+        <div className="absolute inset-0 z-[550] flex items-center justify-center">
+          <div className="w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
+            <p className="text-sm font-semibold text-ink">The map did not start</p>
+            <p className="mt-1 text-xs leading-snug text-body">{engineNote}</p>
+            <button
+              type="button"
+              className="mt-3 rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
+              onClick={() => {
+                try {
+                  window.localStorage.removeItem(HOME_STORAGE_KEY)
+                  window.localStorage.removeItem(BASEMAP_STORAGE_KEY)
+                } catch {
+                  /* storage may be blocked; the reload alone can still help */
+                }
+                window.location.reload()
+              }}
+            >
+              Reset map settings and reload
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {basemapNote || parcelNote ? (
         <div
           role="status"
