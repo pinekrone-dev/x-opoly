@@ -23,7 +23,13 @@ import type { Deal, Place, TileConfig } from '../types'
  * enough that the map has to be told how to colour itself.
  */
 
-const CATALOG_DEFAULT = 'https://prospector.realestateaistudio.com'
+/*
+ * The catalog lives on R2 with the heavy data, published by the pipeline
+ * through the ingest door the moment a build finishes. Reading it from the
+ * same place means a new county appears here with no site deploy between
+ * the pipeline and the customer.
+ */
+const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
 
 /*
  * Both hosts are overridable so the map can be looked at from a sandbox that
