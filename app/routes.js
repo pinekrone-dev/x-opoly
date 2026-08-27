@@ -85,7 +85,7 @@ import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
-import { runScout } from './lib/scout.js'
+import { heuristicScout, runScout } from './lib/scout.js'
 import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
@@ -1524,7 +1524,7 @@ export function createApp({ db, storage, env = {} }) {
    * without a key the heuristic answers and says so.
    */
   app.post('/api/gis/scout', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'scout', 120, 10 * 60 * 1000)
     if (throttled) return throttled
 
     const body = await c.req.json().catch(() => ({}))
@@ -1536,6 +1536,23 @@ export function createApp({ db, storage, env = {} }) {
         : [],
       valueLabel: typeof body?.valueLabel === 'string' ? body.valueLabel.slice(0, 60) : 'Value',
     }
+
+    /*
+     * Rules first, the model only as a fallback.
+     *
+     * Most hunts are formulaic — a type, a floor, a ceiling — and the rule
+     * parser reads those for free. A model call happens only when the rules
+     * come back empty-handed, behind its own tighter limit, so the common
+     * case costs nothing and the AI budget goes to the sentences that
+     * actually need comprehension.
+     */
+    const ruled = heuristicScout(prompt, vocab)
+    if (!ruled.empty) {
+      return c.json({ ...ruled, explanation: null, source: 'rules', provider: null, model: null })
+    }
+
+    const aiThrottled = limited(c, 'scout-ai', 10, 10 * 60 * 1000)
+    if (aiThrottled) return aiThrottled
 
     try {
       return c.json(await runScout(prompt, vocab, resolveProvider(env), env))

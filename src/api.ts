@@ -153,7 +153,7 @@ export const api = {
       }
       empty: boolean
       explanation: string | null
-      source: 'ai' | 'heuristic'
+      source: 'ai' | 'heuristic' | 'rules'
       provider: string | null
       model: string | null
     }>('/api/gis/scout', json(input)),
