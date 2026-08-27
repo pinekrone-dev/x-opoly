@@ -1,4 +1,4 @@
-@import 'leaflet/dist/leaflet.css';
+@import 'maplibre-gl/dist/maplibre-gl.css';
 
 @tailwind base;
 @tailwind components;
@@ -124,7 +124,7 @@
  * The ground matches the basemap in use, so a light street map does not flash
  * a dark panel behind its tiles while they load.
  */
-.leaflet-container {
+.maplibregl-map {
   background-color: #eceff3;
   background-image:
     linear-gradient(rgba(100, 116, 139, 0.1) 1px, transparent 1px),
@@ -133,7 +133,7 @@
   font-family: inherit;
 }
 
-.map-dark .leaflet-container {
+.map-dark .maplibregl-map {
   background-color: #0f1620;
   background-image:
     linear-gradient(rgba(148, 163, 184, 0.07) 1px, transparent 1px),
@@ -146,42 +146,42 @@
  * the basemap that has to stay readable. Pick a dark-native basemap instead.
  */
 
-.leaflet-control-zoom a {
+.maplibregl-ctrl-group button {
   background-color: #ffffff !important;
   color: #334155 !important;
   border-color: rgba(15, 23, 42, 0.12) !important;
 }
 
-.leaflet-control-zoom a:hover {
+.maplibregl-ctrl-group button:hover {
   background-color: #f1f5f9 !important;
 }
 
-.map-dark .leaflet-control-zoom a {
+.map-dark .maplibregl-ctrl-group button {
   background-color: #161d27 !important;
   color: #cbd5e1 !important;
   border-color: rgba(255, 255, 255, 0.1) !important;
 }
 
-.map-dark .leaflet-control-zoom a:hover {
+.map-dark .maplibregl-ctrl-group button:hover {
   background-color: #1f2833 !important;
 }
 
-.leaflet-control-attribution {
+.maplibregl-ctrl-attrib {
   background: rgba(255, 255, 255, 0.85) !important;
   color: #475569 !important;
   font-size: 10px !important;
 }
 
-.leaflet-control-attribution a {
+.maplibregl-ctrl-attrib a {
   color: #334155 !important;
 }
 
-.map-dark .leaflet-control-attribution {
+.map-dark .maplibregl-ctrl-attrib {
   background: rgba(13, 17, 23, 0.85) !important;
   color: #64748b !important;
 }
 
-.map-dark .leaflet-control-attribution a {
+.map-dark .maplibregl-ctrl-attrib a {
   color: #94a3b8 !important;
 }
 
@@ -314,4 +314,48 @@
   img {
     break-inside: avoid;
   }
+}
+
+/*
+ * MapLibre marker and popup chrome.
+ *
+ * Leaflet styled its own tooltips; MapLibre's popup is a different element
+ * with a tip that has to be coloured separately or it renders as a white
+ * arrow on a dark card. The pin markup itself is unchanged — it is ours, not
+ * the library's — so everything above still applies.
+ */
+.maplibregl-marker {
+  cursor: pointer;
+}
+
+.maplibregl-popup-content {
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #0f172a;
+  background: #ffffff;
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.18);
+}
+
+.maplibregl-popup-tip {
+  border-top-color: #ffffff;
+  border-bottom-color: #ffffff;
+}
+
+.map-dark .maplibregl-popup-content {
+  color: #e2e8f0;
+  background: #161d27;
+}
+
+.map-dark .maplibregl-popup-tip {
+  border-top-color: #161d27;
+  border-bottom-color: #161d27;
+}
+
+/* The zone label sits at the centre of its circle and must not swallow the
+   clicks meant for the map underneath it. */
+.zone-label,
+.site-label {
+  pointer-events: none;
 }

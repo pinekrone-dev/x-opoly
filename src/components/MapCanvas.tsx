@@ -1,11 +1,45 @@
 import { useEffect, useRef, useState } from 'react'
-import L from 'leaflet'
+import maplibregl from 'maplibre-gl'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
-import { METERS_PER_MILE } from '../lib/geo'
+import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 
-/** Leaflet pane for census shading: below zones (400) and pins (600). */
-const SHADING_PANE = 'lq-shading'
+/*
+ * The map engine.
+ *
+ * This was Leaflet. It is MapLibre because the GIS layer draws county parcel
+ * data — tens of thousands of polygons in a view — and Leaflet puts every
+ * shape in the DOM, which stops being viable in the low thousands. MapLibre
+ * draws on the GPU from vector tiles, so the same component carries a survey's
+ * dozen pins and a county's sixty thousand parcels.
+ *
+ * The props are unchanged from the Leaflet version on purpose: they never
+ * named a map library, so SurveyWorkspace, ShareView and TourBook did not have
+ * to be touched. Behaviour is ported as it was, deliberately including the
+ * hover tooltips, so that a porting bug and an intended change can be told
+ * apart. Click-to-open is a separate commit.
+ */
+
+const BASEMAP_SOURCE = 'basemap'
+const BASEMAP_LAYER = 'basemap'
+
+/*
+ * Draw order, bottom to top. Leaflet expressed this with panes and z-indexes
+ * and still had ties it could not settle — zones and census shading both asked
+ * to be at the back, and whichever effect ran last won. Here the order is a
+ * list: a layer is always inserted before the first one below it that exists,
+ * so the result does not depend on which effect happened to run.
+ */
+const OVERLAY_ORDER = [
+  'shading-fill',
+  'shading-line',
+  'zone-fill',
+  'zone-line',
+  'ring-fill',
+  'ring-line',
+  'route-line',
+  'competitor-circle',
+] as const
 
 interface Props {
   tiles: TileConfig
@@ -49,9 +83,13 @@ interface Props {
   className?: string
 }
 
-const FALLBACK_CENTER: [number, number] = [30.2672, -97.7431]
+/** MapLibre takes [lng, lat]; everything above this line speaks [lat, lng]. */
+type LngLat = [number, number]
+
+const FALLBACK_CENTER: LngLat = [-97.7431, 30.2672]
 
 const HOME_STORAGE_KEY = 'sitesurvey.home'
+const BASEMAP_STORAGE_KEY = 'sitesurvey.basemap'
 
 /**
  * The broker's home market: wherever they last left the map.
@@ -61,7 +99,7 @@ const HOME_STORAGE_KEY = 'sitesurvey.home'
  * not in Austin. Remembering the last view means the second survey opens
  * where the broker actually works, with nothing to configure.
  */
-function homeView(): { center: [number, number]; zoom: number } {
+function homeView(): { center: LngLat; zoom: number } {
   try {
     const raw = window.localStorage.getItem(HOME_STORAGE_KEY)
     if (raw) {
@@ -71,7 +109,7 @@ function homeView(): { center: [number, number]; zoom: number } {
         Number.isFinite(parsed?.lng) &&
         Number.isFinite(parsed?.zoom)
       ) {
-        return { center: [parsed.lat, parsed.lng], zoom: parsed.zoom }
+        return { center: [parsed.lng, parsed.lat], zoom: parsed.zoom }
       }
     }
   } catch {
@@ -80,7 +118,7 @@ function homeView(): { center: [number, number]; zoom: number } {
   return { center: FALLBACK_CENTER, zoom: 11 }
 }
 
-function rememberView(instance: L.Map) {
+function rememberView(instance: maplibregl.Map) {
   try {
     const center = instance.getCenter()
     window.localStorage.setItem(
@@ -92,37 +130,51 @@ function rememberView(instance: L.Map) {
   }
 }
 
-function pinIcon(
-  property: Property,
-  index: number | null,
-  selected: boolean,
-  stageColor?: string | null,
-): L.DivIcon {
-  // The survey's own pipeline colours the pin, so map, sidebar and dropdown
-  // all say the same thing; the legacy palette only covers a stage-less site.
-  const color = stageColor ?? STAGE_META[property.stage]?.color ?? STAGE_META.prospect.color
-  const label = index == null ? '' : String(index + 1)
-  // A site hidden from the client link stays on the broker's map, dimmed —
-  // visible enough to manage, distinct enough that its state is never a guess.
-  const dimmed = property.hidden ? 'opacity:0.45;' : ''
-  return L.divIcon({
-    className: `site-pin${selected ? ' site-pin--selected' : ''}`,
-    html: `<div class="site-pin__body" style="background:${color};${dimmed}"><span class="site-pin__label">${label}</span></div>`,
-    iconSize: [30, 30],
-    iconAnchor: [15, 28],
-    popupAnchor: [0, -26],
-  })
-}
-
-const BASEMAP_STORAGE_KEY = 'sitesurvey.basemap'
-
-/** Remembers the viewer's basemap choice across sessions. */
 function storedBasemap(): string | null {
   try {
     return window.localStorage.getItem(BASEMAP_STORAGE_KEY)
   } catch {
     return null
   }
+}
+
+/** The element a pin is made of. Same markup and classes Leaflet's divIcon
+ *  produced, so index.css keeps styling it. */
+function pinElement(
+  property: Property,
+  index: number | null,
+  selected: boolean,
+  stageColor?: string | null,
+): HTMLDivElement {
+  // The survey's own pipeline colours the pin, so map, sidebar and dropdown
+  // all say the same thing; the legacy palette only covers a stage-less site.
+  const color = stageColor ?? STAGE_META[property.stage]?.color ?? STAGE_META.prospect.color
+  const label = index == null ? '' : String(index + 1)
+  const wrap = document.createElement('div')
+  wrap.className = `site-pin${selected ? ' site-pin--selected' : ''}`
+  const body = document.createElement('div')
+  body.className = 'site-pin__body'
+  body.style.background = color
+  // A site hidden from the client link stays on the broker's map, dimmed —
+  // visible enough to manage, distinct enough that its state is never a guess.
+  if (property.hidden) body.style.opacity = '0.45'
+  const span = document.createElement('span')
+  span.className = 'site-pin__label'
+  span.textContent = label
+  body.appendChild(span)
+  wrap.appendChild(body)
+  return wrap
+}
+
+function labelElement(text: string, className: string): HTMLDivElement {
+  const el = document.createElement('div')
+  el.className = className
+  el.textContent = text
+  return el
+}
+
+function emptySource(): maplibregl.GeoJSONSourceSpecification {
+  return { type: 'geojson', data: { type: 'FeatureCollection', features: [] } }
 }
 
 export default function MapCanvas({
@@ -147,81 +199,169 @@ export default function MapCanvas({
   className = 'h-full w-full',
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
-  const map = useRef<L.Map | null>(null)
-  const tileLayer = useRef<L.TileLayer | null>(null)
+  const map = useRef<maplibregl.Map | null>(null)
+  const ready = useRef(false)
+  const [loaded, setLoaded] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [activeId, setActiveId] = useState(() => storedBasemap() || tiles.provider)
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = options?.find((entry) => entry.provider === activeId) || tiles
-  const markers = useRef<Map<string, L.Marker>>(new Map())
-  const route = useRef<L.Polyline | null>(null)
-  const shading = useRef<L.LayerGroup | null>(null)
-  const ringLayer = useRef<L.LayerGroup | null>(null)
-  const anchorLayer = useRef<L.LayerGroup | null>(null)
-  const zoneLayer = useRef<L.LayerGroup | null>(null)
-  const competitorLayer = useRef<L.LayerGroup | null>(null)
+
+  const markers = useRef<Map<string, maplibregl.Marker>>(new Map())
+  const labels = useRef<Map<string, maplibregl.Marker>>(new Map())
+  const anchorMarkers = useRef<maplibregl.Marker[]>([])
+  const zoneLabels = useRef<maplibregl.Marker[]>([])
+  const popup = useRef<maplibregl.Popup | null>(null)
+  const attribution = useRef<maplibregl.AttributionControl | null>(null)
+
   const clickHandler = useRef(onMapClick)
   const selectHandler = useRef(onSelect)
-
   clickHandler.current = onMapClick
   selectHandler.current = onSelect
+
+  /** Where a new overlay layer belongs, so draw order never depends on the
+   *  order the effects happened to run in. */
+  const insertBefore = (id: string): string | undefined => {
+    const instance = map.current
+    if (!instance) return undefined
+    const at = OVERLAY_ORDER.indexOf(id as (typeof OVERLAY_ORDER)[number])
+    if (at < 0) return undefined
+    for (let i = at + 1; i < OVERLAY_ORDER.length; i += 1) {
+      if (instance.getLayer(OVERLAY_ORDER[i])) return OVERLAY_ORDER[i]
+    }
+    return undefined
+  }
+
+  /** Creates a source and its layers once, then only swaps the data. */
+  const upsert = (
+    source: string,
+    data: GeoJSON.FeatureCollection,
+    layers: maplibregl.LayerSpecification[],
+  ) => {
+    const instance = map.current
+    if (!instance || !ready.current) return
+    const existing = instance.getSource(source) as maplibregl.GeoJSONSource | undefined
+    if (existing) {
+      existing.setData(data)
+      return
+    }
+    instance.addSource(source, { type: 'geojson', data })
+    for (const layer of layers) instance.addLayer(layer, insertBefore(layer.id))
+  }
+
+  const clear = (source: string) => {
+    const instance = map.current
+    if (!instance || !ready.current) return
+    const existing = instance.getSource(source) as maplibregl.GeoJSONSource | undefined
+    if (existing) existing.setData({ type: 'FeatureCollection', features: [] })
+  }
 
   // Create the map once; React never re-renders into this subtree.
   useEffect(() => {
     if (!container.current || map.current) return
 
     const home = homeView()
-    const instance = L.map(container.current, { zoomControl: true, attributionControl: true }).setView(home.center, home.zoom)
+    const instance = new maplibregl.Map({
+      container: container.current,
+      style: {
+        version: 8,
+        sources: { [BASEMAP_SOURCE]: emptySource() as never },
+        // No `glyphs` key at all. The style spec validates it as a string, so
+        // an explicit `undefined` is rejected outright and the map never
+        // finishes loading — which looks like a blank map, not a config error.
+        // Nothing here draws map text: every label is a DOM marker.
+        // Transparent, so the container's own CSS shows through. That CSS
+        // draws the neutral grid used when no basemap is configured, and it
+        // has a dark variant — painting an opaque colour here would cover
+        // both and leave a flat grey rectangle instead.
+        layers: [{ id: 'canvas', type: 'background', paint: { 'background-opacity': 0 } }],
+      },
+      center: home.center,
+      zoom: home.zoom,
+      attributionControl: false,
+    })
 
-    /*
-     * Census shading gets a pane of its own, below Leaflet's overlay pane
-     * (400) and marker pane (600). Ordering by `bringToBack` alone could not
-     * settle this: zones and shading both asked to be at the back, so
-     * whichever effect ran last won and the infill sometimes covered the
-     * boundaries and pins it is meant to sit behind.
-     */
-    instance.createPane(SHADING_PANE)
-    const shadingPane = instance.getPane(SHADING_PANE)
-    if (shadingPane) shadingPane.style.zIndex = '350'
-
-    instance.on('click', (event: L.LeafletMouseEvent) => clickHandler.current?.(event.latlng.lat, event.latlng.lng))
+    instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left')
+    instance.on('click', (event) => clickHandler.current?.(event.lngLat.lat, event.lngLat.lng))
     instance.on('moveend', () => rememberView(instance))
+    instance.on('load', () => {
+      ready.current = true
+      setLoaded(true)
+    })
+
+    popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
     map.current = instance
 
     // The container is often sized by a flex parent that settles after mount.
-    const resize = new ResizeObserver(() => instance.invalidateSize())
+    const resize = new ResizeObserver(() => instance.resize())
     resize.observe(container.current)
 
     return () => {
       resize.disconnect()
+      popup.current?.remove()
       instance.remove()
       map.current = null
-      tileLayer.current = null
+      ready.current = false
       markers.current.clear()
+      labels.current.clear()
     }
   }, [])
 
-  // The basemap is its own layer so it can be swapped without tearing down the
-  // map, which would drop every pin and reset the viewport.
+  // The basemap is its own source and layer so it can be swapped without
+  // tearing down the map, which would drop every pin and reset the viewport.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    tileLayer.current?.remove()
-    tileLayer.current = L.tileLayer(active.url, {
+    if (instance.getLayer(BASEMAP_LAYER)) instance.removeLayer(BASEMAP_LAYER)
+    if (instance.getSource(BASEMAP_SOURCE)) instance.removeSource(BASEMAP_SOURCE)
+
+    const maxzoom = active.maxZoom || 19
+    instance.setMaxZoom(maxzoom)
+
+    /*
+     * The offline placeholder is an SVG per tile, and a raster source cannot
+     * decode SVG — Leaflet could, because it put tiles in <img> elements.
+     * Rather than fake a basemap, draw none: the transparent background layer
+     * lets the container's grid CSS through, which is what "no basemap
+     * configured" is supposed to look like anyway.
+     */
+    if (active.placeholder) {
+      if (attribution.current) instance.removeControl(attribution.current)
+      attribution.current = new maplibregl.AttributionControl({
+        compact: true,
+        customAttribution: active.attribution,
+      })
+      instance.addControl(attribution.current, 'bottom-right')
+      return
+    }
+
+    instance.addSource(BASEMAP_SOURCE, {
+      type: 'raster',
+      tiles: tileUrls(active.url),
+      tileSize: 256,
+      maxzoom,
       attribution: active.attribution,
-      maxZoom: active.maxZoom || 19,
-      subdomains: active.url.includes('{s}') ? ['a', 'b', 'c'] : [],
-      // Keep the basemap beneath the rings, routes and pins.
-      zIndex: 1,
-    }).addTo(instance)
-  }, [active.url, active.attribution, active.maxZoom])
+    })
+    // Above the empty canvas, below everything else.
+    const first = OVERLAY_ORDER.find((id) => instance.getLayer(id))
+    instance.addLayer({ id: BASEMAP_LAYER, type: 'raster', source: BASEMAP_SOURCE }, first)
+
+    // Attribution is a control rather than a source property so the credit
+    // updates when the basemap does; the licences require it stay visible.
+    if (attribution.current) instance.removeControl(attribution.current)
+    attribution.current = new maplibregl.AttributionControl({
+      compact: true,
+      customAttribution: active.attribution,
+    })
+    instance.addControl(attribution.current, 'bottom-right')
+  }, [loaded, active.url, active.attribution, active.maxZoom])
 
   // Sync pins with the property list.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
     const order = routeIds ?? []
     const wanted = new Set<string>()
@@ -244,43 +384,61 @@ export default function MapCanvas({
       const stacked = seenAt.get(key) ?? 0
       seenAt.set(key, stacked + 1)
 
-      let position: [number, number] = [property.lat, property.lng]
+      let position: LngLat = [property.lng, property.lat]
       if (stacked > 0) {
         const angle = (stacked - 1) * (Math.PI / 3)
         const step = 0.00035 * Math.ceil(stacked / 6)
-        position = [property.lat + step * Math.cos(angle), property.lng + step * Math.sin(angle)]
+        position = [property.lng + step * Math.sin(angle), property.lat + step * Math.cos(angle)]
       }
       const routeIndex = order.indexOf(property.id)
       const stageColor = property.stageId
         ? stages?.find((stage) => stage.id === property.stageId)?.color ?? null
         : null
-      const icon = pinIcon(property, routeIndex >= 0 ? routeIndex : null, property.id === selectedId, stageColor)
+      const element = pinElement(
+        property,
+        routeIndex >= 0 ? routeIndex : null,
+        property.id === selectedId,
+        stageColor,
+      )
+      element.title = displayName(property)
 
-      let marker = markers.current.get(property.id)
-      if (marker) {
-        marker.setLatLng(position)
-        marker.setIcon(icon)
-      } else {
-        marker = L.marker(position, { icon, title: displayName(property) }).addTo(instance)
-        marker.on('click', () => selectHandler.current?.(property.id))
-        markers.current.set(property.id, marker)
+      // The pin's own click must not also reach the map, or dropping a site
+      // by clicking the map would fire every time one is selected.
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        selectHandler.current?.(property.id)
+      })
+
+      if (!labelPins) {
+        element.addEventListener('mouseenter', () => {
+          popup.current
+            ?.setLngLat(position)
+            .setHTML(`<strong>${displayName(property)}</strong><br>${fullAddress(property)}`)
+            .addTo(instance)
+        })
+        element.addEventListener('mouseleave', () => popup.current?.remove())
       }
 
+      markers.current.get(property.id)?.remove()
+      const marker = new maplibregl.Marker({ element, anchor: 'bottom' })
+        .setLngLat(position)
+        .addTo(instance)
+      markers.current.set(property.id, marker)
+
+      // The name rides the pin permanently on the client share map: a client
+      // reading it should never have to hover or tap to learn which site is
+      // which.
+      labels.current.get(property.id)?.remove()
+      labels.current.delete(property.id)
       if (labelPins) {
-        // The name rides the pin permanently: a client reading the shared
-        // map should never have to hover or tap to learn which site is which.
-        marker.unbindTooltip()
-        marker.bindTooltip(displayName(property), {
-          permanent: true,
-          direction: 'top',
-          offset: [0, -26],
-          className: 'site-label',
+        const label = new maplibregl.Marker({
+          element: labelElement(displayName(property), 'site-label'),
+          anchor: 'bottom',
+          offset: [0, -32],
         })
-      } else {
-        marker.bindTooltip(
-          `<strong>${displayName(property)}</strong><br>${fullAddress(property)}`,
-          { direction: 'top', offset: [0, -24], className: 'site-tooltip' },
-        )
+          .setLngLat(position)
+          .addTo(instance)
+        labels.current.set(property.id, label)
       }
     }
 
@@ -288,9 +446,11 @@ export default function MapCanvas({
       if (!wanted.has(id)) {
         marker.remove()
         markers.current.delete(id)
+        labels.current.get(id)?.remove()
+        labels.current.delete(id)
       }
     }
-  }, [properties, selectedId, routeIds, stages, labelPins])
+  }, [loaded, properties, selectedId, routeIds, stages, labelPins])
 
   useEffect(() => {
     const instance = map.current
@@ -310,223 +470,339 @@ export default function MapCanvas({
   // Draw the tour line.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    route.current?.remove()
-    route.current = null
-    if (!routeIds || routeIds.length < 2) return
+    if (!routeIds || routeIds.length < 2) {
+      clear('route')
+      return
+    }
 
-    // A real routed path is solid, because it is what the drive looks like.
-    // The pin-to-pin fallback stays dashed, so an estimate never reads as a
-    // road that exists.
-    const routed = routeGeometry && routeGeometry.length >= 2
-    const points = routed
-      ? routeGeometry
+    const routed = Boolean(routeGeometry && routeGeometry.length >= 2)
+    const points: LngLat[] = routed
+      ? (routeGeometry as [number, number][]).map(([lat, lng]) => [lng, lat])
       : routeIds
           .map((id) => properties.find((property) => property.id === id))
           .filter((property): property is Property => Boolean(property?.lat && property?.lng))
-          .map((property) => [property.lat as number, property.lng as number] as [number, number])
+          .map((property) => [property.lng as number, property.lat as number])
 
-    if (points.length >= 2) {
-      route.current = L.polyline(points, {
-        color: routeColor,
-        weight: routed ? 5 : 4,
-        opacity: 0.9,
-        dashArray: routed ? undefined : '8 8',
-      }).addTo(instance)
+    if (points.length < 2) {
+      clear('route')
+      return
     }
-  }, [routeIds, routeGeometry, properties, routeColor])
+
+    upsert(
+      'route',
+      {
+        type: 'FeatureCollection',
+        features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: points } }],
+      },
+      [
+        {
+          id: 'route-line',
+          type: 'line',
+          source: 'route',
+          layout: { 'line-cap': 'round', 'line-join': 'round' },
+          paint: { 'line-color': routeColor, 'line-width': 4, 'line-opacity': 0.9 },
+        },
+      ],
+    )
+
+    /*
+     * Paint is set after the layer, every time, not only when it is created.
+     * `upsert` builds a layer once and thereafter only swaps its data, so a
+     * dash chosen at creation would be permanent — a tour that later got real
+     * routed geometry would keep drawing the estimate's dashes, and one that
+     * lost routing would keep claiming a road that was no longer being
+     * followed.
+     */
+    if (instance.getLayer('route-line')) {
+      instance.setPaintProperty('route-line', 'line-color', routeColor)
+      instance.setPaintProperty('route-line', 'line-width', routed ? 5 : 4)
+      // A real routed path is solid, because it is what the drive looks like.
+      // The pin-to-pin fallback stays dashed, so an estimate never reads as a
+      // road that exists.
+      instance.setPaintProperty('route-line', 'line-dasharray', routed ? null : [2, 2])
+    }
+  }, [loaded, routeIds, routeGeometry, properties, routeColor])
 
   // Shade census block groups by whichever metric is selected.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    shading.current?.remove()
-    shading.current = null
-    if (!choropleth || choropleth.length === 0) return
+    if (!choropleth || choropleth.length === 0) {
+      clear('shading')
+      return
+    }
 
-    const group = L.layerGroup()
+    const features: GeoJSON.Feature[] = []
     for (const area of choropleth) {
       if (!area.geometry || !area.color) continue
-      const shape = L.geoJSON(area.geometry as never, {
-        pane: SHADING_PANE,
-        style: {
-          color: area.color,
-          weight: 1,
-          opacity: 0.6,
-          fillColor: area.color,
+      features.push({
+        type: 'Feature',
+        properties: { color: area.color, info: area.info ?? '' },
+        geometry: area.geometry as GeoJSON.Geometry,
+      })
+    }
+
+    upsert('shading', { type: 'FeatureCollection', features }, [
+      {
+        id: 'shading-fill',
+        type: 'fill',
+        source: 'shading',
+        paint: {
+          'fill-color': ['get', 'color'],
           // Kept translucent so the streets underneath stay legible — the
           // shading is context for the map, not a replacement for it.
-          fillOpacity: 0.45,
+          'fill-opacity': 0.45,
         },
-        // Tappable when it has something to say — but never while a map
-        // click is armed for dropping a pin or placing a zone, when the
-        // click must fall through to the map itself.
-        interactive: Boolean(area.info) && !onMapClick,
-      })
-      if (area.info && !onMapClick) {
-        shape.bindPopup(area.info, { closeButton: true, maxWidth: 240 })
-      }
-      shape.addTo(group)
-    }
-    group.addTo(instance)
-    shading.current = group
-  }, [choropleth, onMapClick])
+      },
+      {
+        id: 'shading-line',
+        type: 'line',
+        source: 'shading',
+        paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.6 },
+      },
+    ])
+  }, [loaded, choropleth])
 
+  // A tract says what it is worth saying — but never while a map click is
+  // armed for dropping a pin or placing a zone, when the click must fall
+  // through to the map itself.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return undefined
+    if (onMapClick) return undefined
+
+    const open = (event: maplibregl.MapLayerMouseEvent) => {
+      const info = event.features?.[0]?.properties?.info
+      if (!info) return
+      new maplibregl.Popup({ closeButton: true, maxWidth: '240px' })
+        .setLngLat(event.lngLat)
+        .setHTML(String(info))
+        .addTo(instance)
+    }
+    instance.on('click', 'shading-fill', open)
+    return () => {
+      instance.off('click', 'shading-fill', open)
+    }
+  }, [loaded, onMapClick, choropleth])
 
   // Start and end flags for the tour.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    anchorLayer.current?.remove()
-    anchorLayer.current = null
+    for (const marker of anchorMarkers.current) marker.remove()
+    anchorMarkers.current = []
     if (!anchors || (!anchors.start && !anchors.end)) return
 
-    const group = L.layerGroup()
     const flag = (point: { lat: number; lng: number; label?: string }, kind: 'start' | 'end') => {
-      const marker = L.marker([point.lat, point.lng], {
-        icon: L.divIcon({
-          className: 'anchor-pin',
-          html: `<div class="anchor-pin__body anchor-pin__body--${kind}">${kind === 'start' ? 'A' : 'B'}</div>`,
-          iconSize: [22, 22],
-          iconAnchor: [11, 11],
-        }),
-        interactive: Boolean(point.label),
-        zIndexOffset: 500,
-      })
-      if (point.label) {
-        marker.bindTooltip(`${kind === 'start' ? 'Start' : 'End'}: ${point.label}`, {
-          direction: 'top',
-          offset: [0, -12],
-          className: 'site-tooltip',
-        })
-      }
-      marker.addTo(group)
+      const el = document.createElement('div')
+      el.className = 'anchor-pin'
+      const body = document.createElement('div')
+      body.className = `anchor-pin__body anchor-pin__body--${kind}`
+      body.textContent = kind === 'start' ? 'A' : 'B'
+      el.appendChild(body)
+      if (point.label) el.title = `${kind === 'start' ? 'Start' : 'End'}: ${point.label}`
+      anchorMarkers.current.push(
+        new maplibregl.Marker({ element: el }).setLngLat([point.lng, point.lat]).addTo(instance),
+      )
     }
     if (anchors.start) flag(anchors.start, 'start')
     if (anchors.end) flag(anchors.end, 'end')
-    group.addTo(instance)
-    anchorLayer.current = group
-  }, [anchors])
-
+  }, [loaded, anchors])
 
   // Non-compete circles and other labelled zones.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    zoneLayer.current?.remove()
-    zoneLayer.current = null
-    if (!zones || zones.length === 0) return
+    for (const marker of zoneLabels.current) marker.remove()
+    zoneLabels.current = []
 
-    const group = L.layerGroup()
-    for (const zone of zones) {
-      const circle = L.circle([zone.lat, zone.lng], {
-        radius: zone.radiusMiles * METERS_PER_MILE,
-        color: zone.color,
-        weight: 2,
-        dashArray: '6 4',
-        fillColor: zone.color,
-        fillOpacity: 0.08,
-        interactive: true,
-      })
-      // The label rides on the circle itself, always visible: an unlabelled
-      // dashed ring reads as a bug, a labelled one reads as a boundary.
-      circle.bindTooltip(`${zone.label} · ${zone.radiusMiles} mi`, {
-        permanent: true,
-        direction: 'center',
-        className: 'zone-label',
-      })
-      circle.addTo(group)
+    if (!zones || zones.length === 0) {
+      clear('zones')
+      return
     }
-    group.addTo(instance)
-    group.eachLayer((layer) => {
-      if ('bringToBack' in layer) (layer as L.Circle).bringToBack()
-    })
-    zoneLayer.current = group
-  }, [zones])
 
-  // Radius rings around the site being scoped.
+    const features: GeoJSON.Feature[] = zones.map((zone) => ({
+      type: 'Feature',
+      properties: { color: zone.color },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [circlePolygon(zone.lat, zone.lng, zone.radiusMiles * METERS_PER_MILE)],
+      },
+    }))
+
+    upsert('zones', { type: 'FeatureCollection', features }, [
+      {
+        id: 'zone-fill',
+        type: 'fill',
+        source: 'zones',
+        paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.08 },
+      },
+      {
+        id: 'zone-line',
+        type: 'line',
+        source: 'zones',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 2,
+          'line-dasharray': [3, 2],
+        },
+      },
+    ])
+
+    // The label rides at the centre of the circle, always visible: an
+    // unlabelled dashed ring reads as a bug, a labelled one reads as a
+    // boundary.
+    for (const zone of zones) {
+      zoneLabels.current.push(
+        new maplibregl.Marker({
+          element: labelElement(`${zone.label} · ${zone.radiusMiles} mi`, 'zone-label'),
+        })
+          .setLngLat([zone.lng, zone.lat])
+          .addTo(instance),
+      )
+    }
+  }, [loaded, zones])
+
+  // Radius rings around the site being scoped. Never interactive: they are
+  // scale, not something to click.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    ringLayer.current?.remove()
-    ringLayer.current = null
-    if (!rings || rings.miles.length === 0) return
-
-    const group = L.layerGroup()
-    // Largest first so the smaller rings draw on top of the bigger fills.
-    for (const miles of [...rings.miles].sort((a, b) => b - a)) {
-      L.circle([rings.lat, rings.lng], {
-        radius: miles * METERS_PER_MILE,
-        color: '#0f766e',
-        weight: 1.6,
-        opacity: 0.75,
-        fillColor: '#14b8a6',
-        fillOpacity: 0.06,
-        dashArray: '5 6',
-        interactive: false,
-      })
-        .bindTooltip(`${miles} mile${miles === 1 ? '' : 's'}`, { permanent: false, direction: 'top' })
-        .addTo(group)
+    if (!rings || rings.miles.length === 0) {
+      clear('rings')
+      return
     }
-    group.addTo(instance)
-    ringLayer.current = group
-  }, [rings])
+
+    // Largest first so the smaller rings draw on top of the bigger fills.
+    const features: GeoJSON.Feature[] = [...rings.miles]
+      .sort((a, b) => b - a)
+      .map((miles) => ({
+        type: 'Feature',
+        properties: { miles },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [circlePolygon(rings.lat, rings.lng, miles * METERS_PER_MILE)],
+        },
+      }))
+
+    upsert('rings', { type: 'FeatureCollection', features }, [
+      {
+        id: 'ring-fill',
+        type: 'fill',
+        source: 'rings',
+        paint: { 'fill-color': '#14b8a6', 'fill-opacity': 0.06 },
+      },
+      {
+        id: 'ring-line',
+        type: 'line',
+        source: 'rings',
+        paint: {
+          'line-color': '#0f766e',
+          'line-width': 1.6,
+          'line-opacity': 0.75,
+          'line-dasharray': [3, 3],
+        },
+      },
+    ])
+  }, [loaded, rings])
 
   // Nearby businesses, drawn smaller than the survey's own pins.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
-    competitorLayer.current?.remove()
-    competitorLayer.current = null
-    if (!competitors || competitors.length === 0) return
-
-    const group = L.layerGroup()
-    for (const business of competitors) {
-      L.circleMarker([business.lat, business.lng], {
-        radius: 5,
-        color: '#0f172a',
-        weight: 1.5,
-        fillColor: '#f97316',
-        fillOpacity: 0.95,
-      })
-        .bindTooltip(`<strong>${business.name}</strong><br>${business.miles} mi away`, { direction: 'top' })
-        .addTo(group)
+    if (!competitors || competitors.length === 0) {
+      clear('competitors')
+      return
     }
-    group.addTo(instance)
-    competitorLayer.current = group
-  }, [competitors])
+
+    upsert(
+      'competitors',
+      {
+        type: 'FeatureCollection',
+        features: competitors.map((business) => ({
+          type: 'Feature',
+          properties: { name: business.name, miles: business.miles },
+          geometry: { type: 'Point', coordinates: [business.lng, business.lat] },
+        })),
+      },
+      [
+        {
+          id: 'competitor-circle',
+          type: 'circle',
+          source: 'competitors',
+          paint: {
+            'circle-radius': 5,
+            'circle-color': '#f97316',
+            'circle-opacity': 0.95,
+            'circle-stroke-color': '#0f172a',
+            'circle-stroke-width': 1.5,
+          },
+        },
+      ],
+    )
+  }, [loaded, competitors])
+
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return undefined
+
+    const enter = (event: maplibregl.MapLayerMouseEvent) => {
+      const props = event.features?.[0]?.properties
+      if (!props) return
+      instance.getCanvas().style.cursor = 'pointer'
+      popup.current
+        ?.setLngLat(event.lngLat)
+        .setHTML(`<strong>${props.name}</strong><br>${props.miles} mi away`)
+        .addTo(instance)
+    }
+    const leave = () => {
+      instance.getCanvas().style.cursor = ''
+      popup.current?.remove()
+    }
+    instance.on('mousemove', 'competitor-circle', enter)
+    instance.on('mouseleave', 'competitor-circle', leave)
+    return () => {
+      instance.off('mousemove', 'competitor-circle', enter)
+      instance.off('mouseleave', 'competitor-circle', leave)
+    }
+  }, [loaded, competitors])
 
   // Fit the view to the pins when the caller asks.
   useEffect(() => {
     const instance = map.current
-    if (!instance) return
+    if (!instance || !loaded) return
 
     const points = properties
       .filter((property) => property.lat != null && property.lng != null)
-      .map((property) => [property.lat as number, property.lng as number] as [number, number])
+      .map((property) => [property.lng as number, property.lat as number] as LngLat)
 
     if (points.length === 0) return
-    // Without animation on purpose: the selected-pin effect below reads
-    // getBounds() right after this, and an animated fit reports the old view
+    // Without animation on purpose: the selected-pin effect below reads the
+    // bounds right after this, and an animated fit reports the old view
     // mid-flight — so the pan "correcting" the selection undid the fit and
     // slid every other pin off the screen.
     if (points.length === 1) {
-      instance.setView(points[0], 14, { animate: false })
+      instance.jumpTo({ center: points[0], zoom: 14 })
       return
     }
-    instance.fitBounds(L.latLngBounds(points), { padding: [48, 48], maxZoom: 15, animate: false })
-  }, [fitKey])
+    const bounds = points.reduce(
+      (box, point) => box.extend(point),
+      new maplibregl.LngLatBounds(points[0], points[0]),
+    )
+    instance.fitBounds(bounds, { padding: 48, maxZoom: 15, animate: false })
+  }, [loaded, fitKey])
 
   // Keep the selected pin in view when it is chosen from a list.
   useEffect(() => {
     const instance = map.current
-    if (!instance || !selectedId) return
+    if (!instance || !loaded || !selectedId) return
     const property = properties.find((entry) => entry.id === selectedId)
     if (property?.lat == null || property?.lng == null) return
 
@@ -534,10 +810,18 @@ export default function MapCanvas({
     // map to every pin and selects the new one; recentring on the selection
     // after that fit slid the other pins off the screen — which read as
     // "my points don't all show on the map".
-    const target = L.latLng(property.lat, property.lng)
-    if (instance.getBounds().pad(-0.05).contains(target)) return
+    const target: LngLat = [property.lng, property.lat]
+    const bounds = instance.getBounds()
+    const padX = (bounds.getEast() - bounds.getWest()) * 0.05
+    const padY = (bounds.getNorth() - bounds.getSouth()) * 0.05
+    const inside =
+      target[0] > bounds.getWest() + padX &&
+      target[0] < bounds.getEast() - padX &&
+      target[1] > bounds.getSouth() + padY &&
+      target[1] < bounds.getNorth() - padY
+    if (inside) return
     instance.panTo(target, { animate: true })
-  }, [selectedId])
+  }, [loaded, selectedId])
 
   const chooseBasemap = (id: string) => {
     setActiveId(id)
