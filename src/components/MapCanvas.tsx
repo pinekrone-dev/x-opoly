@@ -4,6 +4,7 @@ import { Protocol } from 'pmtiles'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
+import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
 
 /*
  * The map engine.
@@ -204,14 +205,6 @@ function rememberView(instance: maplibregl.Map) {
   }
 }
 
-function storedBasemap(): string | null {
-  try {
-    return window.localStorage.getItem(BASEMAP_STORAGE_KEY)
-  } catch {
-    return null
-  }
-}
-
 /** The element a pin is made of. Same markup and classes Leaflet's divIcon
  *  produced, so index.css keeps styling it. */
 function pinElement(
@@ -279,10 +272,19 @@ export default function MapCanvas({
   const ready = useRef(false)
   const [loaded, setLoaded] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
-  const [activeId, setActiveId] = useState(() => storedBasemap() || tiles.provider)
+  const [activeId, setActiveId] = useState(() => {
+    try {
+      return readStoredBasemap(window.localStorage.getItem(BASEMAP_STORAGE_KEY), tiles.provider) || tiles.provider
+    } catch {
+      return tiles.provider
+    }
+  })
+  /** Basemaps whose tiles have failed here; never chosen automatically again. */
+  const [brokenIds, setBrokenIds] = useState<string[]>([])
+  const [basemapNote, setBasemapNote] = useState<string | null>(null)
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
-  const active = options?.find((entry) => entry.provider === activeId) || tiles
+  const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
 
   const markers = useRef<Map<string, maplibregl.Marker>>(new Map())
   const labels = useRef<Map<string, maplibregl.Marker>>(new Map())
@@ -432,7 +434,31 @@ export default function MapCanvas({
       customAttribution: active.attribution,
     })
     instance.addControl(attribution.current, 'bottom-right')
-  }, [loaded, active.url, active.attribution, active.maxZoom])
+
+    /*
+     * A tile host that refuses us must not read as an empty world.
+     *
+     * Nothing was watching this before, so a throttled or blocked basemap
+     * produced a blank grid and no signal at all — not to the viewer, who
+     * cannot tell it from a map with nothing on it, and not to the operator,
+     * who cannot see it from the server. A handful of failures is enough to
+     * call it: tiles that fail arrive in bursts, and a single miss at the
+     * edge of a pan is normal.
+     */
+    let failures = 0
+    const failed = (event: { sourceId?: string }) => {
+      if (event.sourceId !== BASEMAP_SOURCE) return
+      failures += 1
+      if (failures < 4) return
+      const provider = active.provider
+      setBrokenIds((current) => (current.includes(provider) ? current : [...current, provider]))
+      setBasemapNote(`${active.label ?? 'That basemap'} is not responding. Switched to another.`)
+    }
+    instance.on('error', failed)
+    return () => {
+      instance.off('error', failed)
+    }
+  }, [loaded, active.provider, active.label, active.url, active.attribution, active.maxZoom])
 
   // Sync pins with the property list.
   useEffect(() => {
@@ -1108,8 +1134,12 @@ export default function MapCanvas({
   const chooseBasemap = (id: string) => {
     setActiveId(id)
     setPickerOpen(false)
+    setBrokenIds((current) => current.filter((entry) => entry !== id))
+    setBasemapNote(null)
     try {
-      window.localStorage.setItem(BASEMAP_STORAGE_KEY, id)
+      // Recorded against today's default, so a later change to it retires
+      // this preference rather than overriding the deployment forever.
+      window.localStorage.setItem(BASEMAP_STORAGE_KEY, writeStoredBasemap(id, tiles.provider))
     } catch {
       /* a viewer with storage disabled just loses the preference */
     }
@@ -1118,6 +1148,19 @@ export default function MapCanvas({
   return (
     <div className={`relative h-full w-full ${active.darkNative ? 'map-dark' : ''}`}>
       <div ref={container} className={className} role="application" aria-label="Property map" />
+
+      {/*
+        * Said out loud rather than silently swapped. A basemap changing under
+        * the viewer is confusing; a blank map with no explanation is worse.
+        */}
+      {basemapNote ? (
+        <div
+          role="status"
+          className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
+        >
+          {basemapNote}
+        </div>
+      ) : null}
 
       {options && (
         <div className="absolute right-3 top-3 z-[500]">
