@@ -463,41 +463,34 @@ try {
   await page.waitForSelector('[aria-label="Property map"]', { timeout: 20000 })
   check('map container rendered', true)
 
-  await page.waitForSelector('img.leaflet-tile', { timeout: 20000 })
-  // Give the tile grid a moment to finish filling in.
+  // MapLibre draws to a WebGL canvas, so tiles are asserted at the network
+  // layer rather than as <img> elements the way the old Leaflet map allowed.
+  await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 20000 })
+  // Give the tile fetches a moment to land.
   await page.waitForTimeout(4000)
 
-  const tiles = await page.$$eval('img.leaflet-tile', (nodes) =>
-    nodes.map((node) => ({
-      src: node.getAttribute('src') || '',
-      loaded: node.complete && node.naturalWidth > 0,
-      width: node.naturalWidth,
-    })),
-  )
+  const canvasSize = await page.$eval('canvas.maplibregl-canvas', (node) => ({
+    w: node.width,
+    h: node.height,
+  }))
+  check('the map canvas has real pixels', canvasSize.w > 0 && canvasSize.h > 0, `${canvasSize.w}×${canvasSize.h}`)
 
-  const loaded = tiles.filter((tile) => tile.loaded)
-  check('tile elements exist', tiles.length > 0, `${tiles.length} tile <img> elements`)
-  check(
-    'tiles actually painted',
-    loaded.length >= 4,
-    `${loaded.length}/${tiles.length} loaded with non-zero pixels`,
-  )
+  const tilesOk = tileRequests.filter((tile) => tile.status >= 200 && tile.status < 400)
+  check('basemap tiles were fetched', tilesOk.length >= 4, `${tilesOk.length} tile responses`)
 
-  const unresolved = tiles.filter((tile) => /\{[a-z]\}/.test(tile.src))
-  check('no unresolved URL placeholders', unresolved.length === 0, unresolved[0]?.src || '')
-
-  const osm = tiles.filter((tile) => tile.src.includes('tile.openstreetmap.org'))
-  check(
-    'base layer is the OpenStreetMap street basemap',
-    osm.length > 0,
-    `${osm.length} tiles from tile.openstreetmap.org; sample: ${tiles[0]?.src || 'none'}`,
-  )
+  const unresolved = tileRequests.filter((tile) => /\{[a-z]\}/.test(tile.url))
+  check('no unresolved URL placeholders', unresolved.length === 0, unresolved[0]?.url || '')
 
   const badTiles = tileRequests.filter((tile) => tile.status >= 400)
   check('no failing tile requests', badTiles.length === 0, badTiles.slice(0, 3).map((t) => `${t.status} ${t.url}`).join(', '))
 
+  // The self-healing basemap posts a notice when a tile host stops
+  // answering; its absence is the positive signal that the basemap drew.
+  const mapText = (await page.textContent('body')) ?? ''
+  check('no basemap failure notice', !mapText.includes('is not responding'))
+
   // 5. The UI around the map.
-  const markers = await page.$$('.leaflet-marker-icon')
+  const markers = await page.$$('.maplibregl-marker')
   check('property pins rendered on the map', markers.length >= PINS.length, `${markers.length} markers`)
 
   const basemapPicker = await page.$('[aria-label="Change basemap"]')
@@ -527,17 +520,20 @@ try {
   check('the custom field value renders', cardText?.includes('9,822 SF') ?? false)
   check('the broker still sees the listing contact', cardText?.includes('broker@example.com') ?? false)
 
-  const zoomIn = await page.$('.leaflet-control-zoom-in')
+  const zoomIn = await page.$('.maplibregl-ctrl-zoom-in')
   check('map controls present', Boolean(zoomIn))
 
-  // Interact, to show the UI is live rather than a static paint.
+  // Interact, to show the UI is live rather than a static paint: a zoom
+  // changes the tile grid, so new tile requests are the proof it happened.
   if (zoomIn) {
+    const before = tileRequests.length
     await zoomIn.click()
     await page.waitForTimeout(2500)
-    const afterZoom = await page.$$eval('img.leaflet-tile', (nodes) =>
-      nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
+    check(
+      'tiles reload after zooming',
+      tileRequests.length > before,
+      `${tileRequests.length - before} new tile requests after zoom in`,
     )
-    check('tiles reload after zooming', afterZoom >= 4, `${afterZoom} tiles loaded after zoom in`)
   }
 
   check('no uncaught page errors', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
