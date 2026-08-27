@@ -397,6 +397,18 @@ export const COLUMN_ADDITIONS = [
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],
 
+  /*
+   * Which metric shades the client's map.
+   *
+   * The owner picks one in the demographics panel — income, renters, median
+   * age — and until now that choice lived only in the browser that made it.
+   * The shared report shaded by population regardless and its legend said
+   * "Population", so a broker who built a case around renter share sent a
+   * client a map coloured by something else, labelled correctly for a metric
+   * they had not chosen.
+   */
+  ['surveys', 'share_metric', "TEXT NOT NULL DEFAULT 'population'"],
+
   // What the shared report includes. Demographics shades the client's map;
   // QR puts a directions code on each tour book stop. Both broker choices.
   ['surveys', 'share_demographics', 'INTEGER NOT NULL DEFAULT 0'],

@@ -182,6 +182,8 @@ export interface Survey {
     url: string | null
     /** Shade census block groups on the client's map. */
     showDemographics?: boolean
+    /** Which metric shades them — the broker's choice, not always population. */
+    metric?: string
     /** Print a QR directions code on each tour book stop. */
     showQr?: boolean
   }
@@ -318,6 +320,8 @@ export interface SharePayload {
     zoom: number
     expiresAt: string | null
     showDemographics?: boolean
+    /** The metric the broker chose to shade by, carried to the client's map. */
+    metric?: string
   }
   stages?: { id: string; name: string; color: string }[]
   zones?: Zone[]
