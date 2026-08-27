@@ -22,13 +22,15 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis'
   id?: string
   token?: string
   /** Which CRM object a `record` route is showing. */
   recordType?: 'deal' | 'person' | 'company' | 'place'
   /** Which list the home page opens on. */
   tab?: string
+  /** Which market a `gis` route opens on. */
+  slug?: string
 }
 
 export function matchRoute(path: string): Route {
@@ -40,6 +42,10 @@ export function matchRoute(path: string): Route {
 
   // Where Stripe sends the buyer back; the session id rides the query string.
   if (/^\/billing\/return\/?$/.test(path)) return { view: 'billingReturn' }
+
+  // The parcel map, optionally opening straight on a market.
+  const gis = path.match(/^\/gis(?:\/([\w-]+))?\/?$/)
+  if (gis) return { view: 'gis', slug: gis[1] }
 
   // Matched before the workspace, whose pattern would otherwise not reach it.
   const book = path.match(/^\/survey\/([\w-]+)\/book\/?$/)

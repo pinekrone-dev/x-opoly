@@ -10,6 +10,8 @@ import Home from './views/Home'
 import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
+import Gis from './views/Gis'
+import TabBar from './components/TabBar'
 import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
 
@@ -229,6 +231,21 @@ export default function App() {
 
   if (route.view === 'workspace' && route.id) {
     return <SurveyWorkspace id={route.id} features={features} />
+  }
+
+  /*
+   * The parcel map. Full bleed, because it is a map and not a page with a map
+   * on it, and the market picker and the parcel card float over it.
+   */
+  if (route.view === 'gis' && features) {
+    return (
+      <div className="flex h-screen flex-col">
+        <TabBar current="gis" />
+        <div className="min-h-0 flex-1">
+          <Gis tiles={features.tiles} basemaps={features.basemaps} slug={route.slug} />
+        </div>
+      </div>
+    )
   }
 
   /* One CRM record: a deal, person, company or place. */

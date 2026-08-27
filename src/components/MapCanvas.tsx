@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
+import { Protocol } from 'pmtiles'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
@@ -20,6 +21,19 @@ import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
  * apart. Click-to-open is a separate commit.
  */
 
+/*
+ * pmtiles:// URLs, resolved by range request against a single file on R2.
+ * Registered once for the whole process rather than per map, because the
+ * protocol table is global and adding it twice throws.
+ */
+let pmtilesReady = false
+function registerPmtiles() {
+  if (pmtilesReady) return
+  maplibregl.addProtocol('pmtiles', new Protocol().tile)
+  pmtilesReady = true
+}
+
+const PARCEL_SOURCE = 'parcels'
 const BASEMAP_SOURCE = 'basemap'
 const BASEMAP_LAYER = 'basemap'
 
@@ -31,6 +45,10 @@ const BASEMAP_LAYER = 'basemap'
  * so the result does not depend on which effect happened to run.
  */
 const OVERLAY_ORDER = [
+  // Parcels sit at the very bottom of the overlays: they are the ground a
+  // survey happens on, not something to draw over a tour line.
+  'parcel-fill',
+  'parcel-line',
   'shading-fill',
   'shading-line',
   'zone-fill',
@@ -40,6 +58,40 @@ const OVERLAY_ORDER = [
   'route-line',
   'competitor-circle',
 ] as const
+
+/**
+ * A county parcel layer, served as vector tiles from one .pmtiles file.
+ *
+ * Deliberately not a list of features: a market is tens of thousands of
+ * parcels and the browser only ever loads the tiles under the viewport. The
+ * attributes needed to draw — the land-use bucket and the value — travel in
+ * the tiles; everything else about a parcel is looked up by id when one is
+ * clicked, which is why `onSelectParcel` hands back an id and nothing more.
+ */
+export interface ParcelLayer {
+  /** Absolute URL of the .pmtiles file. */
+  url: string
+  /** The layer name inside the tiles. */
+  sourceLayer?: string
+  /** Land use where the county publishes it, assessed value where it does not. */
+  colorBy?: 'group' | 'value'
+  /** Step breaks for the value ramp, low to high. */
+  valueBreaks?: number[] | null
+  selectedParcelId?: number | string | null
+  onSelectParcel?: (id: number | string) => void
+}
+
+/** Land-use buckets, in the same colours the parcel map uses. */
+const PARCEL_COLORS: [string, string][] = [
+  ['Commercial', '#2a78d6'],
+  ['Multifamily', '#eb6834'],
+  ['Vacant land', '#1baf7a'],
+  ['Single family', '#9AA1B4'],
+]
+const PARCEL_OTHER = '#5C6377'
+
+/** One hue, light to dark. A value is a magnitude, never a set of categories. */
+const VALUE_RAMP = ['#EDE7FA', '#D6C6F3', '#BBA0EA', '#9D77DD', '#7F4FCB', '#6031AE', '#43208A']
 
 interface Props {
   tiles: TileConfig
@@ -78,8 +130,16 @@ interface Props {
   competitors?: { id: string; name: string; lat: number; lng: number; miles: number }[]
   /** Changing this refits the view to the current pins. */
   fitKey?: string | number
+  /**
+   * Jump somewhere specific. Used where there are no pins to fit to — the
+   * parcel map opens on the market's own centre, not on wherever the broker
+   * last left a survey.
+   */
+  view?: { center: [number, number]; zoom: number; key: string | number } | null
   /** Show each site's name beside its pin, always — the client share map. */
   labelPins?: boolean
+  /** County parcels underneath everything else. */
+  parcels?: ParcelLayer | null
   className?: string
 }
 
@@ -195,7 +255,9 @@ export default function MapCanvas({
   rings = null,
   competitors,
   fitKey,
+  view = null,
   labelPins = false,
+  parcels = null,
   className = 'h-full w-full',
 }: Props) {
   const container = useRef<HTMLDivElement>(null)
@@ -773,6 +835,181 @@ export default function MapCanvas({
       instance.off('mouseleave', 'competitor-circle', leave)
     }
   }, [loaded, competitors])
+
+  /*
+   * County parcels.
+   *
+   * The source is rebuilt only when the file changes, because rebuilding it
+   * discards every tile the browser has already fetched. Colour and selection
+   * are paint and feature-state on the existing layers, which cost nothing.
+   */
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return
+
+    if (!parcels) {
+      if (instance.getLayer('parcel-line')) instance.removeLayer('parcel-line')
+      if (instance.getLayer('parcel-fill')) instance.removeLayer('parcel-fill')
+      if (instance.getSource(PARCEL_SOURCE)) instance.removeSource(PARCEL_SOURCE)
+      return
+    }
+
+    registerPmtiles()
+    const sourceLayer = parcels.sourceLayer || 'parcels'
+
+    if (instance.getLayer('parcel-line')) instance.removeLayer('parcel-line')
+    if (instance.getLayer('parcel-fill')) instance.removeLayer('parcel-fill')
+    if (instance.getSource(PARCEL_SOURCE)) instance.removeSource(PARCEL_SOURCE)
+
+    instance.addSource(PARCEL_SOURCE, {
+      type: 'vector',
+      url: `pmtiles://${parcels.url}`,
+    })
+
+    const below = insertBefore('parcel-fill')
+    instance.addLayer(
+      {
+        id: 'parcel-fill',
+        type: 'fill',
+        source: PARCEL_SOURCE,
+        'source-layer': sourceLayer,
+        paint: { 'fill-color': PARCEL_OTHER, 'fill-opacity': 0.34 },
+      },
+      below,
+    )
+    instance.addLayer(
+      {
+        id: 'parcel-line',
+        type: 'line',
+        source: PARCEL_SOURCE,
+        'source-layer': sourceLayer,
+        paint: {
+          'line-color': PARCEL_OTHER,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.4, 15, 0.9, 18, 1.6],
+          'line-opacity': 0.5,
+        },
+      },
+      insertBefore('parcel-line'),
+    )
+  }, [loaded, parcels?.url, parcels?.sourceLayer])
+
+  // Colour is separate from the source so changing the metric does not throw
+  // away tiles the browser already has.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !parcels) return
+    if (!instance.getLayer('parcel-fill')) return
+
+    let color: maplibregl.ExpressionSpecification | string
+    if (parcels.colorBy === 'value' && parcels.valueBreaks?.length) {
+      // Where a county publishes no land use, every parcel lands in one bucket
+      // and the map renders as a single grey mass — honest and useless. Value
+      // is the other thing every roll carries.
+      const steps: unknown[] = ['step', ['get', 'mv'], VALUE_RAMP[0]]
+      parcels.valueBreaks.forEach((cut, i) => steps.push(cut, VALUE_RAMP[i + 1] ?? VALUE_RAMP[VALUE_RAMP.length - 1]))
+      color = steps as maplibregl.ExpressionSpecification
+    } else {
+      const match: unknown[] = ['match', ['get', 'gp']]
+      for (const [group, hue] of PARCEL_COLORS) match.push(group, hue)
+      match.push(PARCEL_OTHER)
+      color = match as maplibregl.ExpressionSpecification
+    }
+
+    // A selected parcel keeps its own outline rather than changing colour, so
+    // the land-use reading of the map never shifts when something is picked.
+    instance.setPaintProperty('parcel-fill', 'fill-color', color)
+    instance.setPaintProperty('parcel-fill', 'fill-opacity', [
+      'case',
+      ['boolean', ['feature-state', 'sel'], false],
+      0.7,
+      ['boolean', ['feature-state', 'hover'], false],
+      0.58,
+      0.34,
+    ])
+    instance.setPaintProperty('parcel-line', 'line-color', [
+      'case',
+      ['boolean', ['feature-state', 'sel'], false],
+      '#C4A6FF',
+      color,
+    ])
+  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url])
+
+  /*
+   * Clicking a parcel selects it; hovering only outlines it.
+   *
+   * A card that opens on hover is unusable on a map this dense — the pointer
+   * crosses dozens of parcels on the way anywhere. Hover is the affordance
+   * that says what a click would hit, and nothing more.
+   */
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !parcels) return undefined
+
+    const sourceLayer = parcels.sourceLayer || 'parcels'
+    let hovered: string | number | null = null
+    const state = (id: string | number, key: string, value: boolean) => {
+      try {
+        instance.setFeatureState({ source: PARCEL_SOURCE, sourceLayer, id }, { [key]: value })
+      } catch {
+        // A feature can leave the viewport between the event and this call.
+      }
+    }
+
+    const move = (event: maplibregl.MapLayerMouseEvent) => {
+      const id = event.features?.[0]?.id
+      if (id == null) return
+      instance.getCanvas().style.cursor = 'pointer'
+      if (hovered !== null && hovered !== id) state(hovered, 'hover', false)
+      hovered = id
+      state(id, 'hover', true)
+    }
+    const leave = () => {
+      instance.getCanvas().style.cursor = ''
+      if (hovered !== null) state(hovered, 'hover', false)
+      hovered = null
+    }
+    const click = (event: maplibregl.MapLayerMouseEvent) => {
+      const id = event.features?.[0]?.id
+      if (id != null) parcels.onSelectParcel?.(id)
+    }
+
+    instance.on('mousemove', 'parcel-fill', move)
+    instance.on('mouseleave', 'parcel-fill', leave)
+    instance.on('click', 'parcel-fill', click)
+    return () => {
+      instance.off('mousemove', 'parcel-fill', move)
+      instance.off('mouseleave', 'parcel-fill', leave)
+      instance.off('click', 'parcel-fill', click)
+    }
+  }, [loaded, parcels?.url, parcels?.onSelectParcel, parcels?.sourceLayer])
+
+  // The selected parcel, carried as feature-state so the style does it.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !parcels) return undefined
+    const sourceLayer = parcels.sourceLayer || 'parcels'
+    const id = parcels.selectedParcelId
+    if (id == null) return undefined
+    try {
+      instance.setFeatureState({ source: PARCEL_SOURCE, sourceLayer, id }, { sel: true })
+    } catch {
+      /* the parcel is not in a loaded tile yet */
+    }
+    return () => {
+      try {
+        instance.setFeatureState({ source: PARCEL_SOURCE, sourceLayer, id }, { sel: false })
+      } catch {
+        /* nothing to clear */
+      }
+    }
+  }, [loaded, parcels?.selectedParcelId, parcels?.url, parcels?.sourceLayer])
+
+  // Go where the caller says, when the caller says it changed.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !view) return
+    instance.jumpTo({ center: view.center, zoom: view.zoom })
+  }, [loaded, view?.key])
 
   // Fit the view to the pins when the caller asks.
   useEffect(() => {
