@@ -116,8 +116,18 @@ export default function Home({
     }
   }
 
+  /*
+   * GIS leads, because it is where work starts: a broker finds the parcel
+   * before there is a deal, a company or a contact to file it under. It is a
+   * destination rather than a list, so it carries no count and navigates out
+   * of this view entirely.
+   */
   const tabs = useMemo(
-    () => [...OBJECTS.map((object) => ({ segment: object.segment, label: object.label })), { segment: 'surveys', label: 'Surveys' }],
+    () => [
+      { segment: 'gis', label: 'GIS' },
+      ...OBJECTS.map((object) => ({ segment: object.segment, label: object.label })),
+      { segment: 'surveys', label: 'Surveys' },
+    ],
     [],
   )
 
@@ -153,9 +163,11 @@ export default function Home({
               onClick={() => navigate(`/${entry.segment}`)}
             >
               {entry.label}
-              <span className="ml-1.5 text-xs text-faint">
-                {entry.segment === 'surveys' ? surveys.length : counts[entry.segment] ?? ''}
-              </span>
+              {entry.segment !== 'gis' && (
+                <span className="ml-1.5 text-xs text-faint">
+                  {entry.segment === 'surveys' ? surveys.length : counts[entry.segment] ?? ''}
+                </span>
+              )}
             </button>
           ))}
         </nav>

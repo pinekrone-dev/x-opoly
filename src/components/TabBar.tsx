@@ -15,7 +15,7 @@ import { navigate } from '../lib/router'
  */
 const TABS = [
   { id: 'gis', label: 'GIS', path: '/gis' },
-  { id: 'crm', label: 'CRM', path: '/deals' },
+  { id: 'crm', label: 'Deals', path: '/deals' },
   { id: 'surveys', label: 'Surveys', path: '/surveys' },
 ] as const
 
