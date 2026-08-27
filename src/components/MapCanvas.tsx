@@ -282,6 +282,8 @@ export default function MapCanvas({
   /** Basemaps whose tiles have failed here; never chosen automatically again. */
   const [brokenIds, setBrokenIds] = useState<string[]>([])
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
+  /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
+  const [parcelNote, setParcelNote] = useState<string | null>(null)
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
@@ -913,6 +915,7 @@ export default function MapCanvas({
     if (instance.getLayer('parcel-fill')) instance.removeLayer('parcel-fill')
     if (instance.getSource(PARCEL_SOURCE)) instance.removeSource(PARCEL_SOURCE)
 
+    setParcelNote(null)
     instance.addSource(PARCEL_SOURCE, {
       type: 'vector',
       url: `pmtiles://${parcels.url}`,
@@ -943,6 +946,32 @@ export default function MapCanvas({
       },
       insertBefore('parcel-line'),
     )
+
+    /*
+     * A parcel archive that cannot be read must say so. The two live failure
+     * modes — a host that answers without CORS for this origin, and a host
+     * that cannot serve HTTP ranges — both surface here as source errors and
+     * used to render as a county with no parcels, which reads as "the data
+     * is missing" when the truth is "the data was refused".
+     */
+    /*
+     * The first error is already definitive. A tile the archive simply lacks
+     * is not an error at all — the pmtiles protocol answers it with an empty
+     * tile — so anything that does error is the archive itself failing:
+     * unreachable, refused for this origin, or a host that cannot serve
+     * ranges. There is no benign version to wait out.
+     */
+    let reported = false
+    const failed = (event: { sourceId?: string; error?: { message?: string } }) => {
+      if (event.sourceId !== PARCEL_SOURCE || reported) return
+      reported = true
+      const why = event.error?.message ? ` (${event.error.message.slice(0, 120)})` : ''
+      setParcelNote(`County parcels could not be loaded${why}`)
+    }
+    instance.on('error', failed)
+    return () => {
+      instance.off('error', failed)
+    }
   }, [loaded, parcels?.url, parcels?.sourceLayer])
 
   // Colour is separate from the source so changing the metric does not throw
@@ -1153,12 +1182,13 @@ export default function MapCanvas({
         * Said out loud rather than silently swapped. A basemap changing under
         * the viewer is confusing; a blank map with no explanation is worse.
         */}
-      {basemapNote ? (
+      {basemapNote || parcelNote ? (
         <div
           role="status"
-          className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
+          className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] space-y-1 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
         >
-          {basemapNote}
+          {basemapNote ? <p>{basemapNote}</p> : null}
+          {parcelNote ? <p>{parcelNote}</p> : null}
         </div>
       ) : null}
 
