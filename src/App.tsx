@@ -11,7 +11,7 @@ import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
 import Gis from './views/Gis'
-import TabBar from './components/TabBar'
+import WorkspaceNav from './components/WorkspaceNav'
 import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
 
@@ -240,7 +240,17 @@ export default function App() {
   if (route.view === 'gis' && features) {
     return (
       <div className="flex h-screen flex-col">
-        <TabBar current="gis" />
+        <WorkspaceNav
+          current="gis"
+          account={session.user}
+          smsConfigured={session.smsConfigured}
+          billing={billing}
+          onAccountChange={(user) => setSession({ ...session, user })}
+          onSignedOut={() => {
+            setSession({ ...session, user: null, setupRequired: false })
+            setDoor('landing')
+          }}
+        />
         <div className="min-h-0 flex-1">
           <Gis tiles={features.tiles} basemaps={features.basemaps} slug={route.slug} />
         </div>

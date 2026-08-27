@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
-import GisRail, { CheckList, RangeInput, type RailTab } from '../components/GisRail'
+import GisRail, {
+  CheckList,
+  LAYER_ICONS,
+  LayerGrid,
+  RangeInput,
+  type LayerCard,
+  type RailTab,
+} from '../components/GisRail'
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import type { Deal, Place, TileConfig } from '../types'
@@ -130,6 +137,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   const [rail, setRail] = useState<RailTab | null>('layers')
   const [showParcels, setShowParcels] = useState(true)
+  const [showOwners, setShowOwners] = useState(false)
+  const [showCensus, setShowCensus] = useState(false)
+  const [showZoning, setShowZoning] = useState(false)
+  const [metric, setMetric] = useState('inc')
+  const [censusYear, setCensusYear] = useState<number | null>(null)
+  const [census, setCensus] = useState<{
+    fields: [string, string, string][]
+    tracts: Record<string, Record<string, number | string>>
+    shapes: { tr: string; geometry: unknown }[]
+  } | null>(null)
   const [opacity, setOpacity] = useState(0.34)
   const [query, setQuery] = useState('')
   const [assets, setAssets] = useState<Set<string>>(new Set())
@@ -222,6 +239,88 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       cancelled = true
     }
   }, [selected, active])
+
+  /*
+   * The census layer, fetched only once someone asks for it.
+   *
+   * Two files, both published per market: the finished ACS numbers, and the
+   * tract outlines to hang them on. Neither is needed to draw parcels, and
+   * together they are heavier than the map itself in a market like Broward
+   * with four hundred tracts, so nothing is fetched until the layer is on.
+   */
+  useEffect(() => {
+    if (!showCensus || !active || census) return undefined
+    let cancelled = false
+    Promise.all([
+      fetch(`${CATALOG}/${active}/data/census.json`).then((r) => r.json()),
+      fetch(`${CATALOG}/${active}/data/tracts.geojson`).then((r) => r.json()),
+    ])
+      .then(([numbers, shapes]) => {
+        if (cancelled) return
+        setCensusYear(numbers.year ?? null)
+        setCensus({
+          fields: numbers.fields,
+          tracts: numbers.tracts,
+          shapes: (shapes.features || []).map((f: { properties: { tr: string }; geometry: unknown }) => ({
+            tr: f.properties.tr,
+            geometry: f.geometry,
+          })),
+        })
+      })
+      .catch(() => setError('Could not load demographics for this market.'))
+    return () => {
+      cancelled = true
+    }
+  }, [showCensus, active, census])
+
+  // A new market means new tracts; drop the old ones rather than shading the
+  // wrong city with them.
+  useEffect(() => {
+    setCensus(null)
+  }, [active])
+
+  /*
+   * Tract shading.
+   *
+   * Quantile breaks over the tracts this market actually touches, not over a
+   * national range: a median income ramp fixed to the whole country would
+   * render one city as a single flat colour. Purple because the four parcel
+   * hues are blue, orange, green and grey, and a sequential ramp has to be a
+   * part of the wheel nothing else occupies.
+   */
+  const choropleth = useMemo(() => {
+    if (!showCensus || !census) return null
+    const values = census.shapes
+      .map((shape) => Number(census.tracts[shape.tr]?.[metric]))
+      .filter((v) => Number.isFinite(v) && v > 0)
+      .sort((a, b) => a - b)
+    if (!values.length) return null
+    const breaks: number[] = []
+    for (let i = 1; i < VALUE_RAMP.length; i += 1) {
+      breaks.push(values[Math.floor((i * values.length) / VALUE_RAMP.length)])
+    }
+    const label = census.fields.find(([key]) => key === metric)?.[1] ?? metric
+    return census.shapes.map((shape) => {
+      const row = census.tracts[shape.tr]
+      const value = Number(row?.[metric])
+      let color: string | null = null
+      if (Number.isFinite(value) && value > 0) {
+        let step = 0
+        while (step < breaks.length && value >= breaks[step]) step += 1
+        color = VALUE_RAMP[step]
+      }
+      return {
+        geoid: shape.tr,
+        geometry: shape.geometry,
+        color,
+        info: row
+          ? `<strong>${row.n ?? shape.tr}</strong><br>${label}: ${
+              Number.isFinite(value) && value > 0 ? Math.round(value).toLocaleString() : 'not published'
+            }`
+          : null,
+      }
+    })
+  }, [showCensus, census, metric])
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
@@ -334,6 +433,75 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     }
   }, [filtered, rows])
 
+  /*
+   * What this market can actually show.
+   *
+   * Decided from the data rather than declared: zoning is a layer in Nashville
+   * and a blank column in Broward, and a card that offers it everywhere would
+   * be promising something the county never published. `soon` is reserved for
+   * things this product has not built yet, and is never used to paper over a
+   * county that simply has no such record.
+   */
+  const coverage = useMemo(() => {
+    const has = (key: string) =>
+      rows.length > 0 && rows.some((row) => row[key] !== null && row[key] !== '' && row[key] !== 0)
+    return {
+      owner: has('ow'),
+      zoning: has('zn'),
+      tract: has('tr'),
+    }
+  }, [rows])
+
+  const layerCards: LayerCard[] = useMemo(() => {
+    const pending = (label: string, icon: JSX.Element): LayerCard => ({
+      id: label,
+      label,
+      state: 'soon',
+      note: 'Not built yet',
+      icon,
+    })
+    return [
+      {
+        id: 'parcels',
+        label: 'County parcels',
+        state: showParcels ? 'on' : 'off',
+        note: meta?.count ? `${meta.count.toLocaleString()} parcels` : undefined,
+        icon: LAYER_ICONS.parcels,
+      },
+      {
+        id: 'ownership',
+        label: 'Ownership',
+        // The owner of record is already on every parcel card and searchable.
+        // What is not built is shading the map by resolved owner footprint,
+        // so this card stays off rather than toggling something invisible.
+        state: 'soon',
+        note: coverage.owner ? 'Footprint shading not built' : 'County withholds owner names',
+        icon: LAYER_ICONS.ownership,
+      },
+      {
+        id: 'demographics',
+        label: 'Demographics',
+        state: coverage.tract ? (showCensus ? 'on' : 'off') : 'unavailable',
+        note: coverage.tract ? 'ACS by census tract' : 'No tract on these parcels',
+        icon: LAYER_ICONS.demographics,
+      },
+      {
+        id: 'zoning',
+        label: 'Zoning',
+        state: coverage.zoning ? 'soon' : 'unavailable',
+        note: coverage.zoning ? 'Published here, not mapped yet' : 'Not published here',
+        icon: LAYER_ICONS.zoning,
+      },
+      pending('Market surveys', LAYER_ICONS.surveys),
+      pending('Comps', LAYER_ICONS.comps),
+      pending('Absorption', LAYER_ICONS.absorption),
+      pending('Rent trends', LAYER_ICONS.rent),
+      pending('Development pipeline', LAYER_ICONS.pipeline),
+      pending('Forecasts', LAYER_ICONS.forecasts),
+      pending('Entitlements', LAYER_ICONS.entitlements),
+    ]
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count])
+
   /** The centre of the selected parcel, from its bounding box in the index. */
   const centre = useMemo(() => {
     if (selected == null || !index?.bb) return null
@@ -390,6 +558,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               : null
           }
           view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
+          choropleth={choropleth}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-muted">
@@ -434,19 +603,49 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               )}
             </div>
 
-            <label className="flex items-center gap-2 border-t border-line pt-3 text-xs text-body">
-              <input
-                type="checkbox"
-                className="accent-brand"
-                checked={showParcels}
-                onChange={(event) => setShowParcels(event.target.checked)}
+            <div className="border-t border-line pt-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                Layers
+              </p>
+              <LayerGrid
+                cards={layerCards}
+                onToggle={(id) => {
+                  if (id === 'parcels') setShowParcels((on) => !on)
+                  if (id === 'ownership') setShowOwners((on) => !on)
+                  if (id === 'demographics') setShowCensus((on) => !on)
+                  if (id === 'zoning') setShowZoning((on) => !on)
+                }}
               />
-              <span className="flex-1">County parcels</span>
-              <span className="text-[11px] text-faint">{meta?.count?.toLocaleString() ?? ''}</span>
-            </label>
+            </div>
+
+            {showCensus && (
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-metric">
+                  Shade tracts by
+                </label>
+                <select
+                  id="gis-metric"
+                  className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+                  value={metric}
+                  onChange={(event) => setMetric(event.target.value)}
+                  disabled={!census}
+                >
+                  {(census?.fields ?? [['inc', 'Median household income', 'money']]).map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-faint">
+                  {census
+                    ? `American Community Survey ${'' + (censusYear ?? '')}, by census tract.`
+                    : 'Loading tracts…'}
+                </p>
+              </div>
+            )}
 
             <div>
-              <label className="mb-1 block text-[11px] font-medium text-body">Opacity</label>
+              <label className="mb-1 block text-[11px] font-medium text-body">Parcel opacity</label>
               <input
                 type="range"
                 className="w-full accent-brand"

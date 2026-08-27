@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import AccountMenu from '../components/AccountMenu'
 import SurveyList from './SurveyList'
-import BrandMark from '../components/BrandMark'
 import { api } from '../api'
+import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
 import { OBJECTS, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
 import type { Account, BillingStatus, CrmRecord, Survey } from '../types'
@@ -116,100 +115,18 @@ export default function Home({
     }
   }
 
-  /*
-   * Three tabs, not six.
-   *
-   * GIS leads because it is where work starts: a broker finds the parcel
-   * before there is a deal, a company or a contact to file it under. Deals,
-   * people, companies and places are not peers of it — they are what the CRM
-   * is made of, so they live under CRM and appear on hover with their counts.
-   *
-   * On hover rather than on click, because the counts are the answer as often
-   * as the links are: "how many places do I have" should not cost a click to
-   * open and another to close.
-   */
-  const crmSegments = useMemo(() => OBJECTS.map((object) => object.segment), [])
-  const crmOpen = crmSegments.includes(tab)
-
   return (
     <div className="min-h-full bg-paper">
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-3">
-          <button type="button" onClick={() => navigate('/deals')} aria-label="Land Quotient home">
-            <BrandMark />
-          </button>
-          {account ? (
-            <AccountMenu
-              account={account}
-              smsConfigured={Boolean(smsConfigured)}
-              billing={billing}
-              onChange={(next) => onAccountChange?.(next)}
-              onSignedOut={() => onSignedOut?.()}
-            />
-          ) : null}
-        </div>
-
-        <nav className="mx-auto flex max-w-6xl gap-1 px-5" aria-label="Workspace">
-          <button
-            type="button"
-            className="shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-muted hover:text-body"
-            onClick={() => navigate('/gis')}
-          >
-            GIS
-          </button>
-
-          {/* The submenu opens on hover and stays open while the pointer is
-              anywhere in the group, so crossing the gap between the tab and
-              the list does not close it. */}
-          <div className="group relative shrink-0">
-            <button
-              type="button"
-              className={`border-b-2 px-3 py-2 text-sm ${
-                crmOpen ? 'border-brand font-semibold text-ink' : 'border-transparent text-muted hover:text-body'
-              }`}
-              aria-current={crmOpen ? 'page' : undefined}
-              aria-haspopup="true"
-              onClick={() => navigate('/deals')}
-            >
-              CRM
-              <span className="ml-1.5 text-xs text-faint" aria-hidden>
-                ▾
-              </span>
-            </button>
-
-            <ul className="invisible absolute left-0 top-full z-30 w-48 overflow-hidden rounded-lg border border-line bg-surface opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
-              {OBJECTS.map((object) => (
-                <li key={object.segment}>
-                  <button
-                    type="button"
-                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-sunken ${
-                      tab === object.segment ? 'font-semibold text-ink' : 'text-body'
-                    }`}
-                    onClick={() => navigate(`/${object.segment}`)}
-                  >
-                    {object.label}
-                    <span className="text-xs text-faint">{counts[object.segment] ?? ''}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <button
-            type="button"
-            className={`shrink-0 border-b-2 px-3 py-2 text-sm ${
-              tab === 'surveys'
-                ? 'border-brand font-semibold text-ink'
-                : 'border-transparent text-muted hover:text-body'
-            }`}
-            aria-current={tab === 'surveys' ? 'page' : undefined}
-            onClick={() => navigate('/surveys')}
-          >
-            Surveys
-            <span className="ml-1.5 text-xs text-faint">{surveys.length}</span>
-          </button>
-        </nav>
-      </header>
+      <WorkspaceNav
+        current={navSection(tab)}
+        counts={counts}
+        surveyCount={surveys.length}
+        account={account}
+        smsConfigured={smsConfigured}
+        billing={billing}
+        onAccountChange={onAccountChange}
+        onSignedOut={onSignedOut}
+      />
 
       <main className="mx-auto max-w-6xl px-5 py-6">
         {tab === 'surveys' ? (

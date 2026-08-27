@@ -45,12 +45,15 @@ const BASEMAP_LAYER = 'basemap'
  * so the result does not depend on which effect happened to run.
  */
 const OVERLAY_ORDER = [
-  // Parcels sit at the very bottom of the overlays: they are the ground a
-  // survey happens on, not something to draw over a tour line.
-  'parcel-fill',
-  'parcel-line',
+  // Census shading is context and goes underneath everything, including the
+  // parcels: it answers "what kind of area is this", and a translucent wash
+  // drawn over the lot lines turns the thing being looked at into background.
   'shading-fill',
   'shading-line',
+  // Parcels next. They are the ground a survey happens on, so they sit below
+  // the tour line, the zones and the pins, and above the area shading.
+  'parcel-fill',
+  'parcel-line',
   'zone-fill',
   'zone-line',
   'ring-fill',

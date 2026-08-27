@@ -166,3 +166,87 @@ export function CheckList({
     </div>
   )
 }
+
+/*
+ * The layer catalogue.
+ *
+ * A grid of what can go on the map, so the answer to "what else can this show
+ * me" is something you look at rather than something you have to already know.
+ *
+ * Every card says plainly whether it is available. A card that looks live and
+ * does nothing is worse than no card: it makes the map look like it is hiding
+ * data it does not have. Where a layer exists for some markets and not others
+ * — zoning is published by Nashville and by almost nobody else — the card says
+ * that for the market currently open, not in general.
+ */
+export type LayerState = 'on' | 'off' | 'unavailable' | 'soon'
+
+export interface LayerCard {
+  id: string
+  label: string
+  /** Why it cannot be switched on, when it cannot. One short line. */
+  note?: string
+  state: LayerState
+  icon: JSX.Element
+}
+
+export function LayerGrid({
+  cards,
+  onToggle,
+}: {
+  cards: LayerCard[]
+  onToggle: (id: string) => void
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {cards.map((card) => {
+        const live = card.state === 'on' || card.state === 'off'
+        return (
+          <button
+            key={card.id}
+            type="button"
+            disabled={!live}
+            title={card.note}
+            onClick={() => live && onToggle(card.id)}
+            className={`flex flex-col items-start gap-1.5 rounded-lg border p-2 text-left transition ${
+              card.state === 'on'
+                ? 'border-brand bg-brand/5'
+                : live
+                  ? 'border-line bg-surface hover:border-muted'
+                  : 'cursor-not-allowed border-dashed border-line bg-sunken/40'
+            }`}
+          >
+            <span
+              className={`flex h-7 w-7 items-center justify-center rounded-full ${
+                card.state === 'on' ? 'bg-brand/15 text-brand' : live ? 'bg-sunken text-body' : 'bg-transparent text-faint'
+              }`}
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                {card.icon}
+              </svg>
+            </span>
+            <span className={`text-xs font-medium leading-tight ${live ? 'text-ink' : 'text-faint'}`}>
+              {card.label}
+            </span>
+            {card.note && <span className="text-[10px] leading-tight text-faint">{card.note}</span>}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Line art for the catalogue, kept here so the cards stay declarative. */
+export const LAYER_ICONS = {
+  parcels: <><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z" /><path d="M9 3v15M15 6v15" /></>,
+  ownership: <><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /><circle cx="12" cy="10" r="2.2" /><path d="M8.4 16a4 4 0 0 1 7.2 0" /></>,
+  demographics: <><circle cx="9" cy="8" r="3" /><path d="M3 19a6 6 0 0 1 12 0" /><path d="M17 6.5a3 3 0 0 1 0 5.5M18 19a6 6 0 0 0-2-4.4" /></>,
+  zoning: <><path d="M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11z" /><circle cx="12" cy="10" r="2.5" /></>,
+  surveys: <><path d="M4 20V9M10 20V4M16 20v-7M22 20H2" /></>,
+  comps: <><path d="M3 21V8l6-4v17M9 21V11l6-3v13M15 21v-8l6-2v10" /><path d="M2 21h20" /></>,
+  absorption: <><path d="M3 17l5-5 4 3 8-8" /><path d="M15 7h6v6" /></>,
+  rent: <><path d="M12 3v18" /><path d="M16 7a3.5 3.5 0 0 0-4-1.5C9.5 6 9 9 12 10s3 4 .5 4.7A3.5 3.5 0 0 1 8 13" /></>,
+  pipeline: <><path d="M4 21h16M6 21V7l10-3v17" /><path d="M6 7L3 8M16 8l4 2v11" /></>,
+  forecasts: <><path d="M3 18l5-6 4 3 5-7" /><path d="M13 8h4v4" /><path d="M3 21h18" /></>,
+  entitlements: <><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v4h4" /><circle cx="12" cy="14" r="2.5" /><path d="M12 16.5V19" /></>,
+}
