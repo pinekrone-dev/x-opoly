@@ -142,6 +142,10 @@ interface PublishedLayer {
   color: string
   file: string
   count?: number
+  /** How many the source holds here, when it would say. */
+  total?: number | null
+  /** What bounds this layer, in words a customer can check. */
+  filter?: string
   attribution?: string
   fields?: string[]
 }
@@ -1073,7 +1077,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           note: layerBusy[layer.id]
             ? 'Loading…'
             : layer.count
-              ? `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : 'areas'}`
+              ? layer.total && layer.total > layer.count
+                // Say so plainly. A bounded layer that reports only its own
+                // size reads as the whole city, and is not.
+                ? `${layer.count.toLocaleString()} of ${layer.total.toLocaleString()}`
+                : `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : 'areas'}`
               : layer.note,
           icon: PUBLISHED_ICONS[layer.id] ?? LAYER_ICONS.parcels,
         }),
@@ -1473,6 +1481,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                         </div>
                       </div>
                     )}
+                    {layer.total && layer.count && layer.total > layer.count ? (
+                      <p className="text-[11px] text-faint">
+                        Showing {layer.count.toLocaleString()} of {layer.total.toLocaleString()}
+                        {layer.filter ? `, ${layer.filter}` : ''}.
+                      </p>
+                    ) : layer.filter ? (
+                      <p className="text-[11px] text-faint">All {layer.filter}.</p>
+                    ) : null}
                     {layer.attribution && (
                       <p className="text-[11px] text-faint">Source: {layer.attribution}</p>
                     )}
