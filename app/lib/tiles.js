@@ -154,8 +154,14 @@ export function availableBasemaps(env = {}) {
   const key = env.TILE_KEY || ''
   const options = []
 
+  const chosen = (env.TILE_PROVIDER || '').toLowerCase()
   for (const [id, preset] of Object.entries(TILE_PRESETS)) {
-    if (preset.keyRequired && !key) continue
+    // A key belongs to exactly one service, so a keyed preset is only
+    // offered when TILE_PROVIDER names it. Offering every keyed provider
+    // whenever any TILE_KEY exists put three broken options in the picker —
+    // and Stadia answers a wrong key with tiles that read "API key
+    // required", which both maps then faithfully drew.
+    if (preset.keyRequired && !(key && chosen === id)) continue
     if (preset.placeholder && env.TILE_PROVIDER !== 'offline') continue
     options.push(toConfig(id, preset, key, env))
   }

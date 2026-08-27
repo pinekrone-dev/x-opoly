@@ -103,13 +103,20 @@ describe('the basemap switcher', () => {
     assert.ok(!keyless.some((option) => option.placeholder), 'the placeholder grid is not offered as a real basemap')
   })
 
-  test('adds the keyed providers once a key is configured', () => {
-    const withKey = availableBasemaps({ TILE_KEY: 'pk.test' })
-    const ids = withKey.map((option) => option.provider)
+  test('a keyed provider is offered only when it is the configured one', () => {
+    // A TILE_KEY belongs to one service. A stray key must not populate the
+    // picker with every keyed provider — the other three would render 401s
+    // or "API key required" watermark tiles.
+    const strayKey = availableBasemaps({ TILE_KEY: 'pk.test' })
     for (const provider of ['mapbox', 'here', 'maptiler', 'stadia']) {
-      assert.ok(ids.includes(provider), `${provider} should be selectable with a key`)
+      assert.ok(!strayKey.some((option) => option.provider === provider), `${provider} hidden without TILE_PROVIDER`)
     }
-    assert.ok(withKey.every((option) => !option.url.includes('{key}')))
+
+    const chosen = availableBasemaps({ TILE_PROVIDER: 'maptiler', TILE_KEY: 'k' })
+    const ids = chosen.map((option) => option.provider)
+    assert.ok(ids.includes('maptiler'), 'the configured keyed provider is offered')
+    assert.ok(!ids.includes('mapbox') && !ids.includes('stadia'), 'the other keyed providers stay hidden')
+    assert.ok(chosen.every((option) => !option.url.includes('{key}')))
   })
 
   test('a self-hosted basemap is offered first', () => {
