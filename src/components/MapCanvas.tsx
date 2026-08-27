@@ -653,6 +653,18 @@ export default function MapCanvas({
     const open = (event: maplibregl.MapLayerMouseEvent) => {
       const info = event.features?.[0]?.properties?.info
       if (!info) return
+      /*
+       * The parcel wins.
+       *
+       * MapLibre fires a click on every layer under the pointer that has a
+       * handler, so with area shading on, one click opened the parcel card
+       * AND a tract popup on top of it. The parcel is the subject and the
+       * tract is context, so the tract only speaks when the click did not
+       * land on a parcel at all.
+       */
+      if (instance.getLayer('parcel-fill')) {
+        if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
+      }
       new maplibregl.Popup({ closeButton: true, maxWidth: '240px' })
         .setLngLat(event.lngLat)
         .setHTML(String(info))
