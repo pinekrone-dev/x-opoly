@@ -77,13 +77,15 @@ bucket_name = "sitesurvey-cre-uploads"
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
 #
-# Carto rather than OpenStreetMap's own tiles. OSM's usage policy asks that
-# their servers not be the basemap for a product, and they are entitled to
-# throttle or block an origin at any time without telling it — which from
-# inside the app is indistinguishable from a map that simply does not draw.
-# Carto serves the same OSM data, keyless, and is what Prospector already
-# runs on. The switcher still offers OSM to anyone who wants it.
-TILE_PROVIDER = "carto-light"
+# OpenStreetMap's own tiles. Carto was the default until 2026-08-27, when it
+# started answering bursts of anonymous traffic with throttle tiles that read
+# "API required" — served as HTTP 200, so nothing upstream can even see the
+# failure. OSM drew fine from the same browser at the same moment. Neither
+# free host owes this product anything: OSM's usage policy allows light use
+# but permits throttling too. The durable fix is a self-hosted basemap
+# (a Protomaps basemap.pmtiles on this account's own R2); until then OSM is
+# the free host that currently works, and the switcher offers the rest.
+TILE_PROVIDER = "osm"
 
 # Secrets are NOT set here — they would end up in git. Set them in the
 # dashboard under Settings -> Variables and Secrets, or with:
@@ -122,13 +124,9 @@ workers_dev = true
 routes = []
 
 [env.staging.vars]
-# Carto rather than OpenStreetMap's own tiles. OSM's tile usage policy asks
-# that their servers not be used as the basemap for a product, and they are
-# entitled to throttle or block an origin at any time without telling it —
-# which is indistinguishable, from inside the app, from a map that simply does
-# not draw. Carto serves the same OSM data, keyless, and is what Prospector
-# already runs on.
-TILE_PROVIDER = "carto-light"
+# Same reasoning as production above: Carto throttles anonymous use with
+# "API required" tiles served as 200s, so OSM is the free host that works.
+TILE_PROVIDER = "osm"
 
 [[env.staging.d1_databases]]
 binding = "DB"
