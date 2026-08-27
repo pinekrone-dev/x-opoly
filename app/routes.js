@@ -85,6 +85,7 @@ import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
+import { runScout } from './lib/scout.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
   BillingError,
@@ -1422,6 +1423,34 @@ export function createApp({ db, storage, env = {} }) {
    * Works with or without an Anthropic key: text is parseable by heuristics
    * where a flyer image is not, so this endpoint never answers "set a key".
    */
+  /*
+   * The parcel scout: a hunt in plain English, answered as the GIS view's
+   * own filters. The vocabulary comes up with the request because the server
+   * holds no parcel data at all — asset types are whatever the county the
+   * client is looking at publishes. Same AI provider as the flyer reader;
+   * without a key the heuristic answers and says so.
+   */
+  app.post('/api/gis/scout', async (c) => {
+    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => ({}))
+    const prompt = String(body?.prompt ?? '').trim().slice(0, 500)
+    if (!prompt) return c.json({ error: 'Describe what you are hunting for.' }, 400)
+    const vocab = {
+      assetTypes: Array.isArray(body?.assetTypes)
+        ? body.assetTypes.filter((entry) => typeof entry === 'string').slice(0, 60)
+        : [],
+      valueLabel: typeof body?.valueLabel === 'string' ? body.valueLabel.slice(0, 60) : 'Value',
+    }
+
+    try {
+      return c.json(await runScout(prompt, vocab, resolveProvider(env), env))
+    } catch (cause) {
+      return c.json({ error: cause?.message || 'The scout could not read that hunt.' }, 422)
+    }
+  })
+
   app.post('/api/surveys/:id/paste', async (c) => {
     const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
     if (throttled) return throttled

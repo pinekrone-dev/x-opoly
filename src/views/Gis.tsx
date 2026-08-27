@@ -162,6 +162,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [value, setValue] = useState({ min: '', max: '' })
   const [acres, setAcres] = useState({ min: '', max: '' })
 
+  // The scout: a hunt typed in plain English, answered as the filters above.
+  const [hunt, setHunt] = useState('')
+  const [hunting, setHunting] = useState(false)
+  const [huntNote, setHuntNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+
   useEffect(() => {
     fetch(`${CATALOG}/markets.json`)
       .then((r) => r.json())
@@ -186,6 +191,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setValue({ min: '', max: '' })
     setAcres({ min: '', max: '' })
     setQuery('')
+    setHunt('')
+    setHuntNote(null)
     fetch(`${CATALOG}/${active}/data/meta.json`)
       .then((r) => r.json())
       .then(setMeta)
@@ -567,6 +574,57 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return { lat: (s + n) / 2, lng: (w + e) / 2 }
   }, [selected, index, rowOf])
 
+  /*
+   * The scout writes into the same filter state a person would, so the map,
+   * the count, the report and the CSV agree with the answer by construction —
+   * and the panel below shows exactly what was understood, ready to correct.
+   */
+  async function runHunt() {
+    const ask = hunt.trim()
+    if (!ask || hunting) return
+    setHunting(true)
+    setHuntNote(null)
+    try {
+      const res = await api.gisScout({
+        prompt: ask,
+        assetTypes: assetOptions.map((option) => option.value),
+        valueLabel: meta?.valueLabel || 'Value',
+      })
+      if (res.empty) {
+        setHuntNote({
+          tone: 'warn',
+          text:
+            res.source === 'ai'
+              ? 'That did not translate into any filter this county supports.'
+              : 'Could not read that. Try a phrasing like "vacant land over 5 acres under $2M" — or set an AI key on the server for free-form hunts.',
+        })
+      } else {
+        const f = res.filters
+        setAssets(new Set(f.assetTypes))
+        setValue({
+          min: f.valueMin != null ? String(f.valueMin) : '',
+          max: f.valueMax != null ? String(f.valueMax) : '',
+        })
+        setAcres({
+          min: f.acresMin != null ? String(f.acresMin) : '',
+          max: f.acresMax != null ? String(f.acresMax) : '',
+        })
+        setQuery(f.keyword ?? '')
+        setHuntNote({
+          tone: 'ok',
+          text: res.explanation ?? 'Filters set below — adjust them freely.',
+        })
+      }
+    } catch (cause) {
+      setHuntNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'The scout could not answer.',
+      })
+    } finally {
+      setHunting(false)
+    }
+  }
+
   async function addToCrm() {
     if (!parcel || !active || selected == null) return
     setSaving(true)
@@ -816,6 +874,41 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
+                <div className="border-b border-line pb-3">
+                  <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-scout">
+                    Ask for parcels
+                  </label>
+                  <textarea
+                    id="gis-scout"
+                    rows={2}
+                    className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+                    placeholder='Plain English — "vacant land over 5 acres under $2M"'
+                    value={hunt}
+                    onChange={(event) => setHunt(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault()
+                        runHunt()
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="mt-1.5 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
+                    disabled={hunting || hunt.trim() === ''}
+                    onClick={runHunt}
+                  >
+                    {hunting ? 'Reading the hunt…' : 'Find parcels'}
+                  </button>
+                  {huntNote && (
+                    <p
+                      role="status"
+                      className={`mt-1.5 text-[11px] leading-snug ${huntNote.tone === 'ok' ? 'text-muted' : 'text-amber-600'}`}
+                    >
+                      {huntNote.text}
+                    </p>
+                  )}
+                </div>
                 {assetOptions.length > 0 ? (
                   <div>
                     <p className="mb-1 text-[11px] font-medium text-body">Asset type</p>

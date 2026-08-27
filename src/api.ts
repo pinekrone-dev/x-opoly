@@ -140,6 +140,24 @@ export const api = {
       request<{ property: Property }>(`/api/crm/places/${placeId}/send`, json(input)),
   },
 
+  /** A parcel hunt in plain English, answered as the GIS view's own filters. */
+  gisScout: (input: { prompt: string; assetTypes: string[]; valueLabel?: string }) =>
+    request<{
+      filters: {
+        assetTypes: string[]
+        valueMin: number | null
+        valueMax: number | null
+        acresMin: number | null
+        acresMax: number | null
+        keyword: string | null
+      }
+      empty: boolean
+      explanation: string | null
+      source: 'ai' | 'heuristic'
+      provider: string | null
+      model: string | null
+    }>('/api/gis/scout', json(input)),
+
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>
     request<{ survey: Survey }>('/api/surveys', json(input)),

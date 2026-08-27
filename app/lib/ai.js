@@ -110,7 +110,7 @@ function toBase64(bytes) {
   return btoa(binary)
 }
 
-async function readJson(response, label) {
+export async function readJson(response, label) {
   const text = await response.text()
   let body = null
   try {
@@ -136,7 +136,7 @@ async function readJson(response, label) {
 }
 
 /** The model's JSON answer, tolerating a markdown code fence around it. */
-function parseModelJson(text, label) {
+export function parseModelJson(text, label) {
   const cleaned = String(text ?? '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '')
   try {
     return JSON.parse(cleaned)
