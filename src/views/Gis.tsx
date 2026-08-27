@@ -45,6 +45,32 @@ function viaProxy(url: string): string {
   return url.replace(/^https:\/\/([^/]+)/, `${DATA_PROXY}/$1`)
 }
 
+/** A fetch that treats an error page as the failure it is, not as JSON. */
+const asJson = (r: Response) => {
+  if (!r.ok) throw new Error(`${r.status}`)
+  return r.json()
+}
+
+/*
+ * Is this tab running an older build than the server is serving?
+ *
+ * A single-page app can outlive its own deployment: the tab keeps running
+ * whatever bundle it loaded, and if a deploy changed what that bundle asks
+ * for, its requests start failing in ways no amount of server health can
+ * explain. So when a catalog fetch fails, ask the server which commit it is
+ * on — if it differs from the one baked in here, the cure is a reload, and
+ * the error should say so instead of shrugging.
+ */
+async function bundleIsStale(): Promise<boolean> {
+  if (__BUILD_COMMIT__ === 'dev') return false
+  try {
+    const health = await fetch('/api/health').then((r) => r.json())
+    return typeof health.commit === 'string' && health.commit !== 'dev' && health.commit !== __BUILD_COMMIT__
+  } catch {
+    return false
+  }
+}
+
 interface Market {
   slug: string
   name: string
@@ -150,6 +176,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [rowOf, setRowOf] = useState<Map<string | number, number>>(new Map())
   const [selected, setSelected] = useState<string | number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [stale, setStale] = useState(false)
   const activeRef = useRef<string | null>(null)
   activeRef.current = active
   const [known, setKnown] = useState<{ place: Place | null; deals: Deal[] } | null>(null)
@@ -184,13 +211,15 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   useEffect(() => {
     fetch(`${CATALOG}/markets.json`)
-      .then((r) => r.json())
+      .then(asJson)
       .then((d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
         setActive((current) => current || live[0]?.slug || null)
       })
-      .catch(() => setError('Could not reach the parcel catalogue.'))
+      .catch(() => {
+        bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not reach the parcel catalogue.')))
+      })
   }, [])
 
   // Meta first: it carries where the market opens and how it is coloured.
@@ -208,10 +237,13 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setQuery('')
     setHunt('')
     setHuntNote(null)
+    setError(null)
     fetch(`${CATALOG}/${active}/meta.json`)
-      .then((r) => r.json())
+      .then(asJson)
       .then(setMeta)
-      .catch(() => setError('Could not load that market.'))
+      .catch(() => {
+        bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not load that market.')))
+      })
   }, [active])
 
   /*
@@ -729,6 +761,17 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
           choropleth={choropleth?.areas ?? null}
         />
+      ) : stale ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
+          <p>This tab is running an older version of Land Quotient than the server. Reload to pick up the update.</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white"
+          >
+            Reload now
+          </button>
+        </div>
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-muted">
           {error ?? (active ? 'Loading parcels…' : 'No markets available.')}

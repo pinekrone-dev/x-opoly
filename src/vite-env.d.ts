@@ -10,3 +10,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+/** The commit this bundle was built from, injected by vite.config.ts. */
+declare const __BUILD_COMMIT__: string
