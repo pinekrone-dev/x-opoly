@@ -213,3 +213,50 @@ describe('comps', () => {
     assert.equal((await stranger('/api/gis/comps/place', asJson({}))).status, 401)
   })
 })
+
+describe('a listings file', () => {
+  test('a CSV export imports, quoted commas and all', async () => {
+    const csv = [
+      'Address,Price,Property Type,SF,Cap Rate,Year Built',
+      '"500 W 2nd St, Suite 1900, Austin, TX","$41,000,000",Office,"498,000",5.5%,2017',
+      '"The ""Old"" Mill, Bastrop TX",$900000,Industrial,4000,,1954',
+      '',
+    ].join('\r\n')
+
+    const res = await alice('/api/gis/comps', asJson({ csv, market: 'austin-tx' }))
+    assert.equal(res.status, 200)
+    assert.equal(res.body.added, 2, 'an address containing commas is one comp, not three')
+
+    const listed = await alice('/api/gis/comps?market=austin-tx')
+    const tower = listed.body.comps.find((c) => c.address?.startsWith('500 W 2nd'))
+    assert.equal(tower.address, '500 W 2nd St, Suite 1900, Austin, TX')
+    assert.equal(tower.price, 41000000, 'a spreadsheet’s "$41,000,000" is a number')
+    assert.equal(tower.sqft, 498000)
+    assert.equal(tower.capRate, 5.5)
+    assert.equal(tower.yearBuilt, 2017)
+    assert.equal(tower.propType, 'Office')
+
+    // The doubled quote is one literal quote, not two and not a broken row.
+    const mill = listed.body.comps.find((c) => c.address?.includes('Mill'))
+    assert.equal(mill.address, 'The "Old" Mill, Bastrop TX')
+  })
+
+  test('a tab-separated export works too', async () => {
+    const tsv = 'Address\tPrice\tProperty Type\n900 Congress Ave\t$1,200,000\tRetail'
+    const res = await alice('/api/gis/comps', asJson({ csv: tsv }))
+    assert.equal(res.body.added, 1)
+  })
+
+  test('an import arriving in chunks accumulates rather than replacing', async () => {
+    const before = (await alice('/api/gis/comps')).body.comps.length
+    for (const chunk of [
+      [{ key: 'chunk-1', address: '1 Chunk Way' }, { key: 'chunk-2', address: '2 Chunk Way' }],
+      [{ key: 'chunk-3', address: '3 Chunk Way' }],
+    ]) {
+      const res = await alice('/api/gis/comps', asJson({ listings: chunk }))
+      assert.equal(res.status, 200)
+    }
+    const after = (await alice('/api/gis/comps')).body.comps.length
+    assert.equal(after, before + 3, 'each chunk is a complete import in its own right')
+  })
+})

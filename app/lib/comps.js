@@ -135,6 +135,84 @@ export function readComps(payload, { source = null } = {}) {
   return { rows, read: list.length, dropped }
 }
 
+/*
+ * A delimited export, read into the same records `readComps` takes.
+ *
+ * This exists because a broker's listings almost never arrive as JSON. They
+ * arrive as a CSV out of a spreadsheet, an email attachment, or somebody
+ * else's export — and telling a person to convert their file first is telling
+ * them not to bother.
+ *
+ * Quoting is handled properly rather than by splitting on commas, because a
+ * listing export is full of addresses like "123 Main St, Suite 400" and a
+ * naive split turns every one of those into two broken columns.
+ */
+export function readDelimited(text) {
+  const body = String(text ?? '').replace(/^\uFEFF/, '')
+  if (!body.trim()) return []
+
+  // Whichever of the two the header row has more of. A tab-separated export
+  // pasted out of a spreadsheet is as common as a comma-separated one.
+  const firstLine = body.slice(0, body.indexOf('\n') + 1 || undefined)
+  const delimiter = (firstLine.match(/\t/g) || []).length > (firstLine.match(/,/g) || []).length ? '\t' : ','
+
+  const rows = []
+  let row = []
+  let field = ''
+  let quoted = false
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i]
+    if (quoted) {
+      if (ch === '"') {
+        // A doubled quote inside a quoted field is one literal quote.
+        if (body[i + 1] === '"') {
+          field += '"'
+          i += 1
+        } else {
+          quoted = false
+        }
+      } else {
+        field += ch
+      }
+      continue
+    }
+    if (ch === '"' && field === '') {
+      quoted = true
+    } else if (ch === delimiter) {
+      row.push(field)
+      field = ''
+    } else if (ch === '\n' || ch === '\r') {
+      // A newline inside quotes was consumed above, so any that reaches here
+      // genuinely ends the row. \r\n is one ending, not two.
+      if (ch === '\r' && body[i + 1] === '\n') i += 1
+      row.push(field)
+      field = ''
+      rows.push(row)
+      row = []
+    } else {
+      field += ch
+    }
+  }
+  if (field !== '' || row.length) {
+    row.push(field)
+    rows.push(row)
+  }
+
+  const header = (rows.shift() || []).map((h) => h.replace(/\s+/g, ' ').trim())
+  if (!header.length) return []
+  const out = []
+  for (const cells of rows) {
+    // A trailing blank line is not a listing.
+    if (!cells.some((cell) => cell.trim())) continue
+    const record = {}
+    header.forEach((key, at) => {
+      if (key) record[key] = cells[at] ?? ''
+    })
+    out.push(record)
+  }
+  return out
+}
+
 const COLUMNS = FIELDS.map(([column]) => column)
 
 /**
@@ -145,29 +223,54 @@ const COLUMNS = FIELDS.map(([column]) => column)
  * is imported again with a new price.
  */
 export async function saveComps(db, teamId, rows, { market = null } = {}) {
+  if (!rows.length) return { added: 0, updated: 0 }
   const now = nowIso()
+
+  /*
+   * One read for the whole batch, then one write per row, sent together.
+   *
+   * The first version asked "have I seen this key" once per row and then wrote
+   * once per row: four thousand round trips for a two-thousand-row import,
+   * which on a Worker talking to D1 over the network is a request that ends in
+   * a timeout rather than an import. Now the keys are looked up in one IN
+   * query and the writes go as a single batch.
+   */
+  const keys = rows.map((row) => row.source_key)
+  const seen = new Map()
+  // Chunked because SQLite has a bound-parameter ceiling and a caller may hand
+  // over more keys than one statement can carry.
+  for (let at = 0; at < keys.length; at += 200) {
+    const slice = keys.slice(at, at + 200)
+    const found = await db.all(
+      `SELECT id, source_key FROM comps WHERE team_id = ? AND source_key IN (${slice
+        .map(() => '?')
+        .join(', ')})`,
+      [teamId, ...slice],
+    )
+    for (const row of found) seen.set(row.source_key, row.id)
+  }
+
+  const statements = []
   let added = 0
   let updated = 0
   for (const row of rows) {
-    const existing = await db.get(
-      'SELECT id FROM comps WHERE team_id = ? AND source_key = ?',
-      [teamId, row.source_key],
-    )
+    const existing = seen.get(row.source_key)
     if (existing) {
-      await db.run(
+      statements.push([
         `UPDATE comps SET ${COLUMNS.map((c) => `${c} = ?`).join(', ')}, updated_at = ? WHERE id = ?`,
-        [...COLUMNS.map((c) => row[c]), now, existing.id],
-      )
+        [...COLUMNS.map((c) => row[c]), now, existing],
+      ])
       updated += 1
     } else {
-      await db.run(
+      statements.push([
         `INSERT INTO comps (id, team_id, market, source_key, ${COLUMNS.join(', ')}, created_at, updated_at)
          VALUES (?, ?, ?, ?, ${COLUMNS.map(() => '?').join(', ')}, ?, ?)`,
         [newId(), teamId, market, row.source_key, ...COLUMNS.map((c) => row[c]), now, now],
-      )
+      ])
       added += 1
     }
   }
+  await db.batch(statements)
   return { added, updated }
 }
 

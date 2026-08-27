@@ -260,6 +260,30 @@ export const SCHEMA_STATEMENTS = [
    * both mean it has been tried, which is what keeps an unreadable address
    * from costing a lookup on every subsequent pass.
    */
+  /*
+   * A saved map view: one market, configured, under a name.
+   *
+   * Getting a map to say something takes a dozen small decisions — which
+   * layers, in what colours, at what opacity, coloured by which field, filtered
+   * to which asset types and value band, looking at where. All of it lived in
+   * the browser tab, so it was gone on refresh and impossible to hand to a
+   * colleague or return to next week.
+   *
+   * The configuration is stored as a JSON blob rather than thirty columns on
+   * purpose. The set of things a view captures grows every time the map gains
+   * a control, and a schema migration per control is a tax on adding them.
+   * Nothing queries inside it — views are listed by market and applied whole.
+   */
+  `CREATE TABLE IF NOT EXISTS map_views (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    created_by TEXT,
+    market     TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS comps (
     id             TEXT PRIMARY KEY,
     team_id        TEXT NOT NULL,
@@ -306,6 +330,9 @@ export const SCHEMA_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
   'CREATE INDEX IF NOT EXISTS idx_zones_survey ON zones(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
+  // Saved views are always asked for one way — "what has this team saved for
+  // the market I am looking at" — so that is the index.
+  'CREATE INDEX IF NOT EXISTS idx_map_views_team ON map_views(team_id, market)',
   // Re-importing the same page is the normal case, so the dedupe lookup —
   // "has this team seen this listing before" — is the one that must be fast.
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key)',

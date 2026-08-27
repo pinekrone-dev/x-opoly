@@ -156,7 +156,14 @@ interface Props {
   onSelect?: (id: string) => void
   onMapClick?: (lat: number, lng: number) => void
   /** Reports where the map is looking, so a dropped flyer can land nearby. */
-  onViewChange?: (center: { lat: number; lng: number }) => void
+  /**
+   * Where the map is looking, on every settle.
+   *
+   * Zoom rides along with the centre because a saved view has to restore both
+   * — "here at county scale" and "here at street scale" are different views of
+   * the same point. Existing callers that only read lat and lng are unaffected.
+   */
+  onViewChange?: (center: { lat: number; lng: number; zoom: number }) => void
   /** The survey's pipeline, for pin colours that match the sidebar. */
   stages?: { id: string; color: string }[]
   /** Tour start and end, drawn as their own flags — a tour begins at the
@@ -664,7 +671,7 @@ export default function MapCanvas({
 
     const report = () => {
       const center = instance.getCenter()
-      onViewChange({ lat: center.lat, lng: center.lng })
+      onViewChange({ lat: center.lat, lng: center.lng, zoom: instance.getZoom() })
     }
     instance.on('moveend', report)
     report()

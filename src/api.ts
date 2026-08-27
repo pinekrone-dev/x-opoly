@@ -12,6 +12,7 @@ import type {
   DealStage,
   Comp,
   CompetitionResult,
+  MapView,
   Demographics,
   GeocodeResult,
   PlaceCategory,
@@ -171,7 +172,13 @@ export const api = {
       request<{ comps: Comp[]; unplaced: number }>(
         market ? `/api/gis/comps?market=${encodeURIComponent(market)}` : '/api/gis/comps',
       ),
-    import: (input: { listings: unknown; market?: string; source?: string }) =>
+    /** `listings` for parsed records, `csv` for the raw text of an export. */
+    import: (input: {
+      listings?: unknown
+      csv?: string
+      market?: string
+      source?: string
+    }) =>
       request<{ added: number; updated: number; dropped: number; truncated: number }>(
         '/api/gis/comps',
         json(input),
@@ -184,6 +191,28 @@ export const api = {
       ),
     remove: (id: string) =>
       request<{ removed: number }>(`/api/gis/comps/${id}`, { method: 'DELETE' }),
+  },
+
+  /*
+   * Saved map views: a market, configured, under a name.
+   *
+   * The state is an opaque blob on both sides. The server bounds and scopes
+   * it; only the map knows what is in it.
+   */
+  views: {
+    list: (market?: string) =>
+      request<{ views: MapView[] }>(
+        market ? `/api/gis/views?market=${encodeURIComponent(market)}` : '/api/gis/views',
+      ),
+    save: (input: { market: string; name: string; state: Record<string, unknown> }) =>
+      request<{ view: MapView }>('/api/gis/views', json(input)),
+    rename: (id: string, name: string) =>
+      request<{ view: MapView }>(`/api/gis/views/${id}`, {
+        ...json({ name }),
+        method: 'PATCH',
+      }),
+    remove: (id: string) =>
+      request<{ removed: number }>(`/api/gis/views/${id}`, { method: 'DELETE' }),
   },
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),

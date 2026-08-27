@@ -43,6 +43,24 @@ export interface Comp {
   createdAt: string
 }
 
+/**
+ * A saved map view: one market, configured, under a name.
+ *
+ * `state` is deliberately untyped here. It holds whatever the map needs to
+ * restore itself, that set grows every time the map gains a control, and a
+ * type that had to be widened for each one would be a tax on adding them.
+ * Applying a view reads the keys it knows and ignores the rest, so an old view
+ * still opens after the map has changed.
+ */
+export interface MapView {
+  id: string
+  market: string
+  name: string
+  state: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
 /** A one-time signup link for a colleague, shown on the Share tab. */
 export interface Invite {
   id: string

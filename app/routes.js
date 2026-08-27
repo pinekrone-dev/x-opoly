@@ -110,8 +110,10 @@ import {
   listComps,
   placeComps,
   readComps,
+  readDelimited,
   saveComps,
 } from './lib/comps.js'
+import { deleteView, listViews, renameView, saveView } from './lib/mapviews.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -1594,7 +1596,17 @@ export function createApp({ db, storage, env = {} }) {
     const market = typeof body?.market === 'string' && body.market.trim() ? body.market.trim() : null
     const source = typeof body?.source === 'string' && body.source.trim() ? body.source.trim().slice(0, 60) : null
 
-    const { rows, read, dropped, error } = readComps(body.listings ?? body, { source })
+    /*
+     * Two shapes, because listings do not arrive in one.
+     *
+     * `listings` is a parsed array — what a capture produces, and what the
+     * client sends after reading a file. `csv` is the raw text of a delimited
+     * export, accepted so that a broker with a spreadsheet is not told to go
+     * and convert it first.
+     */
+    const source_rows =
+      typeof body?.csv === 'string' ? readDelimited(body.csv) : (body.listings ?? body)
+    const { rows, read, dropped, error } = readComps(source_rows, { source })
     if (error) return c.json({ error }, 400)
     if (!rows.length) {
       return c.json(
@@ -1638,6 +1650,52 @@ export function createApp({ db, storage, env = {} }) {
     }
     if (!(await deleteComp(db, user.teamId, c.req.param('id')))) {
       return notFound(c, 'That comp does not exist.')
+    }
+    return c.json({ removed: 1 })
+  })
+
+  /*
+   * Saved map views: a market, configured, under a name.
+   *
+   * Team-scoped like everything else in a workspace, so a colleague opening
+   * the same market sees the same saved views. That is deliberate — a view is
+   * how somebody framed a market, and framing is exactly the kind of thing a
+   * brokerage wants to share rather than each person rebuilding.
+   */
+  app.get('/api/gis/views', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = (c.req.query('market') ?? '').trim() || null
+    return c.json({ views: await listViews(db, user.teamId, market) })
+  })
+
+  app.post('/api/gis/views', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'views', 120, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const result = await saveView(db, user.teamId, await c.req.json().catch(() => ({})), {
+      userId: user.id,
+    })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ view: result.view }, 201)
+  })
+
+  app.patch('/api/gis/views/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await renameView(db, user.teamId, c.req.param('id'), body?.name)
+    if (result.missing) return notFound(c, 'That view does not exist.')
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ view: result.view })
+  })
+
+  app.delete('/api/gis/views/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!(await deleteView(db, user.teamId, c.req.param('id')))) {
+      return notFound(c, 'That view does not exist.')
     }
     return c.json({ removed: 1 })
   })

@@ -11,7 +11,7 @@ import GisRail, {
 } from '../components/GisRail'
 import { api } from '../api'
 import { navigate } from '../lib/router'
-import type { Comp, Deal, Place, TileConfig } from '../types'
+import type { Comp, Deal, MapView, Place, TileConfig } from '../types'
 
 /*
  * GIS: the county's own parcel record, underneath everything else.
@@ -489,6 +489,7 @@ function CompsImport({
   note,
   onPaste,
   onImport,
+  onFile,
   onPlace,
 }: {
   comps: Comp[] | null
@@ -498,9 +499,11 @@ function CompsImport({
   note: { tone: 'ok' | 'warn'; text: string } | null
   onPaste: (value: string) => void
   onImport: () => void
+  onFile: (file: File) => void
   onPlace: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const picker = useRef<HTMLInputElement>(null)
   const empty = !comps?.length
 
   return (
@@ -541,13 +544,39 @@ function CompsImport({
 
       {open && (
         <div className="space-y-1.5">
+          {/* The file first, because that is how listings actually arrive —
+              a CSV out of a spreadsheet, an export somebody emailed. Telling
+              a broker to open it and copy its contents is telling them not to
+              bother. */}
+          <input
+            ref={picker}
+            type="file"
+            accept=".csv,.tsv,.txt,.json,text/csv,application/json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              // Cleared so choosing the same file twice fires again — a broker
+              // who fixes a column and re-picks expects it to re-import.
+              event.target.value = ''
+              if (file) onFile(file)
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => picker.current?.click()}
+            disabled={busy}
+            className="w-full rounded-md border border-dashed border-line px-2 py-2 text-[11px] text-body hover:border-accent/50 disabled:opacity-50"
+          >
+            {busy ? 'Working…' : 'Choose a CSV or JSON file'}
+          </button>
+          <p className="text-center text-[10px] text-faint">or paste below</p>
           <textarea
             value={paste}
             onChange={(event) => onPaste(event.target.value)}
             rows={4}
-            placeholder='[{"address": "…", "priceStr": "$4,250,000", "propType": "Retail"}]'
+            placeholder={'Address,Price,Property Type\n123 Main St,"$4,250,000",Retail'}
             className="w-full rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[11px] text-ink"
-            aria-label="Captured listings as JSON"
+            aria-label="Listings as CSV or JSON"
           />
           <button
             type="button"
@@ -560,15 +589,16 @@ function CompsImport({
           <details className="text-[11px] text-faint">
             <summary className="cursor-pointer">Where the JSON comes from</summary>
             <p className="mt-1">
-              Any list of objects works. Addresses are matched on{' '}
-              <code>address</code>, prices on <code>price</code> or{' '}
-              <code>priceStr</code>, and the rest on the names a listing placard
-              uses — <code>propType</code>, <code>sqft</code>, <code>acres</code>,{' '}
-              <code>units</code>, <code>cap</code>, <code>year</code>,{' '}
-              <code>url</code>. Missing columns are simply missing. If you already
-              have a capture of your own, paste what it produced. Otherwise this,
-              run in your browser's console on a page you are looking at, copies a
-              starting shape to the clipboard:
+              A CSV with a header row, or any list of objects. Column names are
+              matched loosely, so both a spreadsheet's <code>Property Type</code>{' '}
+              and a capture's <code>propType</code> land in the same place —
+              likewise <code>Address</code>, <code>Price</code>, <code>SF</code>,{' '}
+              <code>Acres</code>, <code>Units</code>, <code>Cap Rate</code>,{' '}
+              <code>Year Built</code> and <code>URL</code>. Missing columns are
+              simply missing, and a big file is sent in batches so it cannot time
+              out. If you would rather capture from a page you are looking at,
+              this run in your browser's console copies a starting shape to the
+              clipboard:
             </p>
             <pre className="mt-1 overflow-x-auto rounded bg-sunken p-1.5 text-[10px] leading-snug">
               {CAPTURE_SNIPPET}
@@ -579,6 +609,99 @@ function CompsImport({
 
       {note && (
         <p className={`text-[11px] ${note.tone === 'warn' ? 'text-rose-600' : 'text-muted'}`}>
+          {note.text}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Saved views: this market, configured, under a name.
+ *
+ * Getting a map to say something takes a dozen small decisions, and until
+ * this existed all of them lived in the tab — gone on refresh, impossible to
+ * return to next week, impossible to hand to a colleague. Saving is one field
+ * and one button because anything more ceremonious does not get used.
+ */
+function SavedViews({
+  views,
+  name,
+  busy,
+  note,
+  onName,
+  onSave,
+  onOpen,
+  onDelete,
+}: {
+  views: MapView[] | null
+  name: string
+  busy: boolean
+  note: { tone: 'ok' | 'warn'; text: string } | null
+  onName: (value: string) => void
+  onSave: () => void
+  onOpen: (view: MapView) => void
+  onDelete: (id: string) => void
+}) {
+  return (
+    <div className="border-t border-line pt-3">
+      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+        Saved views
+      </p>
+
+      {views?.length ? (
+        <ul className="mb-2 space-y-0.5">
+          {views.map((view) => (
+            <li key={view.id} className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onOpen(view)}
+                className="min-w-0 flex-1 truncate rounded-md border border-line px-2 py-1 text-left text-[11px] text-ink hover:border-accent/50"
+                title={`Saved ${new Date(view.updatedAt).toLocaleDateString()}`}
+              >
+                {view.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(view.id)}
+                aria-label={`Delete the view "${view.name}"`}
+                className="shrink-0 px-1 leading-none text-muted hover:text-ink"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mb-2 text-[11px] text-faint">
+          {views === null
+            ? 'Loading…'
+            : 'Set the layers, colours and filters you want, then save them here to come back to.'}
+        </p>
+      )}
+
+      <div className="flex gap-1">
+        <input
+          value={name}
+          onChange={(event) => onName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') onSave()
+          }}
+          placeholder="Name this view"
+          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+          aria-label="Name for the saved view"
+        />
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={busy || !name.trim()}
+          className="shrink-0 rounded-md bg-brand px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+      {note && (
+        <p className={`mt-1 text-[11px] ${note.tone === 'warn' ? 'text-rose-600' : 'text-muted'}`}>
           {note.text}
         </p>
       )}
@@ -712,6 +835,18 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [compsBusy, setCompsBusy] = useState(false)
   const [compsPaste, setCompsPaste] = useState('')
   const [compsNote, setCompsNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+  /*
+   * Saved views: this market, configured, under a name.
+   *
+   * `here` is where the map is looking, reported on every settle, because a
+   * view has to restore the camera as well as the settings — "the county" and
+   * "this block" are different views of the same point.
+   */
+  const [views, setViews] = useState<MapView[] | null>(null)
+  const [viewName, setViewName] = useState('')
+  const [viewBusy, setViewBusy] = useState(false)
+  const [viewNote, setViewNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+  const here = useRef<{ lat: number; lng: number; zoom: number } | null>(null)
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -886,6 +1021,28 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         .finally(() => setLayerBusy((busy) => ({ ...busy, [layer.id]: false })))
     }
   }, [published, layerOn, layerData, layerBusy, active])
+
+  /*
+   * This market's saved views. Fetched per market, because a view belongs to
+   * one — Houston's "industrial corridor" means nothing in Las Vegas.
+   */
+  useEffect(() => {
+    if (!active) return undefined
+    let cancelled = false
+    setViews(null)
+    setViewNote(null)
+    api.views
+      .list(active)
+      .then((res) => {
+        if (!cancelled) setViews(res.views)
+      })
+      .catch(() => {
+        if (!cancelled) setViews([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
 
   /*
    * The workspace's comps, fetched the first time the square is switched on.
@@ -1524,6 +1681,143 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * the count, the report and the CSV agree with the answer by construction —
    * and the panel below shows exactly what was understood, ready to correct.
    */
+  /*
+   * Everything a view remembers.
+   *
+   * Written as one flat object rather than threaded through props, because
+   * the whole point is that a view captures the map as it is — and a capture
+   * that has to be extended by hand every time the map gains a control will
+   * quietly stop capturing things.
+   *
+   * The camera comes from `here`, which the map reports on every settle. If
+   * the map has not reported yet the market's own centre stands in, so a view
+   * saved in the first second is still a usable view.
+   */
+  function captureView(): Record<string, unknown> {
+    return {
+      v: 1,
+      center: here.current
+        ? [here.current.lng, here.current.lat]
+        : meta
+          ? meta.center
+          : null,
+      zoom: here.current?.zoom ?? meta?.zoom ?? null,
+      showParcels,
+      showOwners,
+      showCensus,
+      showZoning,
+      opacity,
+      parcelRamp,
+      parcelColorBy,
+      censusOpacity,
+      censusRamp,
+      metric,
+      layerOn,
+      layerStyle,
+      layerColorBy,
+      // The filters are as much a part of a view as the colours: "industrial
+      // over five acres" is the view, and the shading is how it reads.
+      query,
+      assets: [...assets],
+      value,
+      acres,
+    }
+  }
+
+  /**
+   * Puts a saved view back on the map.
+   *
+   * Every field is optional on purpose. A view saved before the map gained a
+   * control does not carry that control's setting, and it should still open —
+   * so anything absent is left exactly as it is rather than reset to a
+   * default the broker never chose.
+   */
+  function applyView(view: MapView) {
+    const st = view.state as Record<string, unknown>
+    const bool = (key: string, set: (value: boolean) => void) => {
+      if (typeof st[key] === 'boolean') set(st[key] as boolean)
+    }
+    const num = (key: string, set: (value: number) => void) => {
+      if (typeof st[key] === 'number' && Number.isFinite(st[key])) set(st[key] as number)
+    }
+    const str = (key: string, set: (value: string) => void) => {
+      if (typeof st[key] === 'string') set(st[key] as string)
+    }
+
+    bool('showParcels', setShowParcels)
+    bool('showOwners', setShowOwners)
+    bool('showCensus', setShowCensus)
+    bool('showZoning', setShowZoning)
+    num('opacity', setOpacity)
+    num('censusOpacity', setCensusOpacity)
+    str('parcelRamp', setParcelRamp)
+    str('censusRamp', setCensusRamp)
+    str('metric', setMetric)
+    str('query', setQuery)
+    if (st.parcelColorBy === 'auto' || st.parcelColorBy === 'group' || st.parcelColorBy === 'value') {
+      setParcelColorBy(st.parcelColorBy)
+    }
+    if (st.layerOn && typeof st.layerOn === 'object') setLayerOn(st.layerOn as Record<string, boolean>)
+    if (st.layerStyle && typeof st.layerStyle === 'object') {
+      setLayerStyle(st.layerStyle as Record<string, { color: string; opacity: number }>)
+    }
+    if (st.layerColorBy && typeof st.layerColorBy === 'object') {
+      setLayerColorBy(st.layerColorBy as Record<string, string>)
+    }
+    if (Array.isArray(st.assets)) setAssets(new Set((st.assets as unknown[]).map(String)))
+    if (st.value && typeof st.value === 'object') setValue(st.value as { min: string; max: string })
+    if (st.acres && typeof st.acres === 'object') setAcres(st.acres as { min: string; max: string })
+
+    const centre = st.center as [number, number] | undefined
+    if (Array.isArray(centre) && centre.length === 2 && centre.every(Number.isFinite)) {
+      setLayerView({
+        center: centre,
+        zoom: typeof st.zoom === 'number' ? (st.zoom as number) : 12,
+        // Keyed on the moment so applying the same view twice flies there
+        // again rather than being deduplicated into nothing.
+        key: Date.now(),
+      })
+    }
+    // A pick from a previous layer would leave the panel describing a record
+    // this view has nothing to do with.
+    setLayerPick(null)
+    setViewNote({ tone: 'ok', text: `Opened "${view.name}".` })
+  }
+
+  async function saveCurrentView() {
+    const label = viewName.trim()
+    if (!label || !active || viewBusy) return
+    setViewBusy(true)
+    setViewNote(null)
+    try {
+      await api.views.save({ market: active, name: label, state: captureView() })
+      const res = await api.views.list(active)
+      setViews(res.views)
+      setViewName('')
+      setViewNote({ tone: 'ok', text: `Saved "${label}".` })
+    } catch (cause) {
+      setViewNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'Could not save that view.',
+      })
+    } finally {
+      setViewBusy(false)
+    }
+  }
+
+  async function removeView(id: string) {
+    if (!active) return
+    try {
+      await api.views.remove(id)
+      setViews((current) => (current ?? []).filter((view) => view.id !== id))
+    } catch (cause) {
+      setViewNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'Could not delete that view.',
+      })
+    }
+  }
+
   /**
    * Reloads the comps list from the server, so the map and the record list
    * agree with what was actually stored rather than with what was sent.
@@ -1592,45 +1886,146 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   }
 
   /**
-   * Takes what the broker's own capture produced and stores it in their
-   * workspace. The parse happens here so a mis-paste is answered instantly
-   * rather than by a round trip.
+   * Reads pasted or uploaded text into records.
+   *
+   * JSON if it looks like JSON, delimited otherwise. Sniffing beats asking:
+   * a broker with a file knows what is in it and should not have to tell the
+   * app which of two formats they have.
+   */
+  function readListings(text: string): unknown[] | null {
+    const body = text.trim()
+    if (!body) return null
+    if (body.startsWith('[') || body.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(body)
+        if (Array.isArray(parsed)) return parsed
+        const list = Object.values(parsed as Record<string, unknown>).find(Array.isArray)
+        return (list as unknown[]) ?? null
+      } catch {
+        return null
+      }
+    }
+    // Delimited. The server owns the parser — quoting rules are worth having
+    // in exactly one place — so the raw text goes over as-is.
+    return [text]
+  }
+
+  /**
+   * Stores an import, a chunk at a time.
+   *
+   * Chunked because a listings export is not a paste: a broker with four
+   * thousand rows sends four thousand rows, and one request carrying all of
+   * them is a request the edge times out on rather than an import. Each chunk
+   * is a complete import in its own right, so a run interrupted halfway leaves
+   * everything before the interruption stored rather than nothing.
+   */
+  async function sendListings(records: unknown[], asCsv: string | null) {
+    const totals = { added: 0, updated: 0, dropped: 0, truncated: 0 }
+    if (asCsv !== null) {
+      const res = await api.comps.import({ csv: asCsv, market: active ?? undefined })
+      return { ...totals, ...res }
+    }
+    const CHUNK = 250
+    for (let at = 0; at < records.length; at += CHUNK) {
+      const slice = records.slice(at, at + CHUNK)
+      const res = await api.comps.import({ listings: slice, market: active ?? undefined })
+      totals.added += res.added
+      totals.updated += res.updated
+      totals.dropped += res.dropped
+      totals.truncated += res.truncated
+      if (records.length > CHUNK) {
+        setCompsNote({
+          tone: 'ok',
+          text: `Importing… ${Math.min(at + CHUNK, records.length).toLocaleString()} of ${records.length.toLocaleString()}`,
+        })
+      }
+    }
+    return totals
+  }
+
+  /** Turns a finished import into a sentence, then places what it stored. */
+  async function afterImport(totals: {
+    added: number
+    updated: number
+    dropped: number
+    truncated: number
+  }) {
+    const parts = [
+      totals.added ? `${totals.added.toLocaleString()} added` : '',
+      totals.updated ? `${totals.updated.toLocaleString()} updated` : '',
+      totals.dropped ? `${totals.dropped.toLocaleString()} without an address skipped` : '',
+      totals.truncated ? `${totals.truncated.toLocaleString()} beyond the import limit not read` : '',
+    ].filter(Boolean)
+    setCompsNote({ tone: 'ok', text: `${parts.join(', ') || 'Nothing new'}. Locating addresses…` })
+    const after = await refreshComps()
+    setCompsBusy(false)
+    // Straight on to placing them: an import that leaves every comp off the
+    // map has not finished doing what the broker asked for.
+    if (after.unplaced > 0) await placeMoreComps()
+  }
+
+  /**
+   * Takes what the broker pasted and stores it in their workspace. The parse
+   * happens here so a mis-paste is answered instantly rather than by a round
+   * trip.
    */
   async function importComps() {
-    const text = compsPaste.trim()
-    if (!text || compsBusy) return
-    let listings: unknown
-    try {
-      listings = JSON.parse(text)
-    } catch {
+    if (compsBusy) return
+    const records = readListings(compsPaste)
+    if (!records) {
       setCompsNote({
         tone: 'warn',
-        text: 'That is not JSON. Paste the whole value your capture copied, brackets and all.',
+        text: 'Could not read that. Paste a CSV with a header row, or the whole JSON value your capture copied.',
       })
       return
     }
     setCompsBusy(true)
     setCompsNote(null)
     try {
-      const res = await api.comps.import({ listings, market: active ?? undefined })
-      const parts = [
-        res.added ? `${res.added} added` : '',
-        res.updated ? `${res.updated} updated` : '',
-        res.dropped ? `${res.dropped} without an address skipped` : '',
-        res.truncated ? `${res.truncated} beyond the import limit not read` : '',
-      ].filter(Boolean)
+      const csv = records.length === 1 && typeof records[0] === 'string' ? (records[0] as string) : null
+      const totals = await sendListings(records, csv)
       setCompsPaste('')
-      setCompsNote({ tone: 'ok', text: `${parts.join(', ')}. Locating addresses…` })
-      const after = await refreshComps()
-      setCompsBusy(false)
-      // Straight on to placing them: an import that leaves every comp off the
-      // map has not finished doing what the broker asked for.
-      if (after.unplaced > 0) await placeMoreComps()
+      await afterImport(totals)
       return
     } catch (cause) {
       setCompsNote({
         tone: 'warn',
         text: cause instanceof Error ? cause.message : 'Could not import those.',
+      })
+    }
+    setCompsBusy(false)
+  }
+
+  /**
+   * The same, from a file the broker chose.
+   *
+   * This is how listings actually arrive — a CSV out of a spreadsheet, an
+   * export somebody emailed — so it is a first-class way in rather than an
+   * instruction to open the file and copy its contents.
+   */
+  async function importCompsFile(file: File) {
+    if (compsBusy) return
+    setCompsBusy(true)
+    setCompsNote({ tone: 'ok', text: `Reading ${file.name}…` })
+    try {
+      const text = await file.text()
+      const records = readListings(text)
+      if (!records) {
+        setCompsNote({
+          tone: 'warn',
+          text: `${file.name} is neither a CSV with a header row nor a JSON list.`,
+        })
+        setCompsBusy(false)
+        return
+      }
+      const csv = records.length === 1 && typeof records[0] === 'string' ? (records[0] as string) : null
+      const totals = await sendListings(records, csv)
+      await afterImport(totals)
+      return
+    } catch (cause) {
+      setCompsNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'Could not read that file.',
       })
     }
     setCompsBusy(false)
@@ -1759,6 +2154,12 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           // market's own centre does, keyed on the slug so switching county
           // reframes and panning around within one does not.
           view={layerView ?? { center: meta.center, zoom: meta.zoom, key: active ?? '' }}
+          // Kept in a ref rather than state: this fires on every settle, and
+          // re-rendering the map on each pan to store a number the map itself
+          // already knows would be a waste for a value only saving reads.
+          onViewChange={(where) => {
+            here.current = where
+          }}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
           extras={extras}
@@ -1816,6 +2217,19 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 </p>
               )}
             </div>
+
+            {/* Above the catalog, because a saved view is where you start
+                rather than something you reach after configuring by hand. */}
+            <SavedViews
+              views={views}
+              name={viewName}
+              busy={viewBusy}
+              note={viewNote}
+              onName={setViewName}
+              onSave={saveCurrentView}
+              onOpen={applyView}
+              onDelete={removeView}
+            />
 
             <div className="border-t border-line pt-3">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
@@ -2033,6 +2447,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                         note={compsNote}
                         onPaste={setCompsPaste}
                         onImport={importComps}
+                        onFile={importCompsFile}
                         onPlace={placeMoreComps}
                       />
                     )}
