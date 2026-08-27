@@ -418,6 +418,9 @@ export default function MapCanvas({
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
     map.current = instance
+    // For the browser checks: the instance is reachable from the DOM, so a
+    // test can read the real layer order instead of inferring it from pixels.
+    ;(host as HTMLDivElement & { __map?: maplibregl.Map }).__map = instance
 
     // The container is often sized by a flex parent that settles after mount.
     const resize = new ResizeObserver(() => instance.resize())
