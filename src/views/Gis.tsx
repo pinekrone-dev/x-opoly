@@ -120,6 +120,15 @@ function exportCsv(rows: Record<string, string | number | null>[], slug: string)
   URL.revokeObjectURL(url)
 }
 
+/** A census figure, in the units its field declares — the panel's own rules. */
+function censusValue(value: number, kind: string): string {
+  if (!Number.isFinite(value)) return '—'
+  if (kind === 'money') return `$${Math.round(value).toLocaleString()}`
+  if (kind === 'pct') return `${value.toFixed(1)}%`
+  if (kind === 'one') return value.toFixed(1)
+  return Math.round(value).toLocaleString()
+}
+
 const money = (n: number) => {
   if (!Number.isFinite(n) || n <= 0) return '—'
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
@@ -319,8 +328,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     for (let i = 1; i < VALUE_RAMP.length; i += 1) {
       breaks.push(values[Math.floor((i * values.length) / VALUE_RAMP.length)])
     }
-    const label = census.fields.find(([key]) => key === metric)?.[1] ?? metric
-    return census.shapes.map((shape) => {
+    const field = census.fields.find(([key]) => key === metric)
+    const label = field?.[1] ?? metric
+    const kind = field?.[2] ?? 'count'
+    const areas = census.shapes.map((shape) => {
       const row = census.tracts[shape.tr]
       const value = Number(row?.[metric])
       let color: string | null = null
@@ -340,6 +351,18 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           : null,
       }
     })
+    // The legend draws this scale; the same sorted values the breaks came
+    // from, so the bar and the map can never disagree.
+    return {
+      areas,
+      label,
+      kind,
+      scale: {
+        min: values[0],
+        median: values[Math.floor(values.length / 2)],
+        max: values[values.length - 1],
+      },
+    }
   }, [showCensus, census, metric])
 
   /** Value breaks, computed from the market itself rather than guessed. */
@@ -689,12 +712,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                   selectedParcelId: selected,
                   onSelectParcel: setSelected,
                   filterIds,
-                  opacity,
+                  // Dimmed while the census shading is on: a choropleth under
+                  // three hundred thousand full-strength parcel fills reads
+                  // as nothing at all. The lot lines stay, so the ground is
+                  // still there to click.
+                  opacity: choropleth ? Math.min(opacity, 0.12) : opacity,
                 }
               : null
           }
           view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
-          choropleth={choropleth}
+          choropleth={choropleth?.areas ?? null}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-sm text-muted">
@@ -792,6 +819,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 disabled={!showParcels}
                 onChange={(event) => setOpacity(Number(event.target.value))}
               />
+              {choropleth && showParcels && (
+                <p className="mt-1 text-[11px] leading-snug text-faint">
+                  Parcels are dimmed while demographics shading is on, so the tracts read.
+                </p>
+              )}
             </div>
 
             {/* The legend says what the colours mean, and says plainly when a
@@ -1006,6 +1038,27 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           </div>
         )}
       </GisRail>
+
+      {choropleth && (
+        <div className="absolute bottom-9 left-1/2 z-[500] w-60 -translate-x-1/2 rounded-lg border border-line bg-surface/95 p-2.5 shadow-lg backdrop-blur">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+            {choropleth.label}
+          </p>
+          <div className="mt-1.5 flex h-2 overflow-hidden rounded-full" aria-hidden>
+            {VALUE_RAMP.map((hue) => (
+              <i key={hue} className="flex-1" style={{ background: hue }} />
+            ))}
+          </div>
+          <div className="mt-0.5 flex justify-between text-[10px] text-faint">
+            <span>{censusValue(choropleth.scale.min, choropleth.kind)}</span>
+            <span className="text-body">{censusValue(choropleth.scale.median, choropleth.kind)} med</span>
+            <span>{censusValue(choropleth.scale.max, choropleth.kind)}</span>
+          </div>
+          <p className="mt-1 text-[10px] leading-snug text-faint">
+            By census tract, shaded in sevenths of this market's range.
+          </p>
+        </div>
+      )}
 
       {/* The full county record, opened from the card's arrow. Its own panel
           rather than a taller card: the market's panel spec runs to twenty
