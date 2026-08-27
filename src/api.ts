@@ -2,6 +2,7 @@ import type {
   Account,
   CrmRecord,
   Deal,
+  Place,
   RecordType,
   BillingConfig,
   BillingStatus,
@@ -123,6 +124,17 @@ export const api = {
       request<{ deal: Deal }>(`/api/crm/deals/${dealId}/parties`, json(input)),
     removeParty: (dealId: string, partyId: string) =>
       request<void>(`/api/crm/deals/${dealId}/parties/${partyId}`, { method: 'DELETE' }),
+    /**
+     * What the CRM already knows about a parcel.
+     *
+     * Both halves are required because a parcel id is unique per county and
+     * nothing more: without the market, Austin 114452 and Broward 114452 are
+     * the same lookup.
+     */
+    parcel: (market: string, parcelId: string) =>
+      request<{ place: Place | null; deals: Deal[] }>(
+        `/api/crm/parcel?market=${encodeURIComponent(market)}&parcel=${encodeURIComponent(parcelId)}`,
+      ),
     /** Copies a known building into a survey and onto that survey's tour. */
     sendPlace: (placeId: string, input: { surveyId: string }) =>
       request<{ property: Property }>(`/api/crm/places/${placeId}/send`, json(input)),

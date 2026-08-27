@@ -375,6 +375,9 @@ export interface Place {
   rateUnit?: string | null
   ownerCompanyId?: string | null
   notes?: string | null
+  /** Where this place sits on the county roll, when it came from the map. */
+  market?: string | null
+  parcelId?: string | null
   fields: RecordField[]
   updatedAt?: string
 }

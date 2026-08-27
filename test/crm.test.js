@@ -312,3 +312,72 @@ describe('deleting', () => {
     assert.equal(after.body.record.parties.length, 3, 'the party row goes with the record')
   })
 })
+
+/*
+ * The join between the parcel map and the CRM.
+ *
+ * A parcel id is unique per county and nothing more, so the market is half of
+ * the identifier rather than a label. These prove that, prove that a parcel
+ * carries its deals back with it, and prove the lookup does not reach across
+ * teams — the same boundary the rest of the CRM is held to.
+ */
+describe('a place pinned to a parcel', () => {
+  let pinned
+
+  test('a place records the market and parcel it came from', async () => {
+    const created = await alice(
+      '/api/crm/places',
+      asJson({ name: '2407 Harris Blvd', market: 'austin-tx', parcelId: '114452', city: 'Austin' }),
+    )
+    assert.equal(created.status, 201)
+    pinned = created.body.record
+    assert.equal(pinned.market, 'austin-tx')
+    assert.equal(pinned.parcelId, '114452')
+  })
+
+  test('the parcel looks up the place it belongs to', async () => {
+    const found = await alice('/api/crm/parcel?market=austin-tx&parcel=114452')
+    assert.equal(found.status, 200)
+    assert.equal(found.body.place.id, pinned.id)
+    assert.deepEqual(found.body.deals, [], 'no deal on it yet')
+  })
+
+  test('a parcel id alone is not an identifier', async () => {
+    const noMarket = await alice('/api/crm/parcel?parcel=114452')
+    assert.equal(noMarket.status, 400)
+    const noParcel = await alice('/api/crm/parcel?market=austin-tx')
+    assert.equal(noParcel.status, 400)
+  })
+
+  test('the same parcel id in another market is a different parcel', async () => {
+    const elsewhere = await alice('/api/crm/parcel?market=fort-lauderdale-fl&parcel=114452')
+    assert.equal(elsewhere.status, 200)
+    assert.equal(elsewhere.body.place, null)
+  })
+
+  test('a deal on the place comes back with the parcel', async () => {
+    const made = await alice('/api/crm/deals', asJson({ name: 'Harris Blvd assemblage' }))
+    assert.equal(made.status, 201)
+    const linked = await alice(
+      `/api/crm/deals/${made.body.record.id}/parties`,
+      asJson({ kind: 'place', refId: pinned.id, role: 'Subject' }),
+    )
+    assert.equal(linked.status, 201)
+
+    const found = await alice('/api/crm/parcel?market=austin-tx&parcel=114452')
+    assert.equal(found.body.deals.length, 1)
+    assert.equal(found.body.deals[0].name, 'Harris Blvd assemblage')
+  })
+
+  test('another team sees nothing on the same parcel', async () => {
+    const found = await mallory('/api/crm/parcel?market=austin-tx&parcel=114452')
+    assert.equal(found.status, 200)
+    assert.equal(found.body.place, null, 'the parcel is not theirs to see')
+  })
+
+  test('signing out closes the lookup', async () => {
+    const stranger = client()
+    const found = await stranger('/api/crm/parcel?market=austin-tx&parcel=114452')
+    assert.equal(found.status, 401)
+  })
+})

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
-import type { TileConfig } from '../types'
+import { api } from '../api'
+import { navigate } from '../lib/router'
+import type { Deal, Place, TileConfig } from '../types'
 
 /*
  * GIS: the county's own parcel record, underneath everything else.
@@ -55,6 +57,8 @@ interface MarketIndex {
   n: number
   keys: string[]
   cols: Record<string, (string | number | null)[]>
+  /** Four numbers per parcel: west, south, east, north. */
+  bb: number[]
 }
 
 const money = (n: number) => {
@@ -72,6 +76,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [rowOf, setRowOf] = useState<Map<string | number, number>>(new Map())
   const [selected, setSelected] = useState<string | number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [known, setKnown] = useState<{ place: Place | null; deals: Deal[] } | null>(null)
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     fetch(`${CATALOG}/markets.json`)
@@ -126,6 +132,33 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     }
   }, [meta?.heavyBase])
 
+  /*
+   * Whether this parcel is already in the CRM.
+   *
+   * Asked in this direction on purpose: the map holds tens of thousands of
+   * parcels and the CRM holds a handful of places, so the map has an id and
+   * asks whether it means anything here — never the reverse.
+   */
+  useEffect(() => {
+    if (selected == null || !active) {
+      setKnown(null)
+      return
+    }
+    let cancelled = false
+    setKnown(null)
+    api.crm
+      .parcel(active, String(selected))
+      .then((found) => {
+        if (!cancelled) setKnown(found)
+      })
+      .catch(() => {
+        if (!cancelled) setKnown({ place: null, deals: [] })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selected, active])
+
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
     if (!index || meta?.colorBy !== 'value') return null
@@ -147,6 +180,39 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     for (const key of index.keys) out[key] = index.cols[key]?.[row] ?? null
     return out
   }, [selected, index, rowOf])
+
+  /** The centre of the selected parcel, from its bounding box in the index. */
+  const centre = useMemo(() => {
+    if (selected == null || !index?.bb) return null
+    const row = rowOf.get(selected)
+    if (row == null) return null
+    const [w, s, e, n] = index.bb.slice(row * 4, row * 4 + 4)
+    if (![w, s, e, n].every(Number.isFinite)) return null
+    return { lat: (s + n) / 2, lng: (w + e) / 2 }
+  }, [selected, index, rowOf])
+
+  async function addToCrm() {
+    if (!parcel || !active || selected == null) return
+    setSaving(true)
+    try {
+      const { record } = await api.crm.create<Place>('places', {
+        name: String(parcel.ad || `Parcel ${parcel.gid ?? selected}`),
+        address: parcel.ad ?? null,
+        zip: parcel.zp ?? null,
+        acreage: parcel.ac ?? null,
+        market: active,
+        parcelId: String(selected),
+        lat: centre?.lat ?? null,
+        lng: centre?.lng ?? null,
+        notes: parcel.ow ? `Owner of record: ${parcel.ow}` : null,
+      })
+      setKnown({ place: record, deals: [] })
+    } catch {
+      setError('Could not save that parcel.')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const market = markets.find((m) => m.slug === active)
 
@@ -225,6 +291,48 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                   value={parcel.ac ? `${Number(parcel.ac).toFixed(2)} ac` : '—'}
                 />
               </dl>
+
+              {/* What the CRM already knows. A parcel with a deal on it is the
+                  reason to have clicked, so it leads. */}
+              <div className="mt-3 border-t border-line pt-2">
+                {known === null ? (
+                  <p className="text-[11px] text-muted">Checking your records…</p>
+                ) : known.place ? (
+                  <>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-brand hover:underline"
+                      onClick={() => navigate(`/places/${known.place?.id}`)}
+                    >
+                      In your CRM · {known.place.name || 'Place'}
+                    </button>
+                    {known.deals.length > 0 && (
+                      <ul className="mt-1 space-y-0.5">
+                        {known.deals.map((deal) => (
+                          <li key={deal.id}>
+                            <button
+                              type="button"
+                              className="text-[11px] text-body hover:underline"
+                              onClick={() => navigate(`/deals/${deal.id}`)}
+                            >
+                              {deal.name} · {deal.stage}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
+                    disabled={saving}
+                    onClick={addToCrm}
+                  >
+                    {saving ? 'Saving…' : 'Add to CRM'}
+                  </button>
+                )}
+              </div>
             </>
           ) : (
             <p className="text-xs text-muted">

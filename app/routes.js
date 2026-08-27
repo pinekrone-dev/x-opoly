@@ -70,6 +70,7 @@ import {
 import { EmailError, emailConfigured, sendEmail, verificationEmail } from './lib/email.js'
 import {
   addParty,
+  camel as camelRow,
   createRecord,
   dealWithParties,
   deleteRecord,
@@ -1156,6 +1157,42 @@ export function createApp({ db, storage, env = {} }) {
    * four places for the team scope to be forgotten.
    */
   const RECORD_ROUTES = { companies: 'company', people: 'person', places: 'place', deals: 'deal' }
+
+  /*
+   * What the CRM already knows about a parcel.
+   *
+   * The parcel map holds tens of thousands of parcels and the CRM holds a
+   * handful of places, so the question is always asked in this direction: the
+   * map has an id and wants to know whether it means anything here. Answering
+   * with the deals as well saves a second round trip, because a place with no
+   * deal on it is not what the broker clicked for.
+   */
+  app.get('/api/crm/parcel', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+
+    const market = (c.req.query('market') ?? '').trim()
+    const parcelId = (c.req.query('parcel') ?? '').trim()
+    // A parcel id on its own is not an identifier: ids are unique per county
+    // and nothing more, so answering without a market would mix up markets.
+    if (!market || !parcelId) return c.json({ error: 'A market and a parcel are both required.' }, 400)
+
+    const place = await db.get(
+      'SELECT * FROM places WHERE team_id = ? AND market = ? AND parcel_id = ?',
+      [user.teamId, market, parcelId],
+    )
+    if (!place) return c.json({ place: null, deals: [] })
+
+    const deals = await db.all(
+      `SELECT d.* FROM deals d
+         JOIN deal_parties p ON p.deal_id = d.id
+        WHERE d.team_id = ? AND p.kind = 'place' AND p.ref_id = ?
+        ORDER BY d.updated_at DESC`,
+      [user.teamId, place.id],
+    )
+    return c.json({ place: camelRow(place), deals: deals.map(camelRow) })
+  })
+
 
   for (const [segment, recordType] of Object.entries(RECORD_ROUTES)) {
     app.get(`/api/crm/${segment}`, async (c) => {

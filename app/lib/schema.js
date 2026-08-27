@@ -295,6 +295,10 @@ export const DATA_FIXES = [
   'UPDATE users SET team_id = id WHERE team_id IS NULL',
   // Runs here, after the column exists on databases that predate it.
   'CREATE INDEX IF NOT EXISTS idx_users_team ON users(team_id)',
+  // Same reason: the parcel columns are additions, so the index that makes
+  // "is this parcel already in the CRM" a lookup rather than a scan has to be
+  // created after them.
+  'CREATE INDEX IF NOT EXISTS idx_places_parcel ON places(team_id, market, parcel_id)',
 ]
 
 export const COLUMN_ADDITIONS = [
@@ -331,6 +335,22 @@ export const COLUMN_ADDITIONS = [
   ['users', 'verified', 'INTEGER NOT NULL DEFAULT 1'],
   ['users', 'verify_digest', 'TEXT'],
   ['users', 'verify_expires', 'TEXT'],
+
+  /*
+   * Where a place sits on the county roll.
+   *
+   * This is the join between the GIS layer and the CRM, and it is only two
+   * columns because a parcel is already identified by exactly two things: the
+   * market it belongs to and its id within that market. Parcel ids are unique
+   * per county and nothing more, so `market` is not decoration — without it,
+   * Austin parcel 114452 and Broward parcel 114452 are the same row.
+   *
+   * Kept on `places` rather than a join table: a parcel is a place, and a
+   * place has at most one parcel. Deals, companies and people reach it the way
+   * they already reach any place, through deal_parties.
+   */
+  ['places', 'market', 'TEXT'],
+  ['places', 'parcel_id', 'TEXT'],
 
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],

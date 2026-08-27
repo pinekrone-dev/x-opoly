@@ -24,7 +24,7 @@ const TABLES = {
 }
 
 /** Turns a snake_case row into the camelCase shape the client speaks. */
-function camel(row) {
+export function camel(row) {
   if (!row) return null
   const out = {}
   for (const [key, value] of Object.entries(row)) {
@@ -91,6 +91,8 @@ const WRITABLE = {
     'name', 'address', 'city', 'state', 'zip', 'lat', 'lng', 'property_type',
     'size_sqft', 'acreage', 'availability', 'asking_rate', 'rate_unit',
     'owner_company_id', 'notes',
+    // Where this place is on the county roll, when it came from the parcel map.
+    'market', 'parcel_id',
   ],
   deal: ['name', 'kind', 'stage', 'value', 'close_date', 'survey_id', 'notes'],
 }
