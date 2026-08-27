@@ -249,6 +249,45 @@ export const SCHEMA_STATEMENTS = [
     color        TEXT NOT NULL DEFAULT '#f59e0b',
     created_at   TEXT NOT NULL
   )`,
+  /*
+   * Sale comparables the team imported from what their own browser showed
+   * them. `team_id` on every row is the whole security model: comps are one
+   * broker's collected knowledge, never a shared database, and a listing
+   * site's compiled data must not become one here.
+   *
+   * `placed` is three-valued on purpose. NULL means the address has not been
+   * looked up yet and belongs in the geocoding queue; 'geocoded' and 'failed'
+   * both mean it has been tried, which is what keeps an unreadable address
+   * from costing a lookup on every subsequent pass.
+   */
+  `CREATE TABLE IF NOT EXISTS comps (
+    id             TEXT PRIMARY KEY,
+    team_id        TEXT NOT NULL,
+    market         TEXT,
+    source_key     TEXT NOT NULL,
+    address        TEXT,
+    name           TEXT,
+    price_str      TEXT,
+    price          REAL,
+    sale_lease     TEXT,
+    prop_type      TEXT,
+    sqft           REAL,
+    acres          REAL,
+    units          REAL,
+    cap_rate       REAL,
+    year_built     REAL,
+    price_per_sf   REAL,
+    price_per_acre REAL,
+    price_per_unit REAL,
+    url            TEXT,
+    source         TEXT,
+    scraped_at     TEXT,
+    lat            REAL,
+    lng            REAL,
+    placed         TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+  )`,
 
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
@@ -267,6 +306,9 @@ export const SCHEMA_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
   'CREATE INDEX IF NOT EXISTS idx_zones_survey ON zones(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
+  // Re-importing the same page is the normal case, so the dedupe lookup —
+  // "has this team seen this listing before" — is the one that must be fast.
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key)',
 ]
 
 /**

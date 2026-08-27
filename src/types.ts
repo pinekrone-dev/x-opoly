@@ -9,6 +9,40 @@ export interface Zone {
   color: string
 }
 
+/**
+ * A sale comparable the broker captured themselves and imported.
+ *
+ * Every field is nullable because a listing placard is not a form: one shows
+ * a cap rate and no square footage, the next the reverse, and a comp missing
+ * half its columns is still worth having on the map.
+ */
+export interface Comp {
+  id: string
+  market: string | null
+  address: string | null
+  name: string | null
+  priceStr: string | null
+  price: number | null
+  saleLease: string | null
+  propType: string | null
+  sqft: number | null
+  acres: number | null
+  units: number | null
+  capRate: number | null
+  yearBuilt: number | null
+  pricePerSf: number | null
+  pricePerAcre: number | null
+  pricePerUnit: number | null
+  url: string | null
+  source: string | null
+  scrapedAt: string | null
+  lat: number | null
+  lng: number | null
+  /** null until the address has been looked up; then 'geocoded' or 'failed'. */
+  placed: string | null
+  createdAt: string
+}
+
 /** A one-time signup link for a colleague, shown on the Share tab. */
 export interface Invite {
   id: string

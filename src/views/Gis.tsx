@@ -11,7 +11,7 @@ import GisRail, {
 } from '../components/GisRail'
 import { api } from '../api'
 import { navigate } from '../lib/router'
-import type { Deal, Place, TileConfig } from '../types'
+import type { Comp, Deal, Place, TileConfig } from '../types'
 
 /*
  * GIS: the county's own parcel record, underneath everything else.
@@ -215,6 +215,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   schools: LAYER_ICONS.demographics,
   'school-districts': LAYER_ICONS.zoning,
   txdot: LAYER_ICONS.absorption,
+  comps: LAYER_ICONS.comps,
 }
 
 /*
@@ -457,6 +458,134 @@ function LayerRecords({
   )
 }
 
+/**
+ * The capture the broker runs in their own browser.
+ *
+ * Kept as a string the panel hands over rather than something this app runs:
+ * it executes on the page the broker is already looking at, under their own
+ * licence to look at it, and produces a list only they receive. That is the
+ * whole difference between a broker keeping notes and this company operating
+ * a scraper against somebody else's database, and it is not a small one.
+ */
+const CAPTURE_SNIPPET = `copy(JSON.stringify([...document.querySelectorAll('article,[data-id]')].map(card => ({
+  address: card.querySelector('[class*=address]')?.innerText,
+  name: card.querySelector('a[href]')?.innerText,
+  priceStr: card.innerText.match(/\\$[\\d,]+/)?.[0],
+  url: card.querySelector('a[href]')?.href,
+}))))`
+
+/**
+ * Importing comps, and saying honestly where they can and cannot come from.
+ *
+ * The panel does the explaining because this is the one layer whose data the
+ * app does not fetch: it cannot, and the reason a broker should hear is the
+ * real one rather than "not built yet".
+ */
+function CompsImport({
+  comps,
+  unplaced,
+  busy,
+  paste,
+  note,
+  onPaste,
+  onImport,
+  onPlace,
+}: {
+  comps: Comp[] | null
+  unplaced: number
+  busy: boolean
+  paste: string
+  note: { tone: 'ok' | 'warn'; text: string } | null
+  onPaste: (value: string) => void
+  onImport: () => void
+  onPlace: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const empty = !comps?.length
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-line bg-sunken/50 p-2">
+      {empty && (
+        <p className="text-[11px] text-body">
+          Your own comps, kept in this workspace. Nothing is collected for you: a
+          listing site's compiled database is theirs, so this takes what your own
+          browser showed you and stores it here, visible to nobody else.
+        </p>
+      )}
+      {!empty && (
+        <p className="text-[11px] text-muted">
+          {comps.length.toLocaleString()} {comps.length === 1 ? 'comp' : 'comps'} in this
+          workspace
+          {unplaced > 0 ? `, ${unplaced.toLocaleString()} not located yet` : ''}.
+        </p>
+      )}
+
+      {unplaced > 0 && (
+        <button
+          type="button"
+          onClick={onPlace}
+          disabled={busy}
+          className="w-full rounded-md border border-line px-2 py-1 text-[11px] text-ink hover:border-accent/50 disabled:opacity-50"
+        >
+          {busy ? 'Locating…' : `Locate ${unplaced.toLocaleString()} more`}
+        </button>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        className="text-[11px] text-accent underline"
+      >
+        {open ? 'Hide import' : empty ? 'Import comps' : 'Import more'}
+      </button>
+
+      {open && (
+        <div className="space-y-1.5">
+          <textarea
+            value={paste}
+            onChange={(event) => onPaste(event.target.value)}
+            rows={4}
+            placeholder='[{"address": "…", "priceStr": "$4,250,000", "propType": "Retail"}]'
+            className="w-full rounded-md border border-line bg-surface px-2 py-1.5 font-mono text-[11px] text-ink"
+            aria-label="Captured listings as JSON"
+          />
+          <button
+            type="button"
+            onClick={onImport}
+            disabled={busy || !paste.trim()}
+            className="w-full rounded-md bg-brand px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+          >
+            {busy ? 'Importing…' : 'Import'}
+          </button>
+          <details className="text-[11px] text-faint">
+            <summary className="cursor-pointer">Where the JSON comes from</summary>
+            <p className="mt-1">
+              Any list of objects works. Addresses are matched on{' '}
+              <code>address</code>, prices on <code>price</code> or{' '}
+              <code>priceStr</code>, and the rest on the names a listing placard
+              uses — <code>propType</code>, <code>sqft</code>, <code>acres</code>,{' '}
+              <code>units</code>, <code>cap</code>, <code>year</code>,{' '}
+              <code>url</code>. Missing columns are simply missing. If you already
+              have a capture of your own, paste what it produced. Otherwise this,
+              run in your browser's console on a page you are looking at, copies a
+              starting shape to the clipboard:
+            </p>
+            <pre className="mt-1 overflow-x-auto rounded bg-sunken p-1.5 text-[10px] leading-snug">
+              {CAPTURE_SNIPPET}
+            </pre>
+          </details>
+        </div>
+      )}
+
+      {note && (
+        <p className={`text-[11px] ${note.tone === 'warn' ? 'text-rose-600' : 'text-muted'}`}>
+          {note.text}
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** The columns worth handing to someone else, in the order they read. */
 const CSV_COLUMNS: [string, string][] = [
   ['gid', 'Parcel'],
@@ -570,6 +699,19 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    */
   const [layerPick, setLayerPick] = useState<{ layer: string; index: number } | null>(null)
   const [layerView, setLayerView] = useState<{ center: [number, number]; zoom: number; key: number } | null>(null)
+  /*
+   * Sale comps this workspace collected.
+   *
+   * They live in the same layer machinery as anything the county publishes —
+   * a card, a colour, records in the panel — but they arrive by a different
+   * road. Nothing here is fetched from a listing site: the broker captures
+   * what their own browser showed them and imports it, and it stays theirs.
+   */
+  const [comps, setComps] = useState<Comp[] | null>(null)
+  const [compsUnplaced, setCompsUnplaced] = useState(0)
+  const [compsBusy, setCompsBusy] = useState(false)
+  const [compsPaste, setCompsPaste] = useState('')
+  const [compsNote, setCompsNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -746,6 +888,106 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   }, [published, layerOn, layerData, layerBusy, active])
 
   /*
+   * The workspace's comps, fetched the first time the square is switched on.
+   *
+   * Not on mount: a broker who has never imported any should not pay a round
+   * trip for an empty list on every visit to the map.
+   */
+  useEffect(() => {
+    if (!layerOn.comps || comps !== null) return undefined
+    let cancelled = false
+    api.comps
+      .list(active ?? undefined)
+      .then((res) => {
+        if (cancelled) return
+        setComps(res.comps)
+        setCompsUnplaced(res.unplaced)
+      })
+      .catch(() => {
+        if (!cancelled) setComps([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [layerOn.comps, comps, active])
+
+  /*
+   * The comps as a layer.
+   *
+   * Every comp becomes a feature, including the ones the geocoder could not
+   * place — those get a null geometry, which the map skips and the record
+   * list does not. That is deliberate: an address nobody can resolve is still
+   * a sale the broker recorded, and dropping it from the list would make the
+   * panel quietly disagree with the count on the card.
+   */
+  const compsGeo = useMemo((): GeoJSON.FeatureCollection | null => {
+    if (!comps?.length) return null
+    /*
+     * The cast covers the null geometries. GeoJSON itself calls a feature
+     * with `"geometry": null` an unlocated feature and allows it — MapLibre
+     * skips those when drawing — but @types/geojson models a collection as
+     * holding located features only, so the compiler needs telling.
+     */
+    return {
+      type: 'FeatureCollection',
+      features: comps.map((comp) => ({
+        type: 'Feature' as const,
+        geometry:
+          Number.isFinite(comp.lat) && Number.isFinite(comp.lng)
+            ? { type: 'Point' as const, coordinates: [comp.lng as number, comp.lat as number] }
+            : null,
+        properties: {
+          Address: comp.address ?? '',
+          Name: comp.name ?? '',
+          Price: comp.priceStr ?? (comp.price != null ? money(comp.price) : ''),
+          Type: comp.propType ?? '',
+          'Sale or lease': comp.saleLease ?? '',
+          SF: comp.sqft != null ? comp.sqft.toLocaleString() : '',
+          Acres: comp.acres != null ? String(comp.acres) : '',
+          Units: comp.units != null ? String(comp.units) : '',
+          'Cap rate': comp.capRate != null ? `${comp.capRate}%` : '',
+          'Year built': comp.yearBuilt != null ? String(comp.yearBuilt) : '',
+          'Price per SF': comp.pricePerSf != null ? money(comp.pricePerSf) : '',
+          Source: comp.source ?? '',
+          Captured: comp.scrapedAt ? String(comp.scrapedAt).slice(0, 10) : '',
+          // Said out loud, because a record that will not appear on the map
+          // should explain itself rather than look like a drawing bug.
+          'On the map': comp.placed === 'failed' ? 'address not found' : '',
+        },
+      })),
+    } as GeoJSON.FeatureCollection
+  }, [comps])
+
+  /**
+   * The comps described the way a published layer is described, so everything
+   * downstream — the card, the colour picker, colour-by-type, the record list
+   * — treats them as one more layer rather than a special case.
+   */
+  const compsLayer = useMemo(
+    (): PublishedLayer => ({
+      id: 'comps',
+      label: 'Comps',
+      kind: 'point',
+      color: '#d94c8a',
+      file: '',
+      count: compsGeo?.features.length ?? 0,
+      note: comps?.length ? undefined : 'Import your own',
+      fields: ['Address', 'Price', 'Type', 'SF', 'Cap rate', 'Year built', 'Sale or lease', 'On the map'],
+      attribution: 'Imported by this workspace',
+    }),
+    [compsGeo, comps],
+  )
+
+  /** Every layer the panel and the map treat alike: published plus comps. */
+  const shownLayers = useMemo(() => [...published, compsLayer], [published, compsLayer])
+
+  /** The same, for geometry: comps come from the workspace, not the catalog. */
+  const shownData = useMemo(
+    () => (compsGeo ? { ...layerData, comps: compsGeo } : layerData),
+    [layerData, compsGeo],
+  )
+
+  /*
    * What each loaded layer could be coloured by, and how.
    *
    * A field earns the offer by behaving like a category: present on most
@@ -755,8 +997,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    */
   const layerCategories = useMemo(() => {
     const out: Record<string, { field: string; values: [string, number][] }[]> = {}
-    for (const layer of published) {
-      const data = layerData[layer.id]
+    for (const layer of shownLayers) {
+      const data = shownData[layer.id]
       if (!data?.features?.length) continue
       const sample = data.features.slice(0, 4000)
       const options: { field: string; values: [string, number][] }[] = []
@@ -790,7 +1032,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       if (options.length) out[layer.id] = options.sort((a, b) => a.values.length - b.values.length)
     }
     return out
-  }, [published, layerData])
+  }, [shownLayers, shownData])
 
   /** The colour each category gets, for the map and the legend alike. */
   const categoryPaint = useMemo(() => {
@@ -812,12 +1054,12 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   /** What the map should draw: every layer switched on, with its geometry. */
   const extras = useMemo(
     () =>
-      published
-        .filter((layer) => layerOn[layer.id] && layerData[layer.id])
+      shownLayers
+        .filter((layer) => layerOn[layer.id] && shownData[layer.id])
         .map((layer) => ({
           id: layer.id,
           kind: layer.kind,
-          data: layerData[layer.id],
+          data: shownData[layer.id],
           color: layerStyle[layer.id]?.color ?? layer.color,
           opacity: layerStyle[layer.id]?.opacity ?? 0.7,
           fields: layer.fields,
@@ -825,7 +1067,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
             : null,
         })),
-    [published, layerOn, layerData, layerStyle, categoryPaint],
+    [shownLayers, layerOn, shownData, layerStyle, categoryPaint],
   )
 
   /*
@@ -1239,7 +1481,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       // is matched by label where one fits; the rest get the generic layers
       // mark, because a card must appear for a source this app has never
       // heard of — that is the point of the registry.
-      ...published.map(
+      ...shownLayers.map(
         (layer): LayerCard => ({
           id: `x:${layer.id}`,
           label: layer.label,
@@ -1261,12 +1503,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       ...(published.some((l) => l.id === 'permits') ? [] : [pending('Development pipeline', LAYER_ICONS.pipeline)]),
       ...(published.some((l) => l.id === 'plan-review') ? [] : [pending('Entitlements', LAYER_ICONS.entitlements)]),
       pending('Market surveys', LAYER_ICONS.surveys),
-      pending('Comps', LAYER_ICONS.comps),
       pending('Absorption', LAYER_ICONS.absorption),
       pending('Rent trends', LAYER_ICONS.rent),
       pending('Forecasts', LAYER_ICONS.forecasts),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, published, layerOn, layerBusy])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy])
 
   /** The centre of the selected parcel, from its bounding box in the index. */
   const centre = useMemo(() => {
@@ -1283,6 +1524,118 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * the count, the report and the CSV agree with the answer by construction —
    * and the panel below shows exactly what was understood, ready to correct.
    */
+  /**
+   * Reloads the comps list from the server, so the map and the record list
+   * agree with what was actually stored rather than with what was sent.
+   */
+  async function refreshComps() {
+    const res = await api.comps.list(active ?? undefined)
+    setComps(res.comps)
+    setCompsUnplaced(res.unplaced)
+    return res
+  }
+
+  /**
+   * Geocodes the queue, one bounded pass at a time.
+   *
+   * The server places twenty-five per call because a single request that
+   * looked up four hundred addresses would sit past the edge's timeout and
+   * lose the lot. Looping here keeps that fact out of the server's shape and
+   * lets the panel count down while it happens.
+   */
+  async function placeMoreComps() {
+    if (compsBusy) return
+    setCompsBusy(true)
+    try {
+      // Driven by what each pass reports rather than by the count this
+      // closure captured: the import that queued the work has just changed
+      // that number, and reading the stale one would stop before starting.
+      let guard = 40
+      let remaining = 0
+      let placed = 0
+      let failed = 0
+      do {
+        const pass = await api.comps.place()
+        remaining = pass.remaining
+        placed += pass.placed
+        failed += pass.failed
+        setCompsUnplaced(remaining)
+        guard -= 1
+      } while (remaining > 0 && guard > 0)
+      await refreshComps()
+      // Counted rather than announced as success. A pass where the geocoder
+      // read nothing used to say "Addresses located." over an empty map,
+      // which is the kind of cheerful lie that costs an afternoon.
+      setCompsNote(
+        placed === 0
+          ? {
+              tone: 'warn',
+              text: `No address could be located${
+                failed ? ` — ${failed} tried` : ''
+              }. They are still listed below; the map cannot show them.`,
+            }
+          : {
+              tone: 'ok',
+              text: `${placed.toLocaleString()} located${
+                failed ? `, ${failed.toLocaleString()} the geocoder could not read` : ''
+              }.`,
+            },
+      )
+    } catch (cause) {
+      setCompsNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'Could not place those addresses.',
+      })
+    } finally {
+      setCompsBusy(false)
+    }
+  }
+
+  /**
+   * Takes what the broker's own capture produced and stores it in their
+   * workspace. The parse happens here so a mis-paste is answered instantly
+   * rather than by a round trip.
+   */
+  async function importComps() {
+    const text = compsPaste.trim()
+    if (!text || compsBusy) return
+    let listings: unknown
+    try {
+      listings = JSON.parse(text)
+    } catch {
+      setCompsNote({
+        tone: 'warn',
+        text: 'That is not JSON. Paste the whole value your capture copied, brackets and all.',
+      })
+      return
+    }
+    setCompsBusy(true)
+    setCompsNote(null)
+    try {
+      const res = await api.comps.import({ listings, market: active ?? undefined })
+      const parts = [
+        res.added ? `${res.added} added` : '',
+        res.updated ? `${res.updated} updated` : '',
+        res.dropped ? `${res.dropped} without an address skipped` : '',
+        res.truncated ? `${res.truncated} beyond the import limit not read` : '',
+      ].filter(Boolean)
+      setCompsPaste('')
+      setCompsNote({ tone: 'ok', text: `${parts.join(', ')}. Locating addresses…` })
+      const after = await refreshComps()
+      setCompsBusy(false)
+      // Straight on to placing them: an import that leaves every comp off the
+      // map has not finished doing what the broker asked for.
+      if (after.unplaced > 0) await placeMoreComps()
+      return
+    } catch (cause) {
+      setCompsNote({
+        tone: 'warn',
+        text: cause instanceof Error ? cause.message : 'Could not import those.',
+      })
+    }
+    setCompsBusy(false)
+  }
+
   async function runHunt() {
     const ask = hunt.trim()
     if (!ask || hunting) return
@@ -1553,7 +1906,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               </div>
             )}
 
-            {published
+            {shownLayers
               .filter((layer) => layerOn[layer.id])
               .map((layer) => {
                 const style = layerStyle[layer.id] ?? { color: layer.color, opacity: 0.7 }
@@ -1671,13 +2024,26 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                         switching a layer on ought to hand over the records
                         as well, because a hundred and eight city lots with
                         asking prices are a list somebody wants to read. */}
-                    {layerData[layer.id]?.features?.length ? (
+                    {layer.id === 'comps' && (
+                      <CompsImport
+                        comps={comps}
+                        unplaced={compsUnplaced}
+                        busy={compsBusy}
+                        paste={compsPaste}
+                        note={compsNote}
+                        onPaste={setCompsPaste}
+                        onImport={importComps}
+                        onPlace={placeMoreComps}
+                      />
+                    )}
+
+                    {shownData[layer.id]?.features?.length ? (
                       <LayerRecords
-                        features={layerData[layer.id].features}
+                        features={shownData[layer.id].features}
                         fields={
                           layer.fields?.length
                             ? layer.fields
-                            : Object.keys(layerData[layer.id].features[0]?.properties ?? {})
+                            : Object.keys(shownData[layer.id].features[0]?.properties ?? {})
                         }
                         picked={layerPick?.layer === layer.id ? layerPick.index : null}
                         onPick={(index, centre) => {

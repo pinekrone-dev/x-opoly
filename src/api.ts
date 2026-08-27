@@ -10,6 +10,7 @@ import type {
   Zone,
   AppFeatures,
   DealStage,
+  Comp,
   CompetitionResult,
   Demographics,
   GeocodeResult,
@@ -157,6 +158,33 @@ export const api = {
       provider: string | null
       model: string | null
     }>('/api/gis/scout', json(input)),
+
+  /*
+   * Sale comps the broker collected themselves.
+   *
+   * Nothing here fetches from a listing site. `importComps` takes what their
+   * own capture produced, and it lands in their workspace only — comps are
+   * never pooled across teams.
+   */
+  comps: {
+    list: (market?: string) =>
+      request<{ comps: Comp[]; unplaced: number }>(
+        market ? `/api/gis/comps?market=${encodeURIComponent(market)}` : '/api/gis/comps',
+      ),
+    import: (input: { listings: unknown; market?: string; source?: string }) =>
+      request<{ added: number; updated: number; dropped: number; truncated: number }>(
+        '/api/gis/comps',
+        json(input),
+      ),
+    /** One geocoding pass. Call again while `remaining` is above zero. */
+    place: () =>
+      request<{ placed: number; failed: number; remaining: number }>(
+        '/api/gis/comps/place',
+        json({}),
+      ),
+    remove: (id: string) =>
+      request<{ removed: number }>(`/api/gis/comps/${id}`, { method: 'DELETE' }),
+  },
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>

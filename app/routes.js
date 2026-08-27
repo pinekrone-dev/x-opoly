@@ -103,6 +103,15 @@ import {
 } from './lib/billing.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
+import {
+  MAX_COMPS_PER_IMPORT,
+  clearComps,
+  deleteComp,
+  listComps,
+  placeComps,
+  readComps,
+  saveComps,
+} from './lib/comps.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -1549,6 +1558,88 @@ export function createApp({ db, storage, env = {} }) {
       return c.json({ stored: key })
     }
     return c.json({ error: `Unknown action "${action}".` }, 400)
+  })
+
+  /*
+   * Sale comps, imported by the broker rather than harvested by the server.
+   *
+   * There is no crawler behind these endpoints and there is not going to be
+   * one. A listing site's compiled database belongs to that site; scraping it
+   * into a shared table here would redistribute their work and would be worth
+   * suing over. What a broker's own browser showed them on pages they were
+   * licensed to view is a different thing, and it stays in their workspace:
+   * every query below is scoped by `team_id`, and nothing joins across teams.
+   */
+  app.get('/api/gis/comps', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = (c.req.query('market') ?? '').trim() || null
+    const comps = await listComps(db, user.teamId, { market })
+    return c.json({
+      comps,
+      // What the map cannot draw yet, so the client knows whether to keep
+      // asking for another geocoding pass.
+      unplaced: comps.filter((comp) => !comp.placed).length,
+    })
+  })
+
+  app.post('/api/gis/comps', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'comps', 60, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => null)
+    if (!body) return c.json({ error: 'Send the captured listings as JSON.' }, 400)
+    const market = typeof body?.market === 'string' && body.market.trim() ? body.market.trim() : null
+    const source = typeof body?.source === 'string' && body.source.trim() ? body.source.trim().slice(0, 60) : null
+
+    const { rows, read, dropped, error } = readComps(body.listings ?? body, { source })
+    if (error) return c.json({ error }, 400)
+    if (!rows.length) {
+      return c.json(
+        {
+          error: dropped
+            ? `Read ${read} entries but none carried an address or a name.`
+            : 'That list was empty.',
+        },
+        400,
+      )
+    }
+    const { added, updated } = await saveComps(db, user.teamId, rows, { market })
+    return c.json({
+      added,
+      updated,
+      dropped,
+      // Only the first page-worth is capped, and saying so beats silently
+      // storing 2,000 of the 3,000 someone collected.
+      truncated: read > MAX_COMPS_PER_IMPORT ? read - MAX_COMPS_PER_IMPORT : 0,
+    })
+  })
+
+  /*
+   * One geocoding pass. The client calls this repeatedly until `remaining`
+   * reaches zero, because a single request that looked up four hundred
+   * addresses would sit past the edge's timeout and lose the lot.
+   */
+  app.post('/api/gis/comps/place', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'comps-place', 200, 10 * 60 * 1000)
+    if (throttled) return throttled
+    return c.json(await placeComps(db, user.teamId, geocode, { env }))
+  })
+
+  app.delete('/api/gis/comps/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (c.req.param('id') === 'all') {
+      return c.json({ removed: await clearComps(db, user.teamId) })
+    }
+    if (!(await deleteComp(db, user.teamId, c.req.param('id')))) {
+      return notFound(c, 'That comp does not exist.')
+    }
+    return c.json({ removed: 1 })
   })
 
   /*
