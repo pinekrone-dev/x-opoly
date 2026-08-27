@@ -189,6 +189,37 @@ describe('POST /api/gis/ingest', () => {
     assert.equal(store.get('markets.json').bytes.toString(), '{"markets":[]}')
   })
 
+  test('extra layers publish under their own bounded namespace', async () => {
+    const ok = await call('market=austin-tx&file=layer-permits.geojson', {
+      headers: auth,
+      body: '{"type":"FeatureCollection","features":[]}',
+    })
+    assert.equal(ok.status, 200)
+    assert.equal(store.get('austin-tx/layer-permits.geojson').contentType, 'application/geo+json')
+
+    const catalog = await call('market=austin-tx&file=layers.json', { headers: auth, body: '{"layers":[]}' })
+    assert.equal(catalog.status, 200)
+    assert.equal(store.get('austin-tx/layers.json').contentType, 'application/json')
+  })
+
+  test('the layer namespace does not become a way in', async () => {
+    // Every one of these is a plausible near-miss, and each must be refused:
+    // the prefix is not a licence to name any file.
+    for (const file of [
+      'layer-../../secrets.geojson',
+      'layer-permits.json',
+      'layers-permits.geojson',
+      'layer-.geojson',
+      'layer-Permits.geojson',
+      'index.geojson',
+      'layer-permits.geojson.bak',
+    ]) {
+      const res = await call(`market=austin-tx&file=${encodeURIComponent(file)}`, { headers: auth, body: 'x' })
+      assert.equal(res.status, 400, `${file} should be refused`)
+    }
+    assert.equal([...store.keys()].some((k) => k.includes('secrets')), false)
+  })
+
   test('a large file arrives in parts and lands whole', async () => {
     const created = await (await call('market=austin-tx&file=parcels.pmtiles&action=create', { headers: auth })).json()
     assert.ok(created.uploadId)

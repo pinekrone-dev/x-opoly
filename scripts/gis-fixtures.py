@@ -256,6 +256,27 @@ def write_catalog():
         {'type': 'Feature', 'properties': {'tr': TRACT_A}, 'geometry': tract_polygon(-97.745, 30.262, -97.730, 30.276)},
         {'type': 'Feature', 'properties': {'tr': TRACT_B}, 'geometry': tract_polygon(-97.756, 30.258, -97.745, 30.270)}]})
     j('catalog/austin/codes.json', {})
+    # A published layer the app has no built-in knowledge of: it exists only
+    # because the catalog says so, which is exactly what has to be proven.
+    j('catalog/austin/layers.json', {'layers': [
+        {'id': 'permits', 'label': 'Development pipeline', 'note': 'City permits',
+         'kind': 'point', 'color': '#e8590c', 'file': 'layer-permits.geojson',
+         'count': 2, 'attribution': 'City of Austin',
+         'fields': ['Permit type', 'Status']},
+        {'id': 'zoning', 'label': 'Zoning', 'note': 'Districts', 'kind': 'polygon',
+         'color': '#d6336c', 'file': 'layer-zoning.geojson', 'count': 1,
+         'attribution': 'City of Austin', 'fields': ['Zoning']},
+    ]})
+    j('catalog/austin/layer-permits.geojson', {'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'properties': {'Permit type': 'Commercial remodel', 'Status': 'Issued'},
+         'geometry': {'type': 'Point', 'coordinates': [-97.7431, 30.2672]}},
+        {'type': 'Feature', 'properties': {'Permit type': 'New construction', 'Status': 'In review'},
+         'geometry': {'type': 'Point', 'coordinates': [-97.7375, 30.2700]}},
+    ]})
+    j('catalog/austin/layer-zoning.geojson', {'type': 'FeatureCollection', 'features': [
+        {'type': 'Feature', 'properties': {'Zoning': 'CS-MU'},
+         'geometry': tract_polygon(-97.750, 30.260, -97.735, 30.275)},
+    ]})
     j('catalog/austin/owners.json', {
         'p': {'1': {'n': 'Congress Holdings LLC', 'c': 2, 'v': 2500000,
                     'a': 'Po Box 1, Austin TX 78701'},

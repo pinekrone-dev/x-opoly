@@ -126,6 +126,26 @@ interface OwnerGroup {
   t?: string[]
 }
 
+/**
+ * A layer this market publishes that the app has no built-in knowledge of.
+ *
+ * The pipeline fetches somebody's operational map — permits, zoning, flood,
+ * opportunity zones — and describes it here: what to call it, how it draws,
+ * and which file holds it. Everything the catalog says, the app obeys, which
+ * is what lets a market gain a layer without this file changing.
+ */
+interface PublishedLayer {
+  id: string
+  label: string
+  note?: string
+  kind: 'point' | 'polygon' | 'line'
+  color: string
+  file: string
+  count?: number
+  attribution?: string
+  fields?: string[]
+}
+
 interface OwnerIndex {
   p?: Record<string, OwnerGroup>
   b?: Record<string, OwnerGroup>
@@ -174,6 +194,24 @@ const RAMPS: { id: string; label: string; colors: string[] }[] = [
     colors: ['#F1F3F6', '#DDE1E8', '#C3C9D4', '#A3ABBB', '#7F899C', '#5C6377', '#3B4152'],
   },
 ]
+
+/*
+ * Icons for the layers a market publishes.
+ *
+ * Matched by the registry's own id, so a source gains its mark by being
+ * named — and anything unrecognised still gets a card, with the generic
+ * layers mark, because the catalog is allowed to know things this file
+ * does not.
+ */
+const PUBLISHED_ICONS: Record<string, JSX.Element> = {
+  zoning: LAYER_ICONS.zoning,
+  permits: LAYER_ICONS.pipeline,
+  'plan-review': LAYER_ICONS.entitlements,
+  'opportunity-zones': LAYER_ICONS.absorption,
+  schools: LAYER_ICONS.demographics,
+  'school-districts': LAYER_ICONS.zoning,
+  txdot: LAYER_ICONS.absorption,
+}
 
 const rampOf = (id: string) => RAMPS.find((r) => r.id === id)?.colors ?? VALUE_RAMP
 
@@ -330,6 +368,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * over a satellite basemap is a judgement about legibility that only the
    * person looking at it can make.
    */
+  /*
+   * The published layers: what this market offers, what is switched on, the
+   * geometry once fetched, and the viewer's colour and opacity for each. All
+   * keyed by layer id, because the set of layers is the catalog's to decide.
+   */
+  const [published, setPublished] = useState<PublishedLayer[]>([])
+  const [layerOn, setLayerOn] = useState<Record<string, boolean>>({})
+  const [layerData, setLayerData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
+  const [layerStyle, setLayerStyle] = useState<Record<string, { color: string; opacity: number }>>({})
+  const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -385,6 +433,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setHuntNote(null)
     setOwners(null)
     setOwnerPick(null)
+    setPublished([])
+    setLayerOn({})
+    setLayerData({})
+    setLayerStyle({})
     setError(null)
     fetch(`${CATALOG}/${active}/meta.json`)
       .then(asJson)
@@ -451,6 +503,70 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       cancelled = true
     }
   }, [selected, active])
+
+  /*
+   * What extra layers this market publishes.
+   *
+   * A small file, fetched with the market, listing somebody else's live map
+   * per entry. A market that publishes none simply has none — this is not an
+   * error, and older markets predate the registry entirely.
+   */
+  useEffect(() => {
+    if (!active) return undefined
+    let cancelled = false
+    fetch(`${CATALOG}/${active}/layers.json`)
+      .then(asJson)
+      .then((doc: { layers?: PublishedLayer[] }) => {
+        if (cancelled) return
+        const list = doc.layers ?? []
+        setPublished(list)
+        setLayerStyle(
+          Object.fromEntries(list.map((layer) => [layer.id, { color: layer.color, opacity: 0.7 }])),
+        )
+      })
+      .catch(() => {
+        // No registry here yet. Nothing to say about it.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
+  /*
+   * The geometry behind a layer, fetched the first time it is switched on
+   * and kept after. These run to megabytes, so nothing is loaded until
+   * someone asks to see it.
+   */
+  useEffect(() => {
+    if (!active) return
+    for (const layer of published) {
+      if (!layerOn[layer.id] || layerData[layer.id] || layerBusy[layer.id]) continue
+      setLayerBusy((busy) => ({ ...busy, [layer.id]: true }))
+      fetch(`${CATALOG}/${active}/${layer.file}`)
+        .then(asJson)
+        .then((data: GeoJSON.FeatureCollection) => {
+          setLayerData((current) => ({ ...current, [layer.id]: data }))
+        })
+        .catch(() => setError(`Could not load the ${layer.label.toLowerCase()} layer.`))
+        .finally(() => setLayerBusy((busy) => ({ ...busy, [layer.id]: false })))
+    }
+  }, [published, layerOn, layerData, layerBusy, active])
+
+  /** What the map should draw: every layer switched on, with its geometry. */
+  const extras = useMemo(
+    () =>
+      published
+        .filter((layer) => layerOn[layer.id] && layerData[layer.id])
+        .map((layer) => ({
+          id: layer.id,
+          kind: layer.kind,
+          data: layerData[layer.id],
+          color: layerStyle[layer.id]?.color ?? layer.color,
+          opacity: layerStyle[layer.id]?.opacity ?? 0.7,
+          fields: layer.fields,
+        })),
+    [published, layerOn, layerData, layerStyle],
+  )
 
   /*
    * The owner groups, fetched only once someone asks for them.
@@ -850,22 +966,43 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         note: coverage.tract ? 'ACS by census tract' : 'No tract on these parcels',
         icon: LAYER_ICONS.demographics,
       },
-      {
+      ...(published.some((l) => l.id === 'zoning')
+        ? []
+        : [{
         id: 'zoning',
         label: 'Zoning',
         state: coverage.zoning ? 'soon' : 'unavailable',
         note: coverage.zoning ? 'Published here, not mapped yet' : 'Not published here',
         icon: LAYER_ICONS.zoning,
-      },
+      } as LayerCard]),
+      // Everything the market publishes, drawn from its own catalog. An icon
+      // is matched by label where one fits; the rest get the generic layers
+      // mark, because a card must appear for a source this app has never
+      // heard of — that is the point of the registry.
+      ...published.map(
+        (layer): LayerCard => ({
+          id: `x:${layer.id}`,
+          label: layer.label,
+          state: layerOn[layer.id] ? 'on' : 'off',
+          note: layerBusy[layer.id]
+            ? 'Loading…'
+            : layer.count
+              ? `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : 'areas'}`
+              : layer.note,
+          icon: PUBLISHED_ICONS[layer.id] ?? LAYER_ICONS.parcels,
+        }),
+      ),
+      // Still genuinely unbuilt: no public source publishes these, so they
+      // stay honest rather than becoming empty cards.
+      ...(published.some((l) => l.id === 'permits') ? [] : [pending('Development pipeline', LAYER_ICONS.pipeline)]),
+      ...(published.some((l) => l.id === 'plan-review') ? [] : [pending('Entitlements', LAYER_ICONS.entitlements)]),
       pending('Market surveys', LAYER_ICONS.surveys),
       pending('Comps', LAYER_ICONS.comps),
       pending('Absorption', LAYER_ICONS.absorption),
       pending('Rent trends', LAYER_ICONS.rent),
-      pending('Development pipeline', LAYER_ICONS.pipeline),
       pending('Forecasts', LAYER_ICONS.forecasts),
-      pending('Entitlements', LAYER_ICONS.entitlements),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, published, layerOn, layerBusy])
 
   /** The centre of the selected parcel, from its bounding box in the index. */
   const centre = useMemo(() => {
@@ -1004,6 +1141,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           view={{ center: meta.center, zoom: meta.zoom, key: active ?? '' }}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
+          extras={extras}
         />
       ) : stale ? (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
@@ -1083,6 +1221,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                       return !on
                     })
                   if (id === 'zoning') setShowZoning((on) => !on)
+                  if (id.startsWith('x:')) {
+                    const key = id.slice(2)
+                    setLayerOn((current) => ({ ...current, [key]: !current[key] }))
+                  }
                 }}
               />
             </div>
@@ -1143,6 +1285,57 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 )}
               </div>
             )}
+
+            {published
+              .filter((layer) => layerOn[layer.id])
+              .map((layer) => {
+                const style = layerStyle[layer.id] ?? { color: layer.color, opacity: 0.7 }
+                const set = (next: Partial<{ color: string; opacity: number }>) =>
+                  setLayerStyle((current) => ({
+                    ...current,
+                    [layer.id]: { ...style, ...next },
+                  }))
+                return (
+                  <div key={layer.id} className="space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                      {layer.label}
+                    </p>
+                    <OpacityRow
+                      id={`gis-layer-${layer.id}-opacity`}
+                      label="Opacity"
+                      value={style.opacity}
+                      onChange={(opacityNext) => set({ opacity: opacityNext })}
+                    />
+                    <div>
+                      <label
+                        className="mb-1 block text-[11px] font-medium text-body"
+                        htmlFor={`gis-layer-${layer.id}-color`}
+                      >
+                        Colour
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          id={`gis-layer-${layer.id}-color`}
+                          type="color"
+                          value={style.color}
+                          onChange={(event) => set({ color: event.target.value })}
+                          className="h-7 w-12 cursor-pointer rounded border border-line bg-surface p-0.5"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => set({ color: layer.color })}
+                          className="text-[11px] text-accent underline"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </div>
+                    {layer.attribution && (
+                      <p className="text-[11px] text-faint">Source: {layer.attribution}</p>
+                    )}
+                  </div>
+                )
+              })}
 
             {showCensus && (
               <div>

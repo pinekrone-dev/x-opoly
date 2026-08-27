@@ -110,6 +110,34 @@ const PARCEL_OTHER = '#5C6377'
 /** One hue, light to dark. A value is a magnitude, never a set of categories. */
 const VALUE_RAMP = ['#EDE7FA', '#D6C6F3', '#BBA0EA', '#9D77DD', '#7F4FCB', '#6031AE', '#43208A']
 
+/**
+ * A layer the market publishes that this app knows nothing about.
+ *
+ * Permits, zoning, opportunity zones, school districts — each is somebody
+ * else's operational map, declared in the market's catalog and drawn from
+ * whatever geometry it turns out to have. The app renders the declaration
+ * rather than the source, which is what lets a county gain a layer without
+ * this file changing.
+ */
+export interface ExtraLayer {
+  id: string
+  kind: 'point' | 'polygon' | 'line'
+  data: GeoJSON.FeatureCollection
+  color: string
+  opacity: number
+  /** Property names worth showing when one is clicked, in reading order. */
+  fields?: string[]
+}
+
+/** Values come from other people's databases, so they are never markup. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
 interface Props {
   tiles: TileConfig
   /** Basemaps the viewer may switch between. Omit to hide the switcher. */
@@ -143,6 +171,8 @@ interface Props {
   choropleth?: { geoid: string; geometry: unknown; color: string | null; info?: string | null }[] | null
   /** How strongly the shaded areas paint. The viewer's call, not the map's. */
   choroplethOpacity?: number
+  /** Published layers to draw above the parcels. */
+  extras?: ExtraLayer[] | null
   /** Rings drawn around a point, in miles. */
   rings?: { lat: number; lng: number; miles: number[] } | null
   /** Nearby businesses plotted as small secondary markers. */
@@ -267,6 +297,7 @@ export default function MapCanvas({
   routeColor = '#14b8a6',
   choropleth = null,
   choroplethOpacity = 0.45,
+  extras = null,
   rings = null,
   competitors,
   fitKey,
@@ -330,7 +361,14 @@ export default function MapCanvas({
   const insertBefore = (id: string): string | undefined => {
     const instance = map.current
     if (!instance) return undefined
-    const at = OVERLAY_ORDER.indexOf(id as (typeof OVERLAY_ORDER)[number])
+    /*
+     * Published layers share one slot. They are other people's data drawn
+     * over the parcels, so they belong above the ground and below anything
+     * this survey put on the map — the tour line, the zones, the pins.
+     */
+    const at = id.startsWith('x-')
+      ? OVERLAY_ORDER.indexOf('zone-fill') - 1
+      : OVERLAY_ORDER.indexOf(id as (typeof OVERLAY_ORDER)[number])
     if (at < 0) return undefined
     for (let i = at + 1; i < OVERLAY_ORDER.length; i += 1) {
       if (instance.getLayer(OVERLAY_ORDER[i])) return OVERLAY_ORDER[i]
@@ -741,6 +779,128 @@ export default function MapCanvas({
       instance.setPaintProperty('shading-line', 'line-opacity', Math.min(1, choroplethOpacity + 0.15))
     }
   }, [loaded, choropleth, choroplethOpacity])
+
+  /*
+   * The published layers, synced to whatever the catalog currently offers.
+   *
+   * Sources and layers are created once per id and then only updated, because
+   * a market's permits are megabytes and re-adding them on every paint change
+   * would rebuild the tile index for nothing. Anything no longer in the list
+   * is removed outright — switching a layer off must leave no trace on the
+   * map or in memory.
+   */
+  const extraIds = useRef<string[]>([])
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return
+
+    const wanted = extras ?? []
+    const live = new Set(wanted.map((layer) => layer.id))
+
+    for (const id of extraIds.current) {
+      if (live.has(id)) continue
+      for (const suffix of ['fill', 'line', 'point']) {
+        const layerId = `x-${id}-${suffix}`
+        if (instance.getLayer(layerId)) instance.removeLayer(layerId)
+      }
+      if (instance.getSource(`x-${id}`)) instance.removeSource(`x-${id}`)
+    }
+    extraIds.current = [...live]
+
+    for (const layer of wanted) {
+      const source = `x-${layer.id}`
+      const existing = instance.getSource(source) as maplibregl.GeoJSONSource | undefined
+      if (existing) {
+        existing.setData(layer.data)
+      } else {
+        instance.addSource(source, { type: 'geojson', data: layer.data })
+        const specs: maplibregl.LayerSpecification[] =
+          layer.kind === 'point'
+            ? [{ id: `x-${layer.id}-point`, type: 'circle', source, paint: {} }]
+            : layer.kind === 'line'
+              ? [{ id: `x-${layer.id}-line`, type: 'line', source, paint: {} }]
+              : [
+                  { id: `x-${layer.id}-fill`, type: 'fill', source, paint: {} },
+                  { id: `x-${layer.id}-line`, type: 'line', source, paint: {} },
+                ]
+        for (const spec of specs) instance.addLayer(spec, insertBefore(spec.id))
+      }
+
+      // Paint every time: colour and opacity are the viewer's controls, and
+      // a layer added earlier would otherwise keep the shade it was born with.
+      const fill = `x-${layer.id}-fill`
+      const line = `x-${layer.id}-line`
+      const point = `x-${layer.id}-point`
+      if (instance.getLayer(fill)) {
+        instance.setPaintProperty(fill, 'fill-color', layer.color)
+        instance.setPaintProperty(fill, 'fill-opacity', layer.opacity * 0.55)
+      }
+      if (instance.getLayer(line)) {
+        instance.setPaintProperty(line, 'line-color', layer.color)
+        instance.setPaintProperty(line, 'line-width', layer.kind === 'line' ? 2.5 : 1)
+        instance.setPaintProperty(line, 'line-opacity', Math.min(1, layer.opacity + 0.2))
+      }
+      if (instance.getLayer(point)) {
+        instance.setPaintProperty(point, 'circle-color', layer.color)
+        instance.setPaintProperty(point, 'circle-opacity', layer.opacity)
+        instance.setPaintProperty(point, 'circle-stroke-color', '#ffffff')
+        instance.setPaintProperty(point, 'circle-stroke-width', 0.6)
+        // Small when a county is in view, readable once someone is working a
+        // block: a permit dot has to be clickable without hiding the parcel.
+        instance.setPaintProperty(point, 'circle-radius', [
+          'interpolate', ['linear'], ['zoom'], 10, 2.2, 14, 4.5, 17, 8,
+        ])
+      }
+    }
+  }, [loaded, extras])
+
+  /*
+   * What a published feature says when it is clicked.
+   *
+   * Only the fields the pipeline kept, in the order it kept them, and only
+   * when the click did not land on a parcel — the parcel is the subject and
+   * these are context, same rule as the tracts.
+   */
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || onMapClick) return undefined
+    const wanted = extras ?? []
+    if (!wanted.length) return undefined
+
+    const handlers: [string, (event: maplibregl.MapLayerMouseEvent) => void][] = []
+    for (const layer of wanted) {
+      const open = (event: maplibregl.MapLayerMouseEvent) => {
+        if (instance.getLayer('parcel-fill')) {
+          if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
+        }
+        const props = event.features?.[0]?.properties ?? {}
+        const order = layer.fields?.length ? layer.fields : Object.keys(props)
+        const rows = order
+          .filter((field) => props[field] != null && props[field] !== '')
+          .map(
+            (field) =>
+              `<div><span style="color:#6b7280">${escapeHtml(field)}: </span>${escapeHtml(
+                String(props[field]),
+              )}</div>`,
+          )
+        if (!rows.length) return
+        new maplibregl.Popup({ closeButton: true, maxWidth: '260px' })
+          .setLngLat(event.lngLat)
+          .setHTML(`<div style="font-size:12px;line-height:1.45">${rows.join('')}</div>`)
+          .addTo(instance)
+      }
+      for (const suffix of ['fill', 'line', 'point']) {
+        const id = `x-${layer.id}-${suffix}`
+        if (instance.getLayer(id)) {
+          instance.on('click', id, open)
+          handlers.push([id, open])
+        }
+      }
+    }
+    return () => {
+      for (const [id, open] of handlers) instance.off('click', id, open)
+    }
+  }, [loaded, extras, onMapClick])
 
   // A tract says what it is worth saying — but never while a map click is
   // armed for dropping a pin or placing a zone, when the click must fall

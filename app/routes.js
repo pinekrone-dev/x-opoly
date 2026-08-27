@@ -1460,7 +1460,20 @@ export function createApp({ db, storage, env = {} }) {
     'tracts.json': 'application/json',
     'tracts.geojson': 'application/geo+json',
     'owners.json': 'application/json',
+    // What extra layers this market publishes, and what each one is.
+    'layers.json': 'application/json',
   }
+
+  /*
+   * The extra layers themselves.
+   *
+   * A fixed list cannot name these: the whole point of the layer registry is
+   * that a market gains a source without this file changing. So the name is
+   * bounded by shape instead — the `layer-` prefix keeps them in their own
+   * namespace, the slug rules out traversal and surprises, and the extension
+   * is fixed. Nothing here can address a file the pipeline does not own.
+   */
+  const INGEST_LAYER_FILE = /^layer-[a-z0-9-]{1,40}\.geojson$/
 
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
@@ -1495,11 +1508,14 @@ export function createApp({ db, storage, env = {} }) {
       if (!/^[a-z0-9-]{2,40}$/.test(market)) {
         return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
       }
-      if (!(file in INGEST_FILES)) {
-        return c.json({ error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}.` }, 400)
+      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file)) {
+        return c.json(
+          { error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, or a layer-<name>.geojson.` },
+          400,
+        )
       }
       key = `${market}/${file}`
-      contentType = INGEST_FILES[file]
+      contentType = INGEST_FILES[file] ?? 'application/geo+json'
     }
     const action = String(c.req.query('action') || 'put')
 
