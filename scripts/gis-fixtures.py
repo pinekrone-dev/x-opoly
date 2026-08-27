@@ -238,7 +238,7 @@ def write_catalog():
     j('catalog/markets.json', {'markets': [{'slug': 'austin', 'name': 'Austin', 'region': 'Travis County, Texas',
         'status': 'live', 'stats': {'parcels': len(PARCELS), 'value': sum(p['mv'] for p in PARCELS),
         'center': list(CENTER)}}]})
-    j('catalog/austin/data/meta.json', {'market': 'Austin', 'region': 'Travis County, Texas',
+    j('catalog/austin/meta.json', {'market': 'Austin', 'region': 'Travis County, Texas',
         'center': list(CENTER), 'zoom': ZOOM, 'heavyBase': 'https://data.test/austin/',
         'colorBy': 'value', 'valueLabel': 'Market value', 'idLabel': 'Parcel',
         'tiles': True, 'count': len(PARCELS), 'attribution': 'Fixture data'})
@@ -249,13 +249,13 @@ def write_catalog():
         ring = square(p['center'][0], p['center'][1], p['size'])
         bb += [min(q[0] for q in ring), min(q[1] for q in ring), max(q[0] for q in ring), max(q[1] for q in ring)]
     j('data/austin/index.json', {'n': len(PARCELS), 'keys': keys, 'cols': cols, 'bb': bb})
-    j('catalog/austin/data/census.json', {'year': 2023, 'fields': [['inc', 'Median income'], ['pop', 'Population']],
+    j('catalog/austin/census.json', {'year': 2023, 'fields': [['inc', 'Median income'], ['pop', 'Population']],
         'tracts': {TRACT_A: {'n': 'Tract 7', 'inc': 85000, 'pop': 4300},
                    TRACT_B: {'n': 'Tract 8', 'inc': 55000, 'pop': 5100}}})
-    j('catalog/austin/data/tracts.geojson', {'type': 'FeatureCollection', 'features': [
+    j('catalog/austin/tracts.geojson', {'type': 'FeatureCollection', 'features': [
         {'type': 'Feature', 'properties': {'tr': TRACT_A}, 'geometry': tract_polygon(-97.745, 30.262, -97.730, 30.276)},
         {'type': 'Feature', 'properties': {'tr': TRACT_B}, 'geometry': tract_polygon(-97.756, 30.258, -97.745, 30.270)}]})
-    j('catalog/austin/data/codes.json', {})
+    j('catalog/austin/codes.json', {})
     j('data/austin/details.json', {'cols': {}, 'keys': []})
 
 os.makedirs(OUT, exist_ok=True)

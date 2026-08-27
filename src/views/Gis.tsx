@@ -208,7 +208,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setQuery('')
     setHunt('')
     setHuntNote(null)
-    fetch(`${CATALOG}/${active}/data/meta.json`)
+    fetch(`${CATALOG}/${active}/meta.json`)
       .then((r) => r.json())
       .then(setMeta)
       .catch(() => setError('Could not load that market.'))
@@ -284,8 +284,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     if (!showCensus || !active || census) return undefined
     let cancelled = false
     Promise.all([
-      fetch(`${CATALOG}/${active}/data/census.json`).then((r) => r.json()),
-      fetch(`${CATALOG}/${active}/data/tracts.geojson`).then((r) => r.json()),
+      fetch(`${CATALOG}/${active}/census.json`).then((r) => r.json()),
+      fetch(`${CATALOG}/${active}/tracts.geojson`).then((r) => r.json()),
     ])
       .then(([numbers, shapes]) => {
         if (cancelled) return
@@ -419,7 +419,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     const market = active
     Promise.all([
       fetch(`${viaProxy(base)}details.json`).then((r) => r.json()),
-      fetch(`${CATALOG}/${market}/data/codes.json`).then((r) => r.json()).catch(() => ({})),
+      fetch(`${CATALOG}/${market}/codes.json`).then((r) => r.json()).catch(() => ({})),
     ])
       .then(([record, table]) => {
         // The market can be switched while six megabytes are in flight; the
