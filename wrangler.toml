@@ -76,7 +76,14 @@ bucket_name = "sitesurvey-cre-uploads"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
-TILE_PROVIDER = "osm"
+#
+# Carto rather than OpenStreetMap's own tiles. OSM's usage policy asks that
+# their servers not be the basemap for a product, and they are entitled to
+# throttle or block an origin at any time without telling it — which from
+# inside the app is indistinguishable from a map that simply does not draw.
+# Carto serves the same OSM data, keyless, and is what Prospector already
+# runs on. The switcher still offers OSM to anyone who wants it.
+TILE_PROVIDER = "carto-light"
 
 # Secrets are NOT set here — they would end up in git. Set them in the
 # dashboard under Settings -> Variables and Secrets, or with:
