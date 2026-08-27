@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
+import ParcelPanel, { type PanelGroup } from '../components/ParcelPanel'
 import GisRail, {
   CheckList,
   LAYER_ICONS,
@@ -55,6 +56,8 @@ interface MarketMeta {
   colorBy?: 'value'
   valueLabel?: string
   idLabel?: string
+  panel?: PanelGroup[]
+  note?: string
   attribution?: string
   tiles?: boolean
   count?: number
@@ -132,8 +135,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [rowOf, setRowOf] = useState<Map<string | number, number>>(new Map())
   const [selected, setSelected] = useState<string | number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const activeRef = useRef<string | null>(null)
+  activeRef.current = active
   const [known, setKnown] = useState<{ place: Place | null; deals: Deal[] } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [details, setDetails] = useState<Record<string, string | number | null> | null>(null)
+  const [detailsLoading, setDetailsLoading] = useState(false)
+  const [codes, setCodes] = useState<Record<string, { d?: string }>>({})
 
   const [rail, setRail] = useState<RailTab | null>('layers')
   const [showParcels, setShowParcels] = useState(true)
@@ -223,6 +232,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   useEffect(() => {
     if (selected == null || !active) {
       setKnown(null)
+      setExpanded(false)
       return
     }
     let cancelled = false
@@ -277,6 +287,9 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   // wrong city with them.
   useEffect(() => {
     setCensus(null)
+    setDetails(null)
+    setCodes({})
+    fetchingDetails.current = false
   }, [active])
 
   /*
@@ -343,6 +356,48 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     for (const key of index.keys) out[key] = index.cols[key]?.[row] ?? null
     return out
   }, [selected, index, rowOf])
+
+  /*
+   * The county's full record, fetched the first time it is asked for.
+   *
+   * details.json is the heaviest file a market publishes — fourteen megabytes
+   * in Broward — and nothing on the map needs it. It is only ever read to fill
+   * this panel, so it downloads on the first expand and is reused after that.
+   */
+  /*
+   * The in-flight guard is a ref, not state, and that is not a style choice.
+   *
+   * With `detailsLoading` in the dependency array, setting it re-ran the
+   * effect, which ran the previous run's cleanup, which set `cancelled` — so
+   * the fetch this effect had just started was cancelled by the flag saying it
+   * had started. It downloaded six megabytes and threw the result away, and
+   * the panel read 'Loading…' forever. A ref changes no dependency, so the
+   * request outlives the render that began it.
+   */
+  const fetchingDetails = useRef(false)
+  useEffect(() => {
+    const base = meta?.heavyBase
+    if (!expanded || !base || !active || fetchingDetails.current) return
+    fetchingDetails.current = true
+    setDetailsLoading(true)
+    const market = active
+    Promise.all([
+      fetch(`${viaProxy(base)}details.json`).then((r) => r.json()),
+      fetch(`${CATALOG}/${market}/data/codes.json`).then((r) => r.json()).catch(() => ({})),
+    ])
+      .then(([record, table]) => {
+        // The market can be switched while six megabytes are in flight; the
+        // wrong county's records would silently fill the panel.
+        if (market !== activeRef.current) return
+        setDetails(record)
+        setCodes(table)
+      })
+      .catch(() => setError('Could not load the full record for this market.'))
+      .finally(() => {
+        fetchingDetails.current = false
+        setDetailsLoading(false)
+      })
+  }, [expanded, meta?.heavyBase, active])
 
   /** Rows as plain objects, built once per market rather than per keystroke. */
   const rows = useMemo(() => {
@@ -534,6 +589,29 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       setSaving(false)
     }
   }
+
+  /** The census figures for the tract this parcel sits in, when they are loaded. */
+  const neighborhood = useMemo(() => {
+    const tract = parcel?.tr
+    if (!tract || !census) return null
+    const row = census.tracts[String(tract)]
+    if (!row) return null
+    return census.fields
+      .map(([key, label, kind]) => {
+        const value = Number(row[key])
+        if (!Number.isFinite(value)) return null
+        const text =
+          kind === 'money'
+            ? `$${Math.round(value).toLocaleString()}`
+            : kind === 'pct'
+              ? `${value.toFixed(1)}%`
+              : kind === 'one'
+                ? value.toFixed(1)
+                : Math.round(value).toLocaleString()
+        return { label, value: text }
+      })
+      .filter((entry): entry is { label: string; value: string } => entry !== null)
+  }, [parcel, census])
 
   const market = markets.find((m) => m.slug === active)
 
@@ -836,11 +914,31 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         )}
       </GisRail>
 
+      {/* The full county record, opened from the card's arrow. Its own panel
+          rather than a taller card: the market's panel spec runs to twenty
+          rows in some counties, and a card that long stops being a card. */}
+      {expanded && selected != null && parcel && (
+        <ParcelPanel
+          title={String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)}
+          subtitle={`${parcel.zp ? `${parcel.zp} · ` : ''}${meta?.idLabel || 'Parcel'} ${
+            parcel.gid ?? selected
+          }`}
+          groups={meta?.panel ?? []}
+          attributes={parcel}
+          details={details?.[String(selected)] as Record<string, string | number | null> | null}
+          codes={codes}
+          neighborhood={neighborhood}
+          note={meta?.note}
+          loading={detailsLoading}
+          onClose={() => setExpanded(false)}
+        />
+      )}
+
       {/* The card. Opens on click and never on hover: on a map this dense the
           pointer crosses dozens of parcels on the way anywhere. Raised clear of
           the attribution control, which the basemap licences require stay
           readable. */}
-      {selected != null && (
+      {selected != null && !expanded && (
         <div className="absolute bottom-9 right-3 z-[500] w-80 rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
           <button
             type="button"
@@ -869,6 +967,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               {/* What the CRM already knows. A parcel with a deal on it is the
                   reason to have clicked, so it leads. */}
               <div className="mt-3 border-t border-line pt-2">
+                <button
+                  type="button"
+                  className="mb-2 flex w-full items-center justify-between gap-2 rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken"
+                  onClick={() => setExpanded(true)}
+                >
+                  Full county record
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
+                </button>
                 {known === null ? (
                   <p className="text-[11px] text-muted">Checking your records…</p>
                 ) : known.place ? (
