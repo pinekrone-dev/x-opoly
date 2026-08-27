@@ -72,6 +72,15 @@ migrations_dir = "migrations"
 binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads"
 
+# The Prospector parcel data, served publicly at data.realestateaistudio.com.
+# Bound here so the pipeline's GitHub Actions run can publish county rebuilds
+# through /api/gis/ingest — authenticated by the run's own OIDC token, so no
+# credential is stored anywhere on either side. This Worker only ever writes
+# a fixed set of data filenames into it; serving stays on the R2 domain.
+[[r2_buckets]]
+binding = "PROSPECTOR_DATA"
+bucket_name = "prospector-data"
+
 [vars]
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need

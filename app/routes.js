@@ -86,6 +86,7 @@ import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } fr
 import { extractFromText } from './lib/paste.js'
 import { resolveProvider } from './lib/ai.js'
 import { runScout } from './lib/scout.js'
+import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
   BillingError,
@@ -398,6 +399,9 @@ export function createApp({ db, storage, env = {} }) {
     /^\/api\/demographics$/,
     // Stripe calls this unauthenticated; the webhook signature is the auth.
     /^\/api\/billing\/webhook$/,
+    // The parcel pipeline calls this from GitHub Actions; a verified OIDC
+    // token from an allowed repository is the auth, not a session.
+    /^\/api\/gis\/ingest$/,
   ]
 
   /**
@@ -1423,6 +1427,95 @@ export function createApp({ db, storage, env = {} }) {
    * Works with or without an Anthropic key: text is parseable by heuristics
    * where a flyer image is not, so this endpoint never answers "set a key".
    */
+  /*
+   * The parcel pipeline's door into R2.
+   *
+   * The Prospector build runs in GitHub Actions and has to land hundreds of
+   * megabytes in the prospector-data bucket this Worker binds. Every
+   * credential-shaped way of allowing that stores a long-lived secret
+   * somewhere; instead the run authenticates as itself, with the OIDC token
+   * GitHub signs for it, and this endpoint verifies the signature, the
+   * audience, and an exact repository allowlist. Writes are confined to a
+   * fixed set of data filenames under a market slug, so even a compromised
+   * pipeline can only overwrite the map data it already owns.
+   *
+   * Large files arrive in parts: the multipart actions mirror R2's own
+   * protocol, because a county's tile archive is bigger than a Worker
+   * request is allowed to be.
+   */
+  const INGEST_AUDIENCE = 'landquotient-ingest'
+  const INGEST_REPOS = ['pinekrone-dev/prospector', 'pinekrone-dev/x-opoly']
+  const INGEST_FILES = {
+    'parcels.pmtiles': 'application/octet-stream',
+    'index.json': 'application/json',
+    'details.json': 'application/json',
+    'parcels.geojson': 'application/geo+json',
+  }
+
+  app.post('/api/gis/ingest', async (c) => {
+    const throttled = limited(c, 'ingest', 300, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const bucket = env.PROSPECTOR_DATA
+    if (!bucket || typeof bucket.put !== 'function') {
+      return c.json({ error: 'Only the Cloudflare deployment can ingest market data.' }, 501)
+    }
+
+    const token = (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
+    try {
+      await verifyActionsToken(token, {
+        audience: INGEST_AUDIENCE,
+        repositories: INGEST_REPOS,
+        fetchImpl: env.JWKS_FETCH,
+      })
+    } catch (cause) {
+      return c.json({ error: `Ingest refused: ${cause.message}.` }, 401)
+    }
+
+    const market = String(c.req.query('market') || '')
+    const file = String(c.req.query('file') || '')
+    if (!/^[a-z0-9-]{2,40}$/.test(market)) {
+      return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    }
+    if (!(file in INGEST_FILES)) {
+      return c.json({ error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}.` }, 400)
+    }
+    const key = `${market}/${file}`
+    const contentType = INGEST_FILES[file]
+    const action = String(c.req.query('action') || 'put')
+
+    if (action === 'put') {
+      await bucket.put(key, await c.req.arrayBuffer(), { httpMetadata: { contentType } })
+      return c.json({ stored: key })
+    }
+    if (action === 'create') {
+      const upload = await bucket.createMultipartUpload(key, { httpMetadata: { contentType } })
+      return c.json({ uploadId: upload.uploadId })
+    }
+    if (action === 'part') {
+      const uploadId = String(c.req.query('uploadId') || '')
+      const part = Number(c.req.query('part'))
+      if (!uploadId || !Number.isInteger(part) || part < 1 || part > 10000) {
+        return c.json({ error: 'part needs uploadId and a part number from 1.' }, 400)
+      }
+      const upload = bucket.resumeMultipartUpload(key, uploadId)
+      const stored = await upload.uploadPart(part, await c.req.arrayBuffer())
+      return c.json({ etag: stored.etag, partNumber: part })
+    }
+    if (action === 'complete') {
+      const uploadId = String(c.req.query('uploadId') || '')
+      const body = await c.req.json().catch(() => ({}))
+      const parts = Array.isArray(body?.parts) ? body.parts : []
+      if (!uploadId || parts.length === 0) {
+        return c.json({ error: 'complete needs uploadId and the list of parts.' }, 400)
+      }
+      const upload = bucket.resumeMultipartUpload(key, uploadId)
+      await upload.complete(parts.map((p) => ({ partNumber: Number(p.partNumber), etag: String(p.etag) })))
+      return c.json({ stored: key })
+    }
+    return c.json({ error: `Unknown action "${action}".` }, 400)
+  })
+
   /*
    * The parcel scout: a hunt in plain English, answered as the GIS view's
    * own filters. The vocabulary comes up with the request because the server
