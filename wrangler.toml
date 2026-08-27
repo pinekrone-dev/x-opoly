@@ -86,3 +86,43 @@ TILE_PROVIDER = "osm"
 #   ANTHROPIC_API_KEY  reading a flyer with AI
 #   GOOGLE_MAPS_API_KEY  Google routing and Places, instead of OSRM/Overpass
 #   CENSUS_API_KEY     raises the ACS rate limit; the data is free either way
+
+# --- staging -----------------------------------------------------------------
+#
+# A second Worker, on its own database and its own bucket.
+#
+# A Workers "version preview" would have been cheaper, but it binds to the
+# same D1 as production: testing a survey would put rows in the real CRM, and
+# a schema change would be tried out on live data. Staging that shares a
+# database is not staging. This one is separate down to the storage.
+#
+# It carries no custom domain on purpose. The *.workers.dev address is the
+# whole address, so there is no chance of a staging hostname being handed to a
+# client, and no DNS record to clean up when it is thrown away.
+#
+# Secrets are deliberately not copied across. Every integration in this app is
+# optional and degrades to a free default, so staging runs without Stripe,
+# without SMS and without an AI key — which is also the safest way for it to
+# run, since nothing here can charge a card or send a text to a real person.
+[env.staging]
+name = "landquotient-staging"
+workers_dev = true
+
+# Empty, and it MUST be empty. A named environment inherits the top-level
+# `routes`, so leaving this out does not mean "no routes" — it means staging
+# claims survey.realestateaistudio.com and serves it, silently taking
+# production's traffic on deploy. Found the hard way.
+routes = []
+
+[env.staging.vars]
+TILE_PROVIDER = "osm"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "sitesurvey-cre-staging"
+database_id = "80c534a6-5092-461b-93c4-c8dc19d799f5"
+migrations_dir = "migrations"
+
+[[env.staging.r2_buckets]]
+binding = "BUCKET"
+bucket_name = "sitesurvey-cre-uploads-staging"
