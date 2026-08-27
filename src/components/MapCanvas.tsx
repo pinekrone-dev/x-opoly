@@ -79,6 +79,17 @@ export interface ParcelLayer {
   valueBreaks?: number[] | null
   selectedParcelId?: number | string | null
   onSelectParcel?: (id: number | string) => void
+  /**
+   * Show only these parcels. Null means all of them.
+   *
+   * An id list rather than an attribute test because the tiles carry only what
+   * the style reads — the bucket and the value — while a filter is built from
+   * the whole record: owner, asset type, acreage. The list is resolved against
+   * the attribute index and handed here already decided.
+   */
+  filterIds?: (number | string)[] | null
+  /** Fill opacity for an unselected parcel. */
+  opacity?: number
 }
 
 /** Land-use buckets, in the same colours the parcel map uses. */
@@ -923,8 +934,8 @@ export default function MapCanvas({
       ['boolean', ['feature-state', 'sel'], false],
       0.7,
       ['boolean', ['feature-state', 'hover'], false],
-      0.58,
-      0.34,
+      Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
+      parcels.opacity ?? 0.34,
     ])
     instance.setPaintProperty('parcel-line', 'line-color', [
       'case',
@@ -932,7 +943,26 @@ export default function MapCanvas({
       '#C4A6FF',
       color,
     ])
-  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url])
+  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity])
+
+  // Which parcels are shown. One filter expression for the whole layer beats
+  // restyling features one at a time.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !parcels) return
+    if (!instance.getLayer('parcel-fill')) return
+    /*
+     * `['id']`, not `['get','id']`. The tiles are built with tippecanoe's
+     * --use-attribute-for-id, which moves the id off the properties and onto
+     * the feature, so reading it as a property returns null and the filter
+     * hides every parcel on the map.
+     */
+    const filter = parcels.filterIds
+      ? (['in', ['id'], ['literal', parcels.filterIds]] as maplibregl.FilterSpecification)
+      : null
+    instance.setFilter('parcel-fill', filter)
+    instance.setFilter('parcel-line', filter)
+  }, [loaded, parcels?.filterIds, parcels?.url])
 
   /*
    * Clicking a parcel selects it; hovering only outlines it.
