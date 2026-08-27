@@ -616,7 +616,15 @@ try {
     timeout: 45000,
   })
   check('the tour book route serves', bookResponse?.status() === 200, `status ${bookResponse?.status()}`)
-  await page.waitForTimeout(3000)
+  // The book fills in as its fetches land — survey, properties, then the
+  // schedule — and on a cold worker that can take well over the guessed
+  // pause this used to be. Wait for the content itself; the arrival times
+  // come last, so they get their own wait before anything reads the page.
+  await page.waitForSelector('text=Site tour', { timeout: 30000 }).catch(() => undefined)
+  await page
+    .waitForFunction(() => /\d{1,2}:\d{2}\s?(AM|PM)/i.test(document.body.innerText), { timeout: 30000 })
+    .catch(() => undefined)
+  await page.waitForTimeout(500)
   const bookText = await page.textContent('body')
   check('the book names the survey', bookText?.includes('Site tour') ?? false)
   check('the book lists a stop', bookText?.includes(PINS[0].name) ?? false)

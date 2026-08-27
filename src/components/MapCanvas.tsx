@@ -296,6 +296,18 @@ export default function MapCanvas({
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
 
+  // When every host is failing there is nothing left to switch to, and
+  // "switched to another" would be a lie. This is what a content blocker
+  // looks like from inside the app, so say that.
+  useEffect(() => {
+    if (!options?.length) return
+    if (options.every((option) => brokenIds.includes(option.provider))) {
+      setBasemapNote(
+        'No map tile host is responding. A content blocker, VPN, or network filter in this browser may be blocking map tiles.',
+      )
+    }
+  }, [brokenIds, options])
+
   const markers = useRef<Map<string, maplibregl.Marker>>(new Map())
   const labels = useRef<Map<string, maplibregl.Marker>>(new Map())
   const anchorMarkers = useRef<maplibregl.Marker[]>([])
