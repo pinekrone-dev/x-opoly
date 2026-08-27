@@ -104,6 +104,33 @@ interface MarketIndex {
   bb: number[]
 }
 
+/**
+ * What the pipeline made of a market's owner names.
+ *
+ * `p` is portfolios: one holder resolved across spelling variants, keyed by
+ * the id every one of its parcels carries. `b` is back offices: one mailing
+ * address that several different names answer to, which is how a single
+ * operator behind a row of single-purpose LLCs becomes visible. `t` lists
+ * those names. Values are the market total each group holds.
+ */
+interface OwnerGroup {
+  /** Portfolio name. Back offices have names in `t` instead. */
+  n?: string
+  /** Mailing address. */
+  a?: string
+  /** Parcels held. */
+  c: number
+  /** Market value held. */
+  v: number
+  /** Distinct names at this address, for back offices. */
+  t?: string[]
+}
+
+interface OwnerIndex {
+  p?: Record<string, OwnerGroup>
+  b?: Record<string, OwnerGroup>
+}
+
 /** The land-use colours, matching what the map draws. */
 const LEGEND: [string, string][] = [
   ['Commercial', '#2a78d6'],
@@ -189,6 +216,17 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [rail, setRail] = useState<RailTab | null>('layers')
   const [showParcels, setShowParcels] = useState(true)
   const [showOwners, setShowOwners] = useState(false)
+  /*
+   * Who is behind the parcels.
+   *
+   * The pipeline already resolves each market's owner names into portfolios
+   * (one holder, many parcels) and back offices (one mailing address behind
+   * several names), and stamps every parcel with the id of each. owners.json
+   * carries what those ids mean, so this is a small fetch that turns a column
+   * of numbers into "everything City of Austin owns".
+   */
+  const [owners, setOwners] = useState<OwnerIndex | null>(null)
+  const [ownerPick, setOwnerPick] = useState<{ kind: 'p' | 'b'; id: string } | null>(null)
   const [showCensus, setShowCensus] = useState(false)
   const [showZoning, setShowZoning] = useState(false)
   const [metric, setMetric] = useState('inc')
@@ -237,6 +275,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setQuery('')
     setHunt('')
     setHuntNote(null)
+    setOwners(null)
+    setOwnerPick(null)
     setError(null)
     fetch(`${CATALOG}/${active}/meta.json`)
       .then(asJson)
@@ -303,6 +343,27 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       cancelled = true
     }
   }, [selected, active])
+
+  /*
+   * The owner groups, fetched only once someone asks for them.
+   *
+   * Small — a couple of megabytes at county scale — and useless until the
+   * layer is on, so it waits. The parcels already carry the ids, so this
+   * only supplies the names behind them.
+   */
+  useEffect(() => {
+    if (!showOwners || !active || owners) return undefined
+    let cancelled = false
+    fetch(`${CATALOG}/${active}/owners.json`)
+      .then(asJson)
+      .then((doc: OwnerIndex) => {
+        if (!cancelled) setOwners(doc)
+      })
+      .catch(() => setError('Could not load ownership for this market.'))
+    return () => {
+      cancelled = true
+    }
+  }, [showOwners, active, owners])
 
   /*
    * The census layer, fetched only once someone asks for it.
@@ -509,12 +570,15 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     const aMin = lo(acres.min)
     const aMax = lo(acres.max)
     const active =
-      Boolean(needle) || assets.size > 0 ||
+      Boolean(needle) || assets.size > 0 || ownerPick != null ||
       [vMin, vMax, aMin, aMax].some((n) => n != null && Number.isFinite(n))
     if (!active || !rows.length) return null
 
     const out: Record<string, string | number | null>[] = []
     for (const row of rows) {
+      // A chosen owner narrows the map to their holdings, which is the whole
+      // point of the layer: one operator's footprint across the county.
+      if (ownerPick && String(row[ownerPick.kind === 'p' ? 'po' : 'bo'] ?? '') !== ownerPick.id) continue
       if (assets.size && !assets.has(String(row.at || ''))) continue
       const mv = Number(row.mv) || 0
       if (vMin != null && Number.isFinite(vMin) && mv < vMin) continue
@@ -529,7 +593,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       out.push(row)
     }
     return out
-  }, [rows, query, assets, value, acres])
+  }, [rows, query, assets, value, acres, ownerPick])
 
   const filterIds = useMemo(
     () => (filtered ? filtered.map((row) => row.id as number | string) : null),
@@ -572,8 +636,68 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       owner: has('ow'),
       zoning: has('zn'),
       tract: has('tr'),
+      // Whether the pipeline resolved groups here, read from the parcels
+      // themselves. Orange County publishes no owner names, so Costa Mesa has
+      // no portfolios — but its mailing addresses still cluster into back
+      // offices, and that is worth offering on its own.
+      portfolios: has('po'),
+      backOffices: has('bo'),
     }
   }, [rows])
+
+  /**
+   * The market's owner groups, largest holding first.
+   *
+   * Ranked by value rather than parcel count: a hundred lots in a subdivision
+   * is not the story, four downtown blocks is. Only groups the loaded parcels
+   * actually reference are listed, so a market that publishes fewer parcels
+   * than the roll never offers an owner with nothing to show.
+   */
+  const ownerList = useMemo(() => {
+    if (!owners) return []
+    const seen = new Set<string>()
+    for (const row of rows) {
+      if (row.po != null) seen.add(`p:${row.po}`)
+      if (row.bo != null) seen.add(`b:${row.bo}`)
+    }
+    const out: {
+      key: string
+      kind: 'p' | 'b'
+      id: string
+      title: string
+      detail: string
+      count: number
+      value: number
+    }[] = []
+    for (const kind of ['p', 'b'] as const) {
+      const groups = owners[kind]
+      if (!groups) continue
+      for (const [id, g] of Object.entries(groups)) {
+        if (!seen.has(`${kind}:${id}`)) continue
+        const names = g.t ?? []
+        out.push({
+          key: `${kind}:${id}`,
+          kind,
+          id,
+          title: kind === 'p' ? g.n || 'Unnamed holder' : g.a || 'Unnamed address',
+          detail:
+            kind === 'p'
+              ? g.a || ''
+              : names.length
+                ? `${names.length} names: ${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''}`
+                : '',
+          count: g.c,
+          value: g.v,
+        })
+      }
+    }
+    return out.sort((a, b) => b.value - a.value)
+  }, [owners, rows])
+
+  const pickedOwner = useMemo(
+    () => (ownerPick ? ownerList.find((o) => o.key === `${ownerPick.kind}:${ownerPick.id}`) ?? null : null),
+    [ownerPick, ownerList],
+  )
 
   const layerCards: LayerCard[] = useMemo(() => {
     const pending = (label: string, icon: JSX.Element): LayerCard => ({
@@ -594,11 +718,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       {
         id: 'ownership',
         label: 'Ownership',
-        // The owner of record is already on every parcel card and searchable.
-        // What is not built is shading the map by resolved owner footprint,
-        // so this card stays off rather than toggling something invisible.
-        state: 'soon',
-        note: coverage.owner ? 'Footprint shading not built' : 'County withholds owner names',
+        // Live wherever the pipeline resolved groups. Costa Mesa has no owner
+        // names to portfolio, but its mailing addresses still cluster, so the
+        // layer is offered there too — for back offices only.
+        state: coverage.portfolios || coverage.backOffices ? (showOwners ? 'on' : 'off') : 'unavailable',
+        note:
+          coverage.portfolios || coverage.backOffices
+            ? ownerList.length
+              ? `${ownerList.length.toLocaleString()} owner groups`
+              : 'Portfolios and back offices'
+            : 'County withholds owner names',
         icon: LAYER_ICONS.ownership,
       },
       {
@@ -623,7 +752,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       pending('Forecasts', LAYER_ICONS.forecasts),
       pending('Entitlements', LAYER_ICONS.entitlements),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length])
 
   /** The centre of the selected parcel, from its bounding box in the index. */
   const centre = useMemo(() => {
@@ -823,12 +952,75 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 cards={layerCards}
                 onToggle={(id) => {
                   if (id === 'parcels') setShowParcels((on) => !on)
-                  if (id === 'ownership') setShowOwners((on) => !on)
+                  if (id === 'ownership')
+                    setShowOwners((on) => {
+                      // Switching the layer off must not leave the map filtered
+                      // to an owner with nothing on screen to explain why.
+                      if (on) setOwnerPick(null)
+                      return !on
+                    })
                   if (id === 'demographics') setShowCensus((on) => !on)
                   if (id === 'zoning') setShowZoning((on) => !on)
                 }}
               />
             </div>
+
+            {showOwners && (
+              <div>
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                  Owner groups
+                </p>
+                {pickedOwner ? (
+                  <div className="rounded-md border border-accent/40 bg-accent/5 p-2">
+                    <p className="text-xs font-medium text-ink">{pickedOwner.title}</p>
+                    {pickedOwner.detail && (
+                      <p className="mt-0.5 text-[11px] text-muted">{pickedOwner.detail}</p>
+                    )}
+                    <p className="mt-1 text-[11px] text-body">
+                      {pickedOwner.count.toLocaleString()} {pickedOwner.count === 1 ? 'parcel' : 'parcels'} · {money(pickedOwner.value)}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setOwnerPick(null)}
+                      className="mt-1.5 text-[11px] font-medium text-accent underline"
+                    >
+                      Show the whole market again
+                    </button>
+                  </div>
+                ) : !owners ? (
+                  <p className="text-[11px] text-muted">Loading who is behind these parcels…</p>
+                ) : ownerList.length === 0 ? (
+                  <p className="text-[11px] text-muted">
+                    This county publishes no owner names to group.
+                  </p>
+                ) : (
+                  <>
+                    <p className="mb-1.5 text-[11px] text-muted">
+                      Largest holders first. Pick one to see everything they own here.
+                    </p>
+                    <ul className="max-h-64 space-y-1 overflow-y-auto pr-1">
+                      {ownerList.slice(0, 40).map((entry) => (
+                        <li key={entry.key}>
+                          <button
+                            type="button"
+                            onClick={() => setOwnerPick({ kind: entry.kind, id: entry.id })}
+                            className="w-full rounded-md border border-line px-2 py-1.5 text-left hover:border-accent/50"
+                          >
+                            <span className="block truncate text-xs font-medium text-ink">
+                              {entry.title}
+                            </span>
+                            <span className="mt-0.5 block text-[11px] text-muted">
+                              {entry.count.toLocaleString()} {entry.count === 1 ? 'parcel' : 'parcels'} · {money(entry.value)}
+                              {entry.kind === 'b' ? ' · back office' : ''}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            )}
 
             {showCensus && (
               <div>

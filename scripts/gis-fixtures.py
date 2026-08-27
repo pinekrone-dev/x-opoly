@@ -23,13 +23,13 @@ def square(lng, lat, meters):
 
 PARCELS = [
     dict(id=101, gid='0204050101', ad='101 Congress Ave', zp='78701', ow='Congress Holdings LLC',
-         at='Commercial', gp='Commercial', mv=500000, lv=200000, iv=300000, ac=1.2, tr=TRACT_A,
+         at='Commercial', gp='Commercial', mv=500000, lv=200000, iv=300000, ac=1.2, tr=TRACT_A, po=1, bo=1,
          center=(-97.7431, 30.2672), size=120),
     dict(id=102, gid='0204050102', ad='201 E 6th St', zp='78701', ow='Sixth Street Partners',
-         at='Vacant land', gp='Vacant land', mv=2000000, lv=2000000, iv=0, ac=0.8, tr=TRACT_A,
+         at='Vacant land', gp='Vacant land', mv=2000000, lv=2000000, iv=0, ac=0.8, tr=TRACT_A, po=1, bo=1,
          center=(-97.7375, 30.2700), size=120),
     dict(id=103, gid='0204050103', ad='800 W Cesar Chavez St', zp='78703', ow='Riverside Multifamily LP',
-         at='Multifamily', gp='Multifamily', mv=8000000, lv=3000000, iv=5000000, ac=2.4, tr=TRACT_B,
+         at='Multifamily', gp='Multifamily', mv=8000000, lv=3000000, iv=5000000, ac=2.4, tr=TRACT_B, po=2, bo=1,
          center=(-97.7480, 30.2640), size=140),
 ]
 
@@ -232,7 +232,7 @@ def tract_polygon(lng0, lat0, lng1, lat1):
     return {'type': 'Polygon', 'coordinates': [[[lng0, lat0], [lng1, lat0], [lng1, lat1], [lng0, lat1], [lng0, lat0]]]}
 
 def write_catalog():
-    os.makedirs(os.path.join(OUT, 'catalog', 'austin', 'data'), exist_ok=True)
+    os.makedirs(os.path.join(OUT, 'catalog', 'austin'), exist_ok=True)
     os.makedirs(os.path.join(OUT, 'data', 'austin'), exist_ok=True)
     j = lambda p, obj: open(os.path.join(OUT, p), 'w').write(json.dumps(obj))
     j('catalog/markets.json', {'markets': [{'slug': 'austin', 'name': 'Austin', 'region': 'Travis County, Texas',
@@ -242,7 +242,7 @@ def write_catalog():
         'center': list(CENTER), 'zoom': ZOOM, 'heavyBase': 'https://data.test/austin/',
         'colorBy': 'value', 'valueLabel': 'Market value', 'idLabel': 'Parcel',
         'tiles': True, 'count': len(PARCELS), 'attribution': 'Fixture data'})
-    keys = ['id', 'gid', 'ad', 'zp', 'ow', 'at', 'mv', 'lv', 'iv', 'ac', 'tr']
+    keys = ['id', 'gid', 'ad', 'zp', 'ow', 'at', 'mv', 'lv', 'iv', 'ac', 'tr', 'po', 'bo']
     cols = {k: [p[k] for p in PARCELS] for k in keys}
     bb = []
     for p in PARCELS:
@@ -256,6 +256,14 @@ def write_catalog():
         {'type': 'Feature', 'properties': {'tr': TRACT_A}, 'geometry': tract_polygon(-97.745, 30.262, -97.730, 30.276)},
         {'type': 'Feature', 'properties': {'tr': TRACT_B}, 'geometry': tract_polygon(-97.756, 30.258, -97.745, 30.270)}]})
     j('catalog/austin/codes.json', {})
+    j('catalog/austin/owners.json', {
+        'p': {'1': {'n': 'Congress Holdings LLC', 'c': 2, 'v': 2500000,
+                    'a': 'Po Box 1, Austin TX 78701'},
+              '2': {'n': 'Riverside Multifamily LP', 'c': 1, 'v': 8000000,
+                    'a': '800 W Cesar Chavez St, Austin TX 78703'}},
+        'b': {'1': {'a': 'Po Box 1, Austin TX 78701', 'c': 3, 'v': 10500000, 'e': 2,
+                    't': ['Congress Holdings LLC', 'Sixth Street Partners',
+                          'Riverside Multifamily LP']}}})
     j('data/austin/details.json', {'cols': {}, 'keys': []})
 
 os.makedirs(OUT, exist_ok=True)
@@ -263,4 +271,4 @@ count = build_pmtiles(os.path.join(OUT, 'data', 'austin', 'parcels.pmtiles')) if
 write_catalog()
 png_tile(os.path.join(OUT, 'tile.png'))
 print('pmtiles tiles:', count)
-print('files:', sorted(os.listdir(os.path.join(OUT, 'catalog', 'austin', 'data'))))
+print('files:', sorted(os.listdir(os.path.join(OUT, 'catalog', 'austin'))))
