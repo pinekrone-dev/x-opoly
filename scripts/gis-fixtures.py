@@ -264,7 +264,7 @@ def write_catalog():
          'count': 2, 'attribution': 'City of Austin',
          'fields': ['Permit type', 'Status']},
         {'id': 'zoning', 'label': 'Zoning', 'note': 'Districts', 'kind': 'polygon',
-         'color': '#d6336c', 'file': 'layer-zoning.geojson', 'count': 1,
+         'color': '#d6336c', 'file': 'layer-zoning.geojson', 'count': 3,
          'attribution': 'City of Austin', 'fields': ['Zoning']},
     ]})
     j('catalog/austin/layer-permits.geojson', {'type': 'FeatureCollection', 'features': [
@@ -275,7 +275,11 @@ def write_catalog():
     ]})
     j('catalog/austin/layer-zoning.geojson', {'type': 'FeatureCollection', 'features': [
         {'type': 'Feature', 'properties': {'Zoning': 'CS-MU'},
-         'geometry': tract_polygon(-97.750, 30.260, -97.735, 30.275)},
+         'geometry': tract_polygon(-97.750, 30.260, -97.742, 30.268)},
+        {'type': 'Feature', 'properties': {'Zoning': 'SF-3'},
+         'geometry': tract_polygon(-97.742, 30.260, -97.735, 30.268)},
+        {'type': 'Feature', 'properties': {'Zoning': 'GR'},
+         'geometry': tract_polygon(-97.750, 30.268, -97.742, 30.275)},
     ]})
     j('catalog/austin/owners.json', {
         'p': {'1': {'n': 'Congress Holdings LLC', 'c': 2, 'v': 2500000,

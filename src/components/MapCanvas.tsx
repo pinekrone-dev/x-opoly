@@ -127,6 +127,15 @@ export interface ExtraLayer {
   opacity: number
   /** Property names worth showing when one is clicked, in reading order. */
   fields?: string[]
+  /**
+   * Paint each category its own colour instead of the layer one hue.
+   *
+   * Zoning is the case that demands it: a single pink wash over 22,000
+   * districts says only "there is zoning here", while a colour per district
+   * type says which blocks are commercial. The mapping is decided upstream —
+   * this only paints what it is handed.
+   */
+  categories?: { field: string; colors: Record<string, string> } | null
 }
 
 /** Values come from other people's databases, so they are never markup. */
@@ -831,17 +840,32 @@ export default function MapCanvas({
       const fill = `x-${layer.id}-fill`
       const line = `x-${layer.id}-line`
       const point = `x-${layer.id}-point`
+
+      /*
+       * One colour, or one per category. A match expression reads the
+       * feature's own field, so the tiles do the lookup rather than the
+       * browser walking twenty thousand features on every repaint.
+       */
+      const paintColor: unknown = layer.categories
+        ? [
+            'match',
+            ['coalesce', ['get', layer.categories.field], ''],
+            ...Object.entries(layer.categories.colors).flatMap(([value, hue]) => [value, hue]),
+            layer.color,
+          ]
+        : layer.color
+
       if (instance.getLayer(fill)) {
-        instance.setPaintProperty(fill, 'fill-color', layer.color)
+        instance.setPaintProperty(fill, 'fill-color', paintColor as string)
         instance.setPaintProperty(fill, 'fill-opacity', layer.opacity * 0.55)
       }
       if (instance.getLayer(line)) {
-        instance.setPaintProperty(line, 'line-color', layer.color)
+        instance.setPaintProperty(line, 'line-color', paintColor as string)
         instance.setPaintProperty(line, 'line-width', layer.kind === 'line' ? 2.5 : 1)
         instance.setPaintProperty(line, 'line-opacity', Math.min(1, layer.opacity + 0.2))
       }
       if (instance.getLayer(point)) {
-        instance.setPaintProperty(point, 'circle-color', layer.color)
+        instance.setPaintProperty(point, 'circle-color', paintColor as string)
         instance.setPaintProperty(point, 'circle-opacity', layer.opacity)
         instance.setPaintProperty(point, 'circle-stroke-color', '#ffffff')
         instance.setPaintProperty(point, 'circle-stroke-width', 0.6)

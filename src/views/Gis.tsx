@@ -213,6 +213,22 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   txdot: LAYER_ICONS.absorption,
 }
 
+/*
+ * Colours for categories, not magnitudes.
+ *
+ * Distinct hues rather than a ramp: a zoning district is not more or less
+ * than the one beside it, and a light-to-dark scale would imply an order
+ * that does not exist. Twelve, because past that nobody can tell two
+ * swatches apart in a legend, and the rest are honestly "other".
+ */
+const CATEGORY_COLORS = [
+  '#2a78d6', '#e8590c', '#1baf7a', '#d6336c', '#7048e8', '#f59f00',
+  '#0ca678', '#ae3ec9', '#4c6ef5', '#c2255c', '#5c940d', '#e67700',
+]
+
+/** How many distinct values are still worth their own colour. */
+const CATEGORY_LIMIT = 12
+
 const rampOf = (id: string) => RAMPS.find((r) => r.id === id)?.colors ?? VALUE_RAMP
 
 /** A percentage slider for a layer's opacity. The one control every layer has. */
@@ -378,6 +394,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [layerData, setLayerData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
   const [layerStyle, setLayerStyle] = useState<Record<string, { color: string; opacity: number }>>({})
   const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
+  /** Which field, if any, each layer is coloured by. '' means one colour. */
+  const [layerColorBy, setLayerColorBy] = useState<Record<string, string>>({})
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -437,6 +455,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setLayerOn({})
     setLayerData({})
     setLayerStyle({})
+    setLayerColorBy({})
     setError(null)
     fetch(`${CATALOG}/${active}/meta.json`)
       .then(asJson)
@@ -552,6 +571,70 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     }
   }, [published, layerOn, layerData, layerBusy, active])
 
+  /*
+   * What each loaded layer could be coloured by, and how.
+   *
+   * A field earns the offer by behaving like a category: present on most
+   * features, and with few enough distinct values to read as a legend. A
+   * permit description is text, not a category, and offering it would paint
+   * twenty thousand colours nobody can tell apart.
+   */
+  const layerCategories = useMemo(() => {
+    const out: Record<string, { field: string; values: [string, number][] }[]> = {}
+    for (const layer of published) {
+      const data = layerData[layer.id]
+      if (!data?.features?.length) continue
+      const sample = data.features.slice(0, 4000)
+      const options: { field: string; values: [string, number][] }[] = []
+      const names = new Set<string>()
+      for (const f of sample.slice(0, 50)) {
+        for (const key of Object.keys(f.properties ?? {})) names.add(key)
+      }
+      for (const field of names) {
+        const counts = new Map<string, number>()
+        let seen = 0
+        for (const f of sample) {
+          const raw = (f.properties as Record<string, unknown> | null)?.[field]
+          if (raw == null || raw === '') continue
+          seen += 1
+          const value = String(raw)
+          // A value longer than a label is prose, not a class.
+          if (value.length > 40) {
+            counts.set('__long__', (counts.get('__long__') ?? 0) + 1)
+            continue
+          }
+          counts.set(value, (counts.get(value) ?? 0) + 1)
+        }
+        if (!seen || counts.has('__long__')) continue
+        if (counts.size < 2 || counts.size > 60) continue
+        if (seen < sample.length * 0.5) continue
+        options.push({
+          field,
+          values: [...counts.entries()].sort((a, b) => b[1] - a[1]),
+        })
+      }
+      if (options.length) out[layer.id] = options.sort((a, b) => a.values.length - b.values.length)
+    }
+    return out
+  }, [published, layerData])
+
+  /** The colour each category gets, for the map and the legend alike. */
+  const categoryPaint = useMemo(() => {
+    const out: Record<string, { field: string; colors: Record<string, string>; rest: number }> = {}
+    for (const [id, options] of Object.entries(layerCategories)) {
+      const field = layerColorBy[id]
+      if (!field) continue
+      const option = options.find((o) => o.field === field)
+      if (!option) continue
+      const colors: Record<string, string> = {}
+      option.values.slice(0, CATEGORY_LIMIT).forEach(([value], i) => {
+        colors[value] = CATEGORY_COLORS[i % CATEGORY_COLORS.length]
+      })
+      out[id] = { field, colors, rest: Math.max(0, option.values.length - CATEGORY_LIMIT) }
+    }
+    return out
+  }, [layerCategories, layerColorBy])
+
   /** What the map should draw: every layer switched on, with its geometry. */
   const extras = useMemo(
     () =>
@@ -564,8 +647,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           color: layerStyle[layer.id]?.color ?? layer.color,
           opacity: layerStyle[layer.id]?.opacity ?? 0.7,
           fields: layer.fields,
+          categories: categoryPaint[layer.id]
+            ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
+            : null,
         })),
-    [published, layerOn, layerData, layerStyle],
+    [published, layerOn, layerData, layerStyle, categoryPaint],
   )
 
   /*
@@ -1306,30 +1392,87 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                       value={style.opacity}
                       onChange={(opacityNext) => set({ opacity: opacityNext })}
                     />
-                    <div>
-                      <label
-                        className="mb-1 block text-[11px] font-medium text-body"
-                        htmlFor={`gis-layer-${layer.id}-color`}
-                      >
-                        Colour
-                      </label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          id={`gis-layer-${layer.id}-color`}
-                          type="color"
-                          value={style.color}
-                          onChange={(event) => set({ color: event.target.value })}
-                          className="h-7 w-12 cursor-pointer rounded border border-line bg-surface p-0.5"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => set({ color: layer.color })}
-                          className="text-[11px] text-accent underline"
+                    {(layerCategories[layer.id]?.length ?? 0) > 0 && (
+                      <div>
+                        <label
+                          className="mb-1 block text-[11px] font-medium text-body"
+                          htmlFor={`gis-layer-${layer.id}-colorby`}
                         >
-                          Reset
-                        </button>
+                          Colour by
+                        </label>
+                        <select
+                          id={`gis-layer-${layer.id}-colorby`}
+                          className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+                          value={layerColorBy[layer.id] ?? ''}
+                          onChange={(event) =>
+                            setLayerColorBy((current) => ({
+                              ...current,
+                              [layer.id]: event.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">One colour</option>
+                          {(layerCategories[layer.id] ?? []).map((option) => (
+                            <option key={option.field} value={option.field}>
+                              {option.field} ({option.values.length})
+                            </option>
+                          ))}
+                        </select>
                       </div>
-                    </div>
+                    )}
+
+                    {categoryPaint[layer.id] ? (
+                      <div>
+                        <p className="mb-1 text-[11px] font-medium text-body">
+                          {categoryPaint[layer.id].field}
+                        </p>
+                        <ul className="max-h-40 space-y-0.5 overflow-y-auto pr-1">
+                          {Object.entries(categoryPaint[layer.id].colors).map(([value, hue]) => (
+                            <li key={value} className="flex items-center gap-1.5">
+                              <span
+                                className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                                style={{ backgroundColor: hue }}
+                              />
+                              <span className="truncate text-[11px] text-body">{value}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {categoryPaint[layer.id].rest > 0 && (
+                          <p className="mt-1 flex items-center gap-1.5 text-[11px] text-faint">
+                            <span
+                              className="h-2.5 w-2.5 shrink-0 rounded-sm"
+                              style={{ backgroundColor: style.color }}
+                            />
+                            {categoryPaint[layer.id].rest.toLocaleString()} more, in the layer colour
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div>
+                        <label
+                          className="mb-1 block text-[11px] font-medium text-body"
+                          htmlFor={`gis-layer-${layer.id}-color`}
+                        >
+                          Colour
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            id={`gis-layer-${layer.id}-color`}
+                            type="color"
+                            value={style.color}
+                            onChange={(event) => set({ color: event.target.value })}
+                            className="h-7 w-12 cursor-pointer rounded border border-line bg-surface p-0.5"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => set({ color: layer.color })}
+                            className="text-[11px] text-accent underline"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {layer.attribution && (
                       <p className="text-[11px] text-faint">Source: {layer.attribution}</p>
                     )}
