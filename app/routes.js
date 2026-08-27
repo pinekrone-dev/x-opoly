@@ -1450,7 +1450,20 @@ export function createApp({ db, storage, env = {} }) {
     'index.json': 'application/json',
     'details.json': 'application/json',
     'parcels.geojson': 'application/geo+json',
+    // The catalog: light files the app reads to know what markets exist and
+    // how to draw them. Publishing these through the same door makes a build
+    // fully live on completion — no site deploy between the pipeline
+    // finishing and customers seeing the new county.
+    'meta.json': 'application/json',
+    'codes.json': 'application/json',
+    'census.json': 'application/json',
+    'tracts.json': 'application/json',
+    'tracts.geojson': 'application/geo+json',
+    'owners.json': 'application/json',
   }
+
+  // The one file that lives above the markets: the directory itself.
+  const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
 
   app.post('/api/gis/ingest', async (c) => {
     const throttled = limited(c, 'ingest', 300, 10 * 60 * 1000)
@@ -1474,14 +1487,20 @@ export function createApp({ db, storage, env = {} }) {
 
     const market = String(c.req.query('market') || '')
     const file = String(c.req.query('file') || '')
-    if (!/^[a-z0-9-]{2,40}$/.test(market)) {
-      return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    let key, contentType
+    if (file in INGEST_ROOT_FILES) {
+      key = file
+      contentType = INGEST_ROOT_FILES[file]
+    } else {
+      if (!/^[a-z0-9-]{2,40}$/.test(market)) {
+        return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+      }
+      if (!(file in INGEST_FILES)) {
+        return c.json({ error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}.` }, 400)
+      }
+      key = `${market}/${file}`
+      contentType = INGEST_FILES[file]
     }
-    if (!(file in INGEST_FILES)) {
-      return c.json({ error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}.` }, 400)
-    }
-    const key = `${market}/${file}`
-    const contentType = INGEST_FILES[file]
     const action = String(c.req.query('action') || 'put')
 
     if (action === 'put') {

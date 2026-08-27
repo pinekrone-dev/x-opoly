@@ -179,6 +179,16 @@ describe('POST /api/gis/ingest', () => {
     assert.equal(badMarket.status, 400)
   })
 
+  test('the catalog publishes through the same door, directory included', async () => {
+    const meta = await call('market=austin-tx&file=meta.json', { headers: auth, body: '{"count":373541}' })
+    assert.equal(meta.status, 200)
+    assert.equal(store.get('austin-tx/meta.json').bytes.toString(), '{"count":373541}')
+
+    const directory = await call('file=markets.json', { headers: auth, body: '{"markets":[]}' })
+    assert.equal(directory.status, 200)
+    assert.equal(store.get('markets.json').bytes.toString(), '{"markets":[]}')
+  })
+
   test('a large file arrives in parts and lands whole', async () => {
     const created = await (await call('market=austin-tx&file=parcels.pmtiles&action=create', { headers: auth })).json()
     assert.ok(created.uploadId)
