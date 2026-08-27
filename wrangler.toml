@@ -115,7 +115,13 @@ workers_dev = true
 routes = []
 
 [env.staging.vars]
-TILE_PROVIDER = "osm"
+# Carto rather than OpenStreetMap's own tiles. OSM's tile usage policy asks
+# that their servers not be used as the basemap for a product, and they are
+# entitled to throttle or block an origin at any time without telling it —
+# which is indistinguishable, from inside the app, from a map that simply does
+# not draw. Carto serves the same OSM data, keyless, and is what Prospector
+# already runs on.
+TILE_PROVIDER = "carto-light"
 
 [[env.staging.d1_databases]]
 binding = "DB"

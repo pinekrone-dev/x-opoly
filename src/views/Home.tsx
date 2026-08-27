@@ -117,19 +117,19 @@ export default function Home({
   }
 
   /*
-   * GIS leads, because it is where work starts: a broker finds the parcel
-   * before there is a deal, a company or a contact to file it under. It is a
-   * destination rather than a list, so it carries no count and navigates out
-   * of this view entirely.
+   * Three tabs, not six.
+   *
+   * GIS leads because it is where work starts: a broker finds the parcel
+   * before there is a deal, a company or a contact to file it under. Deals,
+   * people, companies and places are not peers of it — they are what the CRM
+   * is made of, so they live under CRM and appear on hover with their counts.
+   *
+   * On hover rather than on click, because the counts are the answer as often
+   * as the links are: "how many places do I have" should not cost a click to
+   * open and another to close.
    */
-  const tabs = useMemo(
-    () => [
-      { segment: 'gis', label: 'GIS' },
-      ...OBJECTS.map((object) => ({ segment: object.segment, label: object.label })),
-      { segment: 'surveys', label: 'Surveys' },
-    ],
-    [],
-  )
+  const crmSegments = useMemo(() => OBJECTS.map((object) => object.segment), [])
+  const crmOpen = crmSegments.includes(tab)
 
   return (
     <div className="min-h-full bg-paper">
@@ -149,27 +149,65 @@ export default function Home({
           ) : null}
         </div>
 
-        <nav className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-5" aria-label="Workspace">
-          {tabs.map((entry) => (
+        <nav className="mx-auto flex max-w-6xl gap-1 px-5" aria-label="Workspace">
+          <button
+            type="button"
+            className="shrink-0 border-b-2 border-transparent px-3 py-2 text-sm text-muted hover:text-body"
+            onClick={() => navigate('/gis')}
+          >
+            GIS
+          </button>
+
+          {/* The submenu opens on hover and stays open while the pointer is
+              anywhere in the group, so crossing the gap between the tab and
+              the list does not close it. */}
+          <div className="group relative shrink-0">
             <button
-              key={entry.segment}
               type="button"
-              className={`shrink-0 border-b-2 px-3 py-2 text-sm ${
-                tab === entry.segment
-                  ? 'border-brand font-semibold text-ink'
-                  : 'border-transparent text-muted hover:text-body'
+              className={`border-b-2 px-3 py-2 text-sm ${
+                crmOpen ? 'border-brand font-semibold text-ink' : 'border-transparent text-muted hover:text-body'
               }`}
-              aria-current={tab === entry.segment ? 'page' : undefined}
-              onClick={() => navigate(`/${entry.segment}`)}
+              aria-current={crmOpen ? 'page' : undefined}
+              aria-haspopup="true"
+              onClick={() => navigate('/deals')}
             >
-              {entry.label}
-              {entry.segment !== 'gis' && (
-                <span className="ml-1.5 text-xs text-faint">
-                  {entry.segment === 'surveys' ? surveys.length : counts[entry.segment] ?? ''}
-                </span>
-              )}
+              CRM
+              <span className="ml-1.5 text-xs text-faint" aria-hidden>
+                ▾
+              </span>
             </button>
-          ))}
+
+            <ul className="invisible absolute left-0 top-full z-30 w-48 overflow-hidden rounded-lg border border-line bg-surface opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+              {OBJECTS.map((object) => (
+                <li key={object.segment}>
+                  <button
+                    type="button"
+                    className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-sunken ${
+                      tab === object.segment ? 'font-semibold text-ink' : 'text-body'
+                    }`}
+                    onClick={() => navigate(`/${object.segment}`)}
+                  >
+                    {object.label}
+                    <span className="text-xs text-faint">{counts[object.segment] ?? ''}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <button
+            type="button"
+            className={`shrink-0 border-b-2 px-3 py-2 text-sm ${
+              tab === 'surveys'
+                ? 'border-brand font-semibold text-ink'
+                : 'border-transparent text-muted hover:text-body'
+            }`}
+            aria-current={tab === 'surveys' ? 'page' : undefined}
+            onClick={() => navigate('/surveys')}
+          >
+            Surveys
+            <span className="ml-1.5 text-xs text-faint">{surveys.length}</span>
+          </button>
         </nav>
       </header>
 
