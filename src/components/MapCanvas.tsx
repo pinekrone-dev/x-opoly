@@ -355,6 +355,10 @@ export default function MapCanvas({
   const startupError = useRef<string | null>(null)
   // Set the moment the GPU takes the context away, and read by the teardown.
   const contextLost = useRef(false)
+  // Automatic rebuilds since the last healthy start. Bounded, because a
+  // machine whose GPU refuses WebGL outright would otherwise rebuild in a
+  // loop forever; the button has no such limit.
+  const autoTries = useRef(0)
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
@@ -478,6 +482,7 @@ export default function MapCanvas({
     const markReady = () => {
       ready.current = true
       startupError.current = null
+      autoTries.current = 0
       setLoaded(true)
       setEngineNote(null)
     }
@@ -500,17 +505,45 @@ export default function MapCanvas({
      * event ever arrives.
      */
     const canvas = instance.getCanvas()
+    let retry: number | undefined
+    const rebuild = () => setAttempt((n) => n + 1)
     const onLost = (event: Event) => {
       // Prevents the default so the browser will attempt a restore at all.
       event.preventDefault()
       contextLost.current = true
       ready.current = false
       setLoaded(false)
-      setEngineNote('The browser took the graphics context back, which usually means another tab or app needed it.')
+      /*
+       * Then recover without being asked. Context loss is a browser under
+       * memory pressure evicting the oldest context — a machine with forty
+       * tabs hits it on every visit — and the person looking at the grey
+       * grid did nothing wrong, so they should not have to click anything.
+       * A few seconds' pause gives the browser room to actually free the
+       * GPU; rebuilding instantly tends to get the new context evicted too.
+       */
+      if (autoTries.current < 3) {
+        autoTries.current += 1
+        setEngineNote('The browser took the graphics context back — restarting the map…')
+        retry = window.setTimeout(rebuild, 2500)
+      } else {
+        setEngineNote(
+          'The browser keeps taking the graphics context away, which usually means it is out of GPU memory. ' +
+            'Closing other tabs tends to cure it.',
+        )
+      }
     }
-    const onRestored = () => setAttempt((n) => n + 1)
+    const onRestored = rebuild
+    /*
+     * Coming back to the tab is the other natural recovery point: whatever
+     * needed the GPU had it while this tab was hidden, and returning is the
+     * moment the context is most likely to be grantable again.
+     */
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !ready.current && contextLost.current) rebuild()
+    }
     canvas.addEventListener('webglcontextlost', onLost)
     canvas.addEventListener('webglcontextrestored', onRestored)
+    document.addEventListener('visibilitychange', onVisible)
 
     // A start that hangs is as blank as one that throws. Long enough that a
     // slow connection never sees it; the note clears itself if load lands.
@@ -543,8 +576,10 @@ export default function MapCanvas({
 
     return () => {
       window.clearTimeout(slowStart)
+      window.clearTimeout(retry)
       canvas.removeEventListener('webglcontextlost', onLost)
       canvas.removeEventListener('webglcontextrestored', onRestored)
+      document.removeEventListener('visibilitychange', onVisible)
       resize.disconnect()
       /*
        * The bookkeeping runs whatever happens to the teardown, and that
@@ -1535,8 +1570,15 @@ export default function MapCanvas({
         * the viewer is confusing; a blank map with no explanation is worse.
         */}
       {engineNote ? (
-        <div className="absolute inset-0 z-[550] flex items-center justify-center">
-          <div className="w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
+        /*
+         * pointer-events-none on the shield, restored on the card. The shield
+         * spans the whole map area and sits above the tool rail, so left
+         * interactive it silently ate every click and scroll on the layers
+         * panel and the account menu — "the side menu will not scroll" was
+         * this overlay, not the menu.
+         */
+        <div className="pointer-events-none absolute inset-0 z-[550] flex items-center justify-center">
+          <div className="pointer-events-auto w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
             <p className="text-sm font-semibold text-ink">The map did not start</p>
             <p className="mt-1 text-xs leading-snug text-body">{engineNote}</p>
             {/*
@@ -1553,6 +1595,7 @@ export default function MapCanvas({
                 onClick={() => {
                   setEngineNote(null)
                   startupError.current = null
+                  autoTries.current = 0
                   setAttempt((n) => n + 1)
                 }}
               >
