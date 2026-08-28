@@ -434,6 +434,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     // The parcel pipeline calls this from GitHub Actions; a verified OIDC
     // token from an allowed repository is the auth, not a session.
     /^\/api\/gis\/ingest$/,
+    /*
+     * The same door, for rows rather than files.
+     *
+     * This has its own path rather than sharing /api/gis/parcels with the
+     * search, and the reason is the shape of this list: it matches on path
+     * alone, with no idea of method. Exempting /api/gis/parcels to let the
+     * pipeline POST to it would have un-gated the GET beside it, which serves
+     * a whole county to anyone who asks. Both anchors end in $, so neither
+     * entry can widen to cover the other.
+     */
+    /^\/api\/gis\/ingest\/parcels$/,
   ]
 
   /**
@@ -1745,7 +1756,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
    * only the seal makes the market answerable, so a run that dies halfway
    * leaves the app on the old path rather than on half a county.
    */
-  app.post('/api/gis/parcels', async (c) => {
+  app.post('/api/gis/ingest/parcels', async (c) => {
     const throttled = limited(c, 'ingest', 3000, 10 * 60 * 1000)
     if (throttled) return throttled
 

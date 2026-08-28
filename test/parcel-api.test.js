@@ -81,6 +81,18 @@ const PARCELS = [
 
 let call
 let ingest
+/*
+ * The pipeline has no session, and neither does this.
+ *
+ * The first version of these tests sent the ingest calls through the same
+ * signed-in client as the searches, so every one of them carried a session
+ * cookie alongside its OIDC token. They passed, and they were passing on the
+ * cookie: in production the pipeline is a GitHub runner with no session at
+ * all, and the endpoint answered 401 from a middleware these tests never
+ * exercised. A test that quietly supplies what production withholds proves
+ * the opposite of what it claims.
+ */
+let anonymous
 
 before(async () => {
   resetKeyCache()
@@ -94,8 +106,9 @@ before(async () => {
     method: 'POST',
     body: JSON.stringify({ email: 'broker@example.com', password: 'a long enough password', name: 'Broker' }),
   })
+  anonymous = client()
   ingest = (query, body, token = sign()) =>
-    call(`/api/gis/parcels?${query}`, {
+    anonymous(`/api/gis/ingest/parcels?${query}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
@@ -106,10 +119,29 @@ after(() => temp.cleanup())
 
 describe('publishing a county', () => {
   test('no token, no rows', async () => {
-    const res = await call('/api/gis/parcels?market=austin-tx&action=rows', {
+    const res = await anonymous('/api/gis/ingest/parcels?market=austin-tx&action=rows', {
       method: 'POST',
       body: JSON.stringify(PARCELS),
     })
+    assert.equal(res.status, 401)
+  })
+
+  test('a verified run needs no session, which is how the pipeline runs', async () => {
+    // The regression this pins down: the ingest used to share a path with the
+    // search, so the session middleware answered it before its own OIDC check
+    // ever ran, and every publish came back "Sign in to continue."
+    const res = await anonymous(`/api/gis/ingest/parcels?market=proof-zz&action=clear`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${sign()}` },
+      body: '{}',
+    })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.cleared, 'proof-zz')
+  })
+
+  test('the search beside it is still gated', async () => {
+    // And the reason the two cannot share a path: this one serves a county.
+    const res = await anonymous('/api/gis/parcels?market=austin-tx')
     assert.equal(res.status, 401)
   })
 
