@@ -49,6 +49,7 @@ export default function GisRail({
       <nav
         className="pointer-events-auto flex w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-2"
         aria-label="Map tools"
+        data-tour="rail"
       >
         {TABS.map((entry) => {
           const active = open && tab === entry.id

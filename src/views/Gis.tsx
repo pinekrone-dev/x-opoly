@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas from '../components/MapCanvas'
 import ParcelPanel, { type PanelGroup } from '../components/ParcelPanel'
+import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import GisRail, {
   CheckList,
   LAYER_ICONS,
@@ -709,6 +710,40 @@ function SavedViews({
   )
 }
 
+/**
+ * The first-run tips.
+ *
+ * Four, in the order somebody actually works: choose the county, switch on
+ * what you want to see, keep the map you built, then narrow it. The second is
+ * the one that matters — the view now opens with nothing drawn, and without a
+ * sentence saying so an empty map reads as a failure rather than as a choice.
+ *
+ * Each points at a `data-tour` attribute rather than a class name, so
+ * restyling the panel cannot silently aim a tip at nothing.
+ */
+const GIS_TIPS: Coachmark[] = [
+  {
+    target: '[data-tour="market"]',
+    title: 'Start with a county',
+    body: 'Every market is one county’s own record, so choosing one chooses what the data is. Switching markets reframes the map.',
+  },
+  {
+    target: '[data-tour="layers"]',
+    title: 'Nothing is on until you say so',
+    body: 'The map opens empty on purpose. Switch on parcels, ownership, demographics, zoning or comps — each square is a layer, and they stack.',
+  },
+  {
+    target: '[data-tour="views"]',
+    title: 'Keep the map you build',
+    body: 'Layers, colours, filters and where you are looking, saved under a name. Your colleagues see it too, so a good read on a market only gets built once.',
+  },
+  {
+    target: '[data-tour="rail"]',
+    title: 'Search, filter, report',
+    body: 'Find a parcel by address or owner, narrow by asset type, value and acreage, then export what is left.',
+  },
+]
+
 /** The columns worth handing to someone else, in the order they read. */
 const CSV_COLUMNS: [string, string][] = [
   ['gid', 'Parcel'],
@@ -799,7 +834,20 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [codes, setCodes] = useState<Record<string, { d?: string }>>({})
 
   const [rail, setRail] = useState<RailTab | null>('layers')
-  const [showParcels, setShowParcels] = useState(true)
+  /*
+   * Nothing is switched on when the view opens.
+   *
+   * Landing with the parcel layer already drawn meant every visit began by
+   * dismissing a map somebody else chose — and on a county of four hundred
+   * thousand parcels that is a heavy thing to render before anyone has asked
+   * for it. The catalog and the saved views are the way in instead, and the
+   * first-run tips say so, because an empty map with no explanation is
+   * indistinguishable from a broken one.
+   *
+   * The attribute index still loads either way: search and the filters need
+   * it, and it is what makes the first switch-on instant.
+   */
+  const [showParcels, setShowParcels] = useState(false)
   const [showOwners, setShowOwners] = useState(false)
   /*
    * Who is behind the parcels.
@@ -2289,6 +2337,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         </div>
       )}
 
+      {/*
+        Held until the market list has arrived, so the tips never point at a
+        panel that is still empty. Versioned in the key: changing the tour
+        should show it again, and a stale "done" flag would silently swallow
+        the new one.
+      */}
+      <Coachmarks steps={GIS_TIPS} storageKey="lq.gis.tips.v1" enabled={markets.length > 0} />
+
       <GisRail
         open={rail !== null}
         tab={rail ?? 'layers'}
@@ -2302,7 +2358,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             {/* The market belongs here rather than floating over the map:
                 coverage is per county, so choosing one is choosing what the
                 layer even is. */}
-            <div>
+            <div data-tour="market">
               <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-market">
                 Market
               </label>
@@ -2328,7 +2384,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
             {/* Above the catalog, because a saved view is where you start
                 rather than something you reach after configuring by hand. */}
-            <SavedViews
+            <div data-tour="views">
+              <SavedViews
               views={views}
               name={viewName}
               busy={viewBusy}
@@ -2337,9 +2394,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               onSave={saveCurrentView}
               onOpen={applyView}
               onDelete={removeView}
-            />
+              />
+            </div>
 
-            <div className="border-t border-line pt-3">
+            <div className="border-t border-line pt-3" data-tour="layers">
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
                 Layers
               </p>
