@@ -341,6 +341,20 @@ export default function MapCanvas({
   // silent blank rectangle. Rendered as a card with a reset, because the
   // person looking at it cannot open a console.
   const [engineNote, setEngineNote] = useState<string | null>(null)
+  /*
+   * A rebuild counter, and the reason the last start failed.
+   *
+   * Every source and layer effect below depends on `loaded`, so tearing the
+   * instance down and building a new one re-applies all of them — which makes
+   * rebuilding a real recovery rather than a blank canvas with the panels
+   * still around it.
+   */
+  const [attempt, setAttempt] = useState(0)
+  // What MapLibre itself said, kept in a ref because the timeout reads it
+  // without wanting to re-run on every error.
+  const startupError = useRef<string | null>(null)
+  // Set the moment the GPU takes the context away, and read by the teardown.
+  const contextLost = useRef(false)
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
@@ -461,18 +475,60 @@ export default function MapCanvas({
     instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left')
     instance.on('click', (event) => clickHandler.current?.(event.lngLat.lat, event.lngLat.lng))
     instance.on('moveend', () => rememberView(instance))
-    instance.on('load', () => {
+    const markReady = () => {
       ready.current = true
+      startupError.current = null
       setLoaded(true)
       setEngineNote(null)
+    }
+    instance.on('load', markReady)
+
+    // Whatever MapLibre says on the way up, kept so the note can name it.
+    // Without this the only symptom of a real failure is a timeout message
+    // that describes the delay rather than the cause, which is how one
+    // afternoon went entirely on ruling out things that were never wrong.
+    instance.on('error', (event) => {
+      const message = (event as { error?: Error }).error?.message
+      if (message && !ready.current) startupError.current = message
     })
+
+    /*
+     * The GPU can take the context away — another tab, a driver reset, a
+     * laptop switching cards — and MapLibre does not come back on its own.
+     * Losing it before `load` is the one failure that looks exactly like a
+     * hang: the constructor succeeded, so nothing threw, and no further
+     * event ever arrives.
+     */
+    const canvas = instance.getCanvas()
+    const onLost = (event: Event) => {
+      // Prevents the default so the browser will attempt a restore at all.
+      event.preventDefault()
+      contextLost.current = true
+      ready.current = false
+      setLoaded(false)
+      setEngineNote('The browser took the graphics context back, which usually means another tab or app needed it.')
+    }
+    const onRestored = () => setAttempt((n) => n + 1)
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
 
     // A start that hangs is as blank as one that throws. Long enough that a
     // slow connection never sees it; the note clears itself if load lands.
     const slowStart = window.setTimeout(() => {
-      if (!ready.current) {
-        setEngineNote('The map is taking unusually long to start. Reloading the page usually fixes it.')
+      if (ready.current) return
+      // Ask the map rather than trusting the flag. If the event was missed —
+      // and a missed event is indistinguishable from a hang to everything
+      // else here — the map is fine and saying otherwise is a false alarm
+      // over a working map.
+      if (instance.loaded()) {
+        markReady()
+        return
       }
+      setEngineNote(
+        startupError.current
+          ? `The map engine stopped while starting — ${startupError.current}`
+          : 'The map is taking unusually long to start. Reloading the page usually fixes it.',
+      )
     }, 12000)
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
@@ -487,15 +543,47 @@ export default function MapCanvas({
 
     return () => {
       window.clearTimeout(slowStart)
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
       resize.disconnect()
-      popup.current?.remove()
-      instance.remove()
+      /*
+       * The bookkeeping runs whatever happens to the teardown, and that
+       * ordering is the whole reason a rebuild works.
+       *
+       * remove() throws when the graphics context is already gone — which is
+       * exactly the case a rebuild exists for. Left unguarded it aborted the
+       * cleanup before `map.current` was cleared, so the effect's own
+       * `if (map.current) return` guard then refused to build the
+       * replacement: the recovery button tore the map down and put nothing
+       * back.
+       */
+      /*
+       * A map whose context is gone is not torn down — it is abandoned.
+       *
+       * remove() walks its controls calling onRemove, and those reach through
+       * the painter that died with the context, so it throws from inside
+       * MapLibre where no try/catch of ours can contain it: the error escapes
+       * to React, which unmounts this whole subtree, and the recovery button
+       * takes the map away for good instead of bringing it back.
+       *
+       * So when the context is lost the instance is simply dropped. The
+       * container div is keyed on `attempt`, so React discards the element
+       * holding the dead canvas and mounts a fresh one for the next build,
+       * which is the same disposal by a route that cannot throw.
+       */
+      try {
+        popup.current?.remove()
+        if (!contextLost.current) instance.remove()
+      } catch {
+        /* a half-built map is still better dropped than left attached */
+      }
+      contextLost.current = false
       map.current = null
       ready.current = false
       markers.current.clear()
       labels.current.clear()
     }
-  }, [])
+  }, [attempt])
 
   // The basemap is its own source and layer so it can be swapped without
   // tearing down the map, which would drop every pin and reset the viewport.
@@ -1440,7 +1528,7 @@ export default function MapCanvas({
 
   return (
     <div className={`relative h-full w-full ${active.darkNative ? 'map-dark' : ''}`}>
-      <div ref={container} className={className} role="application" aria-label="Property map" />
+      <div key={attempt} ref={container} className={className} role="application" aria-label="Property map" />
 
       {/*
         * Said out loud rather than silently swapped. A basemap changing under
@@ -1451,21 +1539,41 @@ export default function MapCanvas({
           <div className="w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
             <p className="text-sm font-semibold text-ink">The map did not start</p>
             <p className="mt-1 text-xs leading-snug text-body">{engineNote}</p>
-            <button
-              type="button"
-              className="mt-3 rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
-              onClick={() => {
-                try {
-                  window.localStorage.removeItem(HOME_STORAGE_KEY)
-                  window.localStorage.removeItem(BASEMAP_STORAGE_KEY)
-                } catch {
-                  /* storage may be blocked; the reload alone can still help */
-                }
-                window.location.reload()
-              }}
-            >
-              Reset map settings and reload
-            </button>
+            {/*
+              * Two buttons, cheapest first. Rebuilding the engine keeps the
+              * work already on screen — the market, the filters, the pins —
+              * where a reload throws all of it away, and it is what actually
+              * cures a lost graphics context. The reset stays for the case
+              * where a stored view or basemap is the thing at fault.
+              */}
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+                onClick={() => {
+                  setEngineNote(null)
+                  startupError.current = null
+                  setAttempt((n) => n + 1)
+                }}
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
+                onClick={() => {
+                  try {
+                    window.localStorage.removeItem(HOME_STORAGE_KEY)
+                    window.localStorage.removeItem(BASEMAP_STORAGE_KEY)
+                  } catch {
+                    /* storage may be blocked; the reload alone can still help */
+                  }
+                  window.location.reload()
+                }}
+              >
+                Reset map settings and reload
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
