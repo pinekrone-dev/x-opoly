@@ -224,6 +224,38 @@ const BASEMAP_STORAGE_KEY = 'sitesurvey.basemap'
  * not in Austin. Remembering the last view means the second survey opens
  * where the broker actually works, with nothing to configure.
  */
+/*
+ * What the GPU situation actually is, asked when the map fails to start.
+ *
+ * A start that hangs with no error gives the person a shrug and gives a bug
+ * report nothing to go on — an afternoon went on exactly that. The three
+ * conditions this tells apart want three different responses: WebGL denied
+ * outright means the browser needs hardware acceleration switched on or tabs
+ * closed; a software renderer means acceleration is off and everything will
+ * crawl; a healthy GPU means the stall is elsewhere, and in practice that is
+ * an extension interfering with the map's background workers.
+ */
+function engineDiagnosis(): string {
+  try {
+    const probe = document.createElement('canvas')
+    const gl = probe.getContext('webgl2') ?? probe.getContext('webgl')
+    if (!gl) {
+      return 'This tab could not get graphics access at all — usually hardware acceleration switched off in the browser settings, or too many open tabs holding graphics memory. Closing tabs or re-enabling acceleration should cure it.'
+    }
+    const info = gl.getExtension('WEBGL_debug_renderer_info')
+    const renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : ''
+    // The probe context is handed back immediately: the browser caps live
+    // contexts, and the whole point here is not to hold one the map needs.
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    if (/swiftshader|software|llvmpipe|basic render/i.test(renderer)) {
+      return `The browser is drawing with software (${renderer}) instead of the graphics card, which makes the map far too slow to start. Switching hardware acceleration on in the browser settings should cure it.`
+    }
+    return `Graphics look healthy${renderer ? ` (${renderer})` : ''}, so the start is stuck elsewhere — a browser extension blocking the map's background workers is the usual cause. A private window with extensions off will confirm it.`
+  } catch {
+    return 'The graphics check itself was blocked, which points at the browser or an extension denying canvas access.'
+  }
+}
+
 function homeView(): { center: LngLat; zoom: number } {
   try {
     const raw = window.localStorage.getItem(HOME_STORAGE_KEY)
@@ -557,10 +589,21 @@ export default function MapCanvas({
         markReady()
         return
       }
+      /*
+       * One silent retry before any message. A wedged start — a worker that
+       * never answered, a context granted and then starved — often unsticks
+       * on a fresh instance, and the person should not see a scary panel for
+       * a hiccup that cures itself.
+       */
+      if (!startupError.current && autoTries.current < 1) {
+        autoTries.current += 1
+        rebuild()
+        return
+      }
       setEngineNote(
         startupError.current
           ? `The map engine stopped while starting — ${startupError.current}`
-          : 'The map is taking unusually long to start. Reloading the page usually fixes it.',
+          : `The map did not finish starting. ${engineDiagnosis()}`,
       )
     }, 12000)
 
