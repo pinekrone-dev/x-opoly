@@ -1471,6 +1471,10 @@ export function createApp({ db, storage, env = {} }) {
     'tracts.json': 'application/json',
     'tracts.geojson': 'application/geo+json',
     'owners.json': 'application/json',
+    // The county's own recorded sales, for markets whose roll carries them.
+    // Public data, published like the rest — separate from a workspace's own
+    // imported comps, which never leave the workspace that collected them.
+    'sales.json': 'application/json',
     // What extra layers this market publishes, and what each one is.
     'layers.json': 'application/json',
   }

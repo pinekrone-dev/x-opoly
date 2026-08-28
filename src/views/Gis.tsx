@@ -755,6 +755,24 @@ function censusValue(value: number, kind: string): string {
   return Math.round(value).toLocaleString()
 }
 
+/**
+ * A market's attribution as plain text.
+ *
+ * meta.json writes it for HTML — "Parcels &amp; values: Clark County Assessor"
+ * — and that string is about to become a value in a record list, where an
+ * escaped ampersand reads as a typo rather than as markup.
+ */
+const stripTags = (html: string) =>
+  html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+
 const money = (n: number) => {
   if (!Number.isFinite(n) || n <= 0) return '—'
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`
@@ -830,6 +848,19 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * road. Nothing here is fetched from a listing site: the broker captures
    * what their own browser showed them and imports it, and it stays theirs.
    */
+  /*
+   * The county's own recorded sales, where the roll carries them.
+   *
+   * Kept apart from `comps` because they are a different thing with different
+   * rules: these are public record, published with the market and the same for
+   * everyone, while imported comps are one workspace's private collection.
+   * They share the Comps square because a broker pricing a deal wants both in
+   * front of them, and each record says which it is.
+   */
+  const [sales, setSales] = useState<{
+    n: number
+    cols: Record<string, (string | number)[]>
+  } | null>(null)
   const [comps, setComps] = useState<Comp[] | null>(null)
   const [compsUnplaced, setCompsUnplaced] = useState(0)
   const [compsBusy, setCompsBusy] = useState(false)
@@ -1045,6 +1076,35 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   }, [active])
 
   /*
+   * The market's recorded sales, fetched the first time the square is on.
+   *
+   * A separate small file rather than a read of details.json, which runs to
+   * sixty megabytes because it holds every field for every parcel. A market
+   * that publishes no sales simply has no file, which is not an error.
+   */
+  useEffect(() => {
+    if (!layerOn.comps || !active) return undefined
+    let cancelled = false
+    fetch(`${CATALOG}/${active}/sales.json`)
+      .then(asJson)
+      .then((doc) => {
+        if (!cancelled) setSales(doc)
+      })
+      .catch(() => {
+        // No sales published for this county. Nothing to say about it.
+        if (!cancelled) setSales(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [layerOn.comps, active])
+
+  // A different county's sales must not linger under the new one's card.
+  useEffect(() => {
+    setSales(null)
+  }, [active])
+
+  /*
    * The workspace's comps, fetched the first time the square is switched on.
    *
    * Not on mount: a broker who has never imported any should not pay a round
@@ -1078,7 +1138,46 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * panel quietly disagree with the count on the card.
    */
   const compsGeo = useMemo((): GeoJSON.FeatureCollection | null => {
-    if (!comps?.length) return null
+    /*
+     * The county's sales and the workspace's comps, in one layer.
+     *
+     * A broker pricing a deal wants both in front of them, so they share the
+     * square — but every record says which it is, because the two are not the
+     * same kind of fact. A county sale is the recorded consideration on a
+     * deed; an imported comp is whatever the broker's own source said. Mixing
+     * them without saying so would make the weaker one look like the stronger.
+     */
+    const countySales: GeoJSON.Feature[] = []
+    if (sales?.n) {
+      const c = sales.cols
+      for (let i = 0; i < sales.n; i += 1) {
+        const x = Number(c.x?.[i])
+        const y = Number(c.y?.[i])
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+        const price = Number(c.sp?.[i]) || 0
+        countySales.push({
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [x, y] },
+          properties: {
+            Address: String(c.ad?.[i] ?? ''),
+            Name: '',
+            Price: price ? money(price) : '',
+            Type: String(c.at?.[i] ?? ''),
+            'Sale or lease': 'Sold',
+            'Sale date': String(c.sd?.[i] ?? ''),
+            Parcel: String(c.id?.[i] ?? ''),
+            Source: meta?.attribution ? stripTags(meta.attribution) : 'County record',
+            'On the map': '',
+          },
+        } as GeoJSON.Feature)
+      }
+    }
+
+    if (!comps?.length) {
+      return countySales.length
+        ? ({ type: 'FeatureCollection', features: countySales } as GeoJSON.FeatureCollection)
+        : null
+    }
     /*
      * The cast covers the null geometries. GeoJSON itself calls a feature
      * with `"geometry": null` an unlocated feature and allows it — MapLibre
@@ -1087,7 +1186,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
      */
     return {
       type: 'FeatureCollection',
-      features: comps.map((comp) => ({
+      features: [
+        // The county's own record first: it is the stronger evidence, and a
+        // list that opens with it reads as a comp set rather than a scrapbook.
+        ...countySales,
+        ...comps.map((comp) => ({
         type: 'Feature' as const,
         geometry:
           Number.isFinite(comp.lat) && Number.isFinite(comp.lng)
@@ -1112,8 +1215,9 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           'On the map': comp.placed === 'failed' ? 'address not found' : '',
         },
       })),
+    ] as GeoJSON.Feature[],
     } as GeoJSON.FeatureCollection
-  }, [comps])
+  }, [comps, sales, meta])
 
   /**
    * The comps described the way a published layer is described, so everything
@@ -1129,7 +1233,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       file: '',
       count: compsGeo?.features.length ?? 0,
       note: comps?.length ? undefined : 'Import your own',
-      fields: ['Address', 'Price', 'Type', 'SF', 'Cap rate', 'Year built', 'Sale or lease', 'On the map'],
+      fields: [
+        'Address', 'Price', 'Sale date', 'Type', 'SF', 'Cap rate', 'Year built',
+        'Sale or lease', 'Units', 'Acres', 'Price per SF', 'Parcel', 'Source',
+        'Captured', 'On the map',
+      ],
       attribution: 'Imported by this workspace',
     }),
     [compsGeo, comps],
