@@ -931,6 +931,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const captureMap = useRef<(() => Promise<HTMLCanvasElement | null>) | null>(null)
   const [snapshotting, setSnapshotting] = useState<'png' | 'pdf' | null>(null)
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
+  /** A clicked layer feature, shown in the right-hand card. */
+  const [featurePick, setFeaturePick] = useState<{ layerId: string; properties: Record<string, unknown> } | null>(null)
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -1408,6 +1410,30 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       cancelled = true
     }
   }, [showOwners, active, owners])
+
+  /*
+   * The card asks for the owner names the moment a clicked parcel carries a
+   * holding, whether or not the ownership layer is switched on. The names are
+   * the answer to "who is this" — waiting for a layer toggle to load them is
+   * how a real portfolio read as a bare id.
+   */
+  useEffect(() => {
+    if (owners || !active || selected == null || !index) return undefined
+    const row = rowOf.get(selected)
+    if (row == null) return undefined
+    const held = index.cols.po?.[row] != null || index.cols.bo?.[row] != null
+    if (!held) return undefined
+    let cancelled = false
+    fetch(`${CATALOG}/${active}/owners.json`)
+      .then(asJson)
+      .then((doc: OwnerIndex) => {
+        if (!cancelled) setOwners(doc)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [selected, owners, active, rowOf, index])
 
   /*
    * The census layer, fetched only once someone asks for it.
@@ -2352,13 +2378,16 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           basemaps={basemaps}
           properties={[]}
           parcels={
-            showParcels
-              ? {
+            {
                   url: `${viaProxy(meta.heavyBase)}parcels.pmtiles`,
+                  fillVisible: showParcels,
                   colorBy: parcelColorBy === 'auto' ? (meta.colorBy === 'value' ? 'value' : 'group') : parcelColorBy,
                   valueBreaks,
                   selectedParcelId: selected,
-                  onSelectParcel: setSelected,
+                  onSelectParcel: (id) => {
+                    setFeaturePick(null)
+                    setSelected(id)
+                  },
                   filterIds,
                   // Dimmed while the census shading is on: a choropleth under
                   // three hundred thousand full-strength parcel fills reads
@@ -2367,7 +2396,6 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                   opacity,
                   valueRamp: rampOf(parcelRamp),
                 }
-              : null
           }
           // A record chosen in the panel takes the camera; otherwise the
           // market's own centre does, keyed on the slug so switching county
@@ -2380,6 +2408,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             here.current = where
           }}
           captureRef={captureMap}
+          onExtraPick={(pick) => {
+            setSelected(null)
+            setFeaturePick(pick)
+          }}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
           extras={extras}
@@ -3070,8 +3102,42 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           pointer crosses dozens of parcels on the way anywhere. Raised clear of
           the attribution control, which the basemap licences require stay
           readable. */}
+      {/* A clicked layer feature: permit, zoning district, flood zone, school.
+          The same card position and the same scroll — a record is a record. */}
+      {featurePick && selected == null && (
+        <div className="absolute bottom-9 right-3 z-[500] max-h-[72vh] w-80 overflow-y-auto rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
+          <button
+            type="button"
+            className="float-right text-muted hover:text-ink"
+            aria-label="Close record"
+            onClick={() => setFeaturePick(null)}
+          >
+            ×
+          </button>
+          <p className="text-sm font-semibold text-ink">
+            {shownLayers.find((l) => l.id === featurePick.layerId)?.label ?? featurePick.layerId}
+          </p>
+          <dl className="mt-2 space-y-1 text-xs">
+            {(() => {
+              const layer = shownLayers.find((l) => l.id === featurePick.layerId)
+              const order = layer?.fields?.length
+                ? layer.fields
+                : Object.keys(featurePick.properties)
+              return order
+                .filter(
+                  (field) =>
+                    featurePick.properties[field] != null && featurePick.properties[field] !== '',
+                )
+                .map((field) => (
+                  <Row key={field} label={field} value={String(featurePick.properties[field])} />
+                ))
+            })()}
+          </dl>
+        </div>
+      )}
+
       {selected != null && !expanded && (
-        <div className="absolute bottom-9 right-3 z-[500] w-80 rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
+        <div className="absolute bottom-9 right-3 z-[500] max-h-[72vh] w-80 overflow-y-auto rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
           <button
             type="button"
             className="float-right text-muted hover:text-ink"
@@ -3095,6 +3161,56 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                   value={parcel.ac ? `${Number(parcel.ac).toFixed(2)} ac` : '—'}
                 />
               </dl>
+
+              {/* Who holds it, from the pipeline's resolved groups: the
+                  portfolio is one holder across spelling variants, the back
+                  office one mailing address across many entity names. */}
+              {(() => {
+                const portfolio = parcel.po != null ? owners?.p?.[String(parcel.po)] : null
+                const office = parcel.bo != null ? owners?.b?.[String(parcel.bo)] : null
+                if (!portfolio && !office) return null
+                return (
+                  <div className="mt-3 border-t border-line pt-2">
+                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                      Ownership
+                    </p>
+                    {portfolio ? (
+                      <div className="text-xs">
+                        <p className="font-semibold text-ink">{portfolio.n || 'Unnamed holder'}</p>
+                        <p className="text-muted">
+                          Portfolio · {portfolio.c.toLocaleString()} parcels · {money(portfolio.v)}
+                        </p>
+                        <button
+                          type="button"
+                          className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
+                          onClick={() =>
+                            setOwnerPick({ kind: 'p', id: String(parcel.po) })
+                          }
+                        >
+                          Show all holdings on the map
+                        </button>
+                      </div>
+                    ) : null}
+                    {office ? (
+                      <div className={`text-xs ${portfolio ? 'mt-2' : ''}`}>
+                        <p className="font-semibold text-ink">{office.a || 'Unnamed address'}</p>
+                        <p className="text-muted">
+                          Back office · {office.c.toLocaleString()} parcels · {money(office.v)}
+                        </p>
+                        <button
+                          type="button"
+                          className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
+                          onClick={() =>
+                            setOwnerPick({ kind: 'b', id: String(parcel.bo) })
+                          }
+                        >
+                          Show all holdings on the map
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                )
+              })()}
 
               {/* What the CRM already knows. A parcel with a deal on it is the
                   reason to have clicked, so it leads. */}

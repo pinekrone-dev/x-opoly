@@ -73,6 +73,15 @@ const OVERLAY_ORDER = [
  * clicked, which is why `onSelectParcel` hands back an id and nothing more.
  */
 export interface ParcelLayer {
+  /**
+   * Whether the land-use wash paints, with the geometry staying either way.
+   *
+   * The parcels card used to remove the whole layer, which also removed the
+   * outlines and every click target — a county you could not touch. Off now
+   * means invisible fill: the hairline outlines stay so there is always a
+   * shape to click, and hover and selection still light the parcel up.
+   */
+  fillVisible?: boolean
   /** Absolute URL of the .pmtiles file. */
   url: string
   /** The layer name inside the tiles. */
@@ -175,6 +184,15 @@ interface Props {
    * preserving it full-time taxes every frame to serve a rare export.
    */
   captureRef?: MutableRefObject<(() => Promise<HTMLCanvasElement | null>) | null>
+  /**
+   * A clicked extra-layer feature, handed to the view instead of a popup.
+   *
+   * The popup was the first draft and it reads like a tooltip: cramped,
+   * covering the map, gone on the next click. A view that supplies this
+   * callback gets the feature's properties and renders them wherever records
+   * belong — the same right-hand card a parcel uses.
+   */
+  onExtraPick?: (pick: { layerId: string; properties: Record<string, unknown> }) => void
   /** The survey's pipeline, for pin colours that match the sidebar. */
   stages?: { id: string; color: string }[]
   /** Tour start and end, drawn as their own flags — a tour begins at the
@@ -349,6 +367,7 @@ export default function MapCanvas({
   onMapClick,
   onViewChange,
   captureRef,
+  onExtraPick,
   stages,
   anchors = null,
   zones = null,
@@ -1104,6 +1123,10 @@ export default function MapCanvas({
           if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
         }
         const props = event.features?.[0]?.properties ?? {}
+        if (onExtraPick) {
+          onExtraPick({ layerId: layer.id, properties: props })
+          return
+        }
         const order = layer.fields?.length ? layer.fields : Object.keys(props)
         const rows = order
           .filter((field) => props[field] != null && props[field] !== '')
@@ -1130,7 +1153,7 @@ export default function MapCanvas({
     return () => {
       for (const [id, open] of handlers) instance.off('click', id, open)
     }
-  }, [loaded, extras, onMapClick])
+  }, [loaded, extras, onMapClick, onExtraPick])
 
   // A tract says what it is worth saying — but never while a map click is
   // armed for dropping a pin or placing a zone, when the click must fall
@@ -1462,21 +1485,25 @@ export default function MapCanvas({
     // A selected parcel keeps its own outline rather than changing colour, so
     // the land-use reading of the map never shifts when something is picked.
     instance.setPaintProperty('parcel-fill', 'fill-color', color)
+    const washOff = parcels.fillVisible === false
     instance.setPaintProperty('parcel-fill', 'fill-opacity', [
       'case',
       ['boolean', ['feature-state', 'sel'], false],
       0.7,
       ['boolean', ['feature-state', 'hover'], false],
-      Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
-      parcels.opacity ?? 0.34,
+      washOff ? 0.28 : Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
+      // Not zero when the wash is off: a wholly transparent fill stops
+      // hit-testing in some renderers, and the click target is the point.
+      washOff ? 0.02 : parcels.opacity ?? 0.34,
     ])
+    instance.setPaintProperty('parcel-line', 'line-opacity', washOff ? 0.35 : 0.5)
     instance.setPaintProperty('parcel-line', 'line-color', [
       'case',
       ['boolean', ['feature-state', 'sel'], false],
       '#C4A6FF',
       color,
     ])
-  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp])
+  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp, parcels?.fillVisible])
 
   // Which parcels are shown. One filter expression for the whole layer beats
   // restyling features one at a time.
