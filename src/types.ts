@@ -473,3 +473,61 @@ export interface Deal {
 }
 
 export type CrmRecord = Company | Person | Place | Deal
+
+/*
+ * The county, as the server describes it.
+ *
+ * These replace the attribute index the browser used to download whole — 18.7
+ * MB compressed for Travis County, and every visitor paid it before the first
+ * filter could run. `ready` is the switch: false means this market has not
+ * been published into the search store yet, and the GIS falls back to the
+ * download.
+ */
+
+/** One parcel, with whatever columns its county publishes. */
+export type ParcelRow = Record<string, string | number | null | number[]> & {
+  id: string | number
+  bb?: number[] | null
+}
+
+export interface MarketStatus {
+  ready: boolean
+  market: string
+  /** Present only when ready. */
+  count?: number
+  total?: number
+  acreage?: number
+  /** The columns this market publishes, which is what the panel can offer. */
+  keys?: string[]
+  assets?: { value: string; count: number }[]
+  /** Quintile value breaks for the choropleth, computed at publish time. */
+  breaks?: number[]
+  builtAt?: string | null
+}
+
+export interface ParcelQuery {
+  query?: string
+  assets?: string[]
+  valueMin?: number | null
+  valueMax?: number | null
+  acresMin?: number | null
+  acresMax?: number | null
+  owner?: { kind: 'p' | 'b'; id: string } | null
+}
+
+export interface ParcelSearch {
+  ready: boolean
+  market: string
+  /** How many matched, which is not how many came back. */
+  count: number
+  total: number
+  acreage: number
+  byAsset: [string, number][]
+  rows: ParcelRow[]
+  /** The ids to highlight, or null when nothing is filtered and all are drawn. */
+  ids: string[] | null
+  /** True when the match was larger than one response should carry. */
+  truncated: boolean
+  offset: number
+  limit: number
+}

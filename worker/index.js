@@ -61,6 +61,17 @@ function appFor(env) {
   if (!app) {
     app = createApp({
       db: d1Adapter(env.DB),
+      /*
+       * The parcel store, when the deployment provisions one.
+       *
+       * Millions of parcel rows do not belong in the database that holds the
+       * surveys: it would slow every migration and weigh down every backup for
+       * data that is rebuilt from the county each month anyway. Absent the
+       * binding this falls back to the main database, which is what the local
+       * rig does, and the app simply keeps using the published index until a
+       * rebuild fills the store.
+       */
+      parcelDb: env.PARCELS ? d1Adapter(env.PARCELS) : null,
       storage: r2Storage(env.BUCKET),
       env,
     })

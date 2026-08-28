@@ -115,6 +115,15 @@ import {
   saveComps,
 } from './lib/comps.js'
 import { deleteView, listViews, renameView, saveView } from './lib/mapviews.js'
+import {
+  clearMarket,
+  getParcel,
+  marketSummary,
+  putParcels,
+  readyMarkets,
+  searchParcels,
+  sealMarket,
+} from './lib/parcels.js'
 import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
@@ -223,8 +232,18 @@ function bindingError(error, binding) {
  * @param {object} context.storage file store (disk or R2)
  * @param {object} context.env     configuration and secrets
  */
-export function createApp({ db, storage, env = {} }) {
+export function createApp({ db, storage, env = {}, parcelDb = null }) {
   const app = new Hono()
+
+  /*
+   * Where the county lives.
+   *
+   * Its own database when the deployment gives it one — parcels outnumber
+   * every other row in the product and do not belong beside the surveys — and
+   * the same database otherwise, which is what the local rig and the tests
+   * run against.
+   */
+  const parcels = parcelDb || db
 
   const notFound = (c, message) => c.json({ error: message }, 404)
 
@@ -1610,6 +1629,171 @@ export function createApp({ db, storage, env = {} }) {
    * licensed to view is a different thing, and it stays in their workspace:
    * every query below is scoped by `team_id`, and nothing joins across teams.
    */
+  /*
+   * The county, answered rather than downloaded.
+   *
+   * Every one of these replaces a computation the browser used to do over the
+   * whole attribute index: the search, the totals under it, the card for one
+   * parcel, and the facts a market states about itself. The index is still
+   * published, and a market whose rebuild has not reached this store yet still
+   * works the old way — `/api/gis/market` answering `ready: false` is how the
+   * app knows which of the two it is looking at.
+   */
+
+  /** Numbers to a number, blank to null. A missing bound is not a zero bound. */
+  const bound = (raw) => {
+    const value = (raw ?? '').toString().trim()
+    if (value === '') return null
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+
+  /** The filters, read off the query string exactly once. */
+  const parcelFilters = (c) => {
+    const ownerId = (c.req.query('owner') ?? '').trim()
+    return {
+      query: (c.req.query('q') ?? '').trim().slice(0, 120),
+      assets: (c.req.query('at') ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 40),
+      valueMin: bound(c.req.query('vmin')),
+      valueMax: bound(c.req.query('vmax')),
+      acresMin: bound(c.req.query('amin')),
+      acresMax: bound(c.req.query('amax')),
+      owner: ownerId ? { kind: c.req.query('ownerKind') === 'b' ? 'b' : 'p', id: ownerId } : null,
+    }
+  }
+
+  const marketSlug = (c) => {
+    const market = (c.req.query('market') ?? '').trim()
+    return /^[a-z0-9-]{2,40}$/.test(market) ? market : null
+  }
+
+  /*
+   * What a market is, before anything is asked of it.
+   *
+   * The app calls this first and branches on `ready`: served from here, or the
+   * whole index downloaded the old way. Cheap enough to call on every market
+   * change — it reads one row.
+   */
+  app.get('/api/gis/market', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const summary = await marketSummary(parcels, market).catch(() => null)
+    if (!summary) return c.json({ ready: false, market })
+    return c.json({ ready: true, ...summary })
+  })
+
+  /** Every market this server can answer for, so the app can say so up front. */
+  app.get('/api/gis/markets', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const ready = await readyMarkets(parcels).catch(() => [])
+    return c.json({ ready })
+  })
+
+  /*
+   * One search: the page, the ids to highlight, and what the whole match adds
+   * up to. Three readings of one predicate, so the report can never disagree
+   * with the map beside it.
+   */
+  app.get('/api/gis/parcels', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'parcels', 600, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+
+    const summary = await marketSummary(parcels, market).catch(() => null)
+    if (!summary) return c.json({ ready: false, market }, 404)
+
+    try {
+      const found = await searchParcels(parcels, market, parcelFilters(c), {
+        limit: Number(c.req.query('limit')) || undefined,
+        offset: Number(c.req.query('offset')) || 0,
+      })
+      return c.json({ ready: true, market, ...found })
+    } catch (cause) {
+      return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
+    }
+  })
+
+  /** One parcel, for the card. Everything the county published about it. */
+  app.get('/api/gis/parcel', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const id = (c.req.query('id') ?? '').trim()
+    if (!id) return c.json({ error: 'id is required.' }, 400)
+    const found = await getParcel(parcels, market, id).catch(() => null)
+    if (!found) return notFound(c, 'No such parcel in that market.')
+    return c.json({ parcel: found })
+  })
+
+  /*
+   * Publishing a county into the store.
+   *
+   * The same door and the same proof as the file ingest above: a GitHub
+   * Actions token from one of two repositories, no credential stored on either
+   * side. A rebuild sends `clear`, then `rows` in chunks, then `seal` — and
+   * only the seal makes the market answerable, so a run that dies halfway
+   * leaves the app on the old path rather than on half a county.
+   */
+  app.post('/api/gis/parcels', async (c) => {
+    const throttled = limited(c, 'ingest', 3000, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const token = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
+    try {
+      await verifyActionsToken(token, {
+        audience: INGEST_AUDIENCE,
+        repositories: INGEST_REPOS,
+        fetchImpl: env.JWKS_FETCH,
+      })
+    } catch (cause) {
+      return c.json({ error: `Ingest refused: ${cause.message}.` }, 401)
+    }
+
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const action = String(c.req.query('action') || 'rows')
+
+    try {
+      if (action === 'clear') {
+        await clearMarket(parcels, market)
+        return c.json({ cleared: market })
+      }
+      if (action === 'rows') {
+        const body = await c.req.json().catch(() => null)
+        const rows = Array.isArray(body) ? body : body?.parcels
+        if (!Array.isArray(rows)) {
+          return c.json({ error: 'Send the parcels as a JSON array.' }, 400)
+        }
+        if (rows.length > 5000) {
+          return c.json({ error: 'Send at most 5000 parcels per request.' }, 413)
+        }
+        return c.json({ stored: await putParcels(parcels, market, rows) })
+      }
+      if (action === 'seal') {
+        const body = await c.req.json().catch(() => ({}))
+        const sealed = await sealMarket(parcels, market, {
+          keys: Array.isArray(body?.keys) ? body.keys : [],
+          builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
+        })
+        return c.json({ sealed: market, ...sealed })
+      }
+    } catch (cause) {
+      return c.json({ error: `Ingest failed: ${cause.message}.` }, 500)
+    }
+    return c.json({ error: `Unknown action "${action}".` }, 400)
+  })
+
   app.get('/api/gis/comps', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)

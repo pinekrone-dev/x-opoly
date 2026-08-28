@@ -13,7 +13,16 @@ import GisRail, {
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
-import type { Comp, Deal, MapView, Place, TileConfig } from '../types'
+import type {
+  Comp,
+  Deal,
+  MapView,
+  MarketStatus,
+  ParcelRow,
+  ParcelSearch,
+  Place,
+  TileConfig,
+} from '../types'
 
 /*
  * GIS: the county's own parcel record, underneath everything else.
@@ -759,6 +768,18 @@ const CSV_COLUMNS: [string, string][] = [
   ['tr', 'Census tract'],
 ]
 
+/*
+ * The most rows one export writes.
+ *
+ * The browser used to hold the whole county, so "export everything" cost
+ * nothing beyond the file. Now the rows live on the server and each page is a
+ * request, so an unbounded export of Harris County would be five hundred of
+ * them. This is a working set — large enough for any list a broker actually
+ * works, small enough to fetch in a handful of calls — and the button says so
+ * rather than promising a county and delivering a page.
+ */
+export const CSV_LIMIT = 5000
+
 /**
  * A CSV of what is on screen.
  *
@@ -822,6 +843,25 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [meta, setMeta] = useState<MarketMeta | null>(null)
   const [index, setIndex] = useState<MarketIndex | null>(null)
   const [rowOf, setRowOf] = useState<Map<string | number, number>>(new Map())
+  /*
+   * What the server can answer for this market.
+   *
+   * The attribute index used to be the only way to search a county: download
+   * all of it, hold it in memory, scan it on every keystroke. Travis County is
+   * 18.7 MB compressed and Harris is four times that, and the wait was long
+   * enough that people read it as a broken map.
+   *
+   * So the server holds the rows now and answers questions about them. This is
+   * the answer to "can it?" — null while asking, then a market that is either
+   * `ready` or not. Not ready is not an error: it means this county's rebuild
+   * has not reached the store yet, and everything below falls back to the
+   * download exactly as before.
+   */
+  const [server, setServer] = useState<MarketStatus | null>(null)
+  const [found, setFound] = useState<ParcelSearch | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [serverParcel, setServerParcel] = useState<ParcelRow | null>(null)
   const [selected, setSelected] = useState<string | number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
@@ -976,6 +1016,9 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     if (!active) return
     setMeta(null)
     setIndex(null)
+    setServer(null)
+    setFound(null)
+    setServerParcel(null)
     setSelected(null)
     // Filters do not travel between markets: an asset type one county
     // publishes may not exist in the next, and a stale filter would show an
@@ -1003,6 +1046,30 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   }, [active])
 
   /*
+   * Can the server answer for this market?
+   *
+   * Asked first and asked cheaply — it reads one row — because the answer
+   * decides whether the next thing that happens is a query or a download.
+   */
+  useEffect(() => {
+    if (!active) return undefined
+    let cancelled = false
+    api.parcels
+      .market(active)
+      .then((status) => {
+        if (!cancelled) setServer(status)
+      })
+      .catch(() => {
+        // An older server, or one that cannot reach its store. Either way the
+        // published index still works, so say nothing and take that path.
+        if (!cancelled) setServer({ ready: false, market: active })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active])
+
+  /*
    * The attribute index arrives behind the map, not in front of it.
    *
    * The tiles carry only what the style reads, so a parcel's address and owner
@@ -1011,6 +1078,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    */
   useEffect(() => {
     if (!meta?.heavyBase) return
+    // The whole point of the store: a market it can answer for never pays for
+    // this download at all. `server` being null means the question is still
+    // out, and starting the download before the answer arrives would defeat it.
+    if (!server || server.ready) return
     let cancelled = false
     fetch(`${viaProxy(meta.heavyBase)}index.json`)
       .then((r) => r.json())
@@ -1030,7 +1101,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return () => {
       cancelled = true
     }
-  }, [meta?.heavyBase])
+  }, [meta?.heavyBase, server])
 
   /*
    * Whether this parcel is already in the CRM.
@@ -1418,10 +1489,18 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * how a real portfolio read as a bare id.
    */
   useEffect(() => {
-    if (owners || !active || selected == null || !index) return undefined
-    const row = rowOf.get(selected)
-    if (row == null) return undefined
-    const held = index.cols.po?.[row] != null || index.cols.bo?.[row] != null
+    if (owners || !active || selected == null) return undefined
+    // The same question of two sources: the fetched parcel where the server
+    // answers, the downloaded column where it does not.
+    let held = false
+    if (server?.ready) {
+      held = serverParcel != null && (serverParcel.po != null || serverParcel.bo != null)
+    } else {
+      if (!index) return undefined
+      const row = rowOf.get(selected)
+      if (row == null) return undefined
+      held = index.cols.po?.[row] != null || index.cols.bo?.[row] != null
+    }
     if (!held) return undefined
     let cancelled = false
     fetch(`${CATALOG}/${active}/owners.json`)
@@ -1433,7 +1512,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return () => {
       cancelled = true
     }
-  }, [selected, owners, active, rowOf, index])
+  }, [selected, owners, active, rowOf, index, server, serverParcel])
 
   /*
    * The census layer, fetched only once someone asks for it.
@@ -1541,7 +1620,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
-    if (!index || meta?.colorBy !== 'value') return null
+    if (meta?.colorBy !== 'value') return null
+    // Computed once when the county was published, rather than by sorting
+    // every assessed value in the browser on every market open.
+    if (server?.ready && server.breaks?.length) return server.breaks
+    if (!index) return null
     const values = (index.cols.mv || [])
       .map((v) => Number(v) || 0)
       .filter((v) => v > 0)
@@ -1550,16 +1633,24 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     const breaks: number[] = []
     for (let i = 1; i < 7; i += 1) breaks.push(values[Math.floor((i * values.length) / 7)])
     return breaks
-  }, [index, meta?.colorBy])
+  }, [index, meta?.colorBy, server])
 
   const parcel = useMemo(() => {
-    if (selected == null || !index) return null
+    if (selected == null) return null
+    if (server?.ready) {
+      if (!serverParcel) return null
+      // `bb` is the zoom target, not a field anyone wants read out on the
+      // card, so it is kept off the record the panel renders.
+      const { bb: _box, ...rest } = serverParcel
+      return rest as Record<string, string | number | null>
+    }
+    if (!index) return null
     const row = rowOf.get(selected)
     if (row == null) return null
     const out: Record<string, string | number | null> = {}
     for (const key of index.keys) out[key] = index.cols[key]?.[row] ?? null
     return out
-  }, [selected, index, rowOf])
+  }, [selected, index, rowOf, server, serverParcel])
 
   /*
    * The county's full record, fetched the first time it is asked for.
@@ -1603,6 +1694,95 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       })
   }, [expanded, meta?.heavyBase, active])
 
+  /*
+   * The filters, in the shape the server takes them.
+   *
+   * Kept as one memo so the effect below has a single dependency that changes
+   * exactly when a query would give a different answer — and not, for
+   * instance, every time React rebuilds the Set that holds the asset types.
+   */
+  const serverQuery = useMemo(() => {
+    const lo = (raw: string) => {
+      const trimmed = raw.trim()
+      if (trimmed === '') return null
+      const n = Number(trimmed)
+      return Number.isFinite(n) ? n : null
+    }
+    return {
+      query: query.trim(),
+      assets: [...assets].sort(),
+      valueMin: lo(value.min),
+      valueMax: lo(value.max),
+      acresMin: lo(acres.min),
+      acresMax: lo(acres.max),
+      owner: ownerPick ? { kind: ownerPick.kind, id: String(ownerPick.id) } : null,
+    }
+  }, [query, assets, value, acres, ownerPick])
+
+  const queryKey = JSON.stringify(serverQuery)
+
+  /*
+   * One round trip per settled filter.
+   *
+   * Debounced because the search box fires on every keystroke and a county is
+   * not worth querying six times while someone types an address. The delay is
+   * short enough that the result still feels like typing.
+   */
+  useEffect(() => {
+    if (!active || !server?.ready) return undefined
+    let cancelled = false
+    setSearching(true)
+    const timer = setTimeout(() => {
+      api.parcels
+        .search(active, serverQuery, { limit: 200 })
+        .then((result) => {
+          if (!cancelled) setFound(result)
+        })
+        .catch(() => {
+          // Leave the previous answer standing rather than blanking the panel
+          // on one failed request; the next keystroke tries again.
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false)
+        })
+    }, 220)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      setSearching(false)
+      clearTimeout(timer)
+    }
+    // serverQuery is covered by queryKey, which is its value rather than its
+    // identity — the object is rebuilt on every render and would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, server?.ready, queryKey])
+
+  /*
+   * The selected parcel's full record, when the server holds it.
+   *
+   * In the downloaded-index path this was a lookup into arrays already in
+   * memory. Here it is one row fetched on selection, which is the whole trade:
+   * a request per click instead of a county per visit.
+   */
+  useEffect(() => {
+    if (!active || !server?.ready || selected == null) {
+      setServerParcel(null)
+      return undefined
+    }
+    let cancelled = false
+    api.parcels
+      .one(active, selected)
+      .then((res) => {
+        if (!cancelled) setServerParcel(res.parcel)
+      })
+      .catch(() => {
+        if (!cancelled) setServerParcel(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [active, server?.ready, selected])
+
   /** Rows as plain objects, built once per market rather than per keystroke. */
   const rows = useMemo(() => {
     if (!index) return []
@@ -1618,6 +1798,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   /** Asset types this county actually publishes, with how many of each. */
   const assetOptions = useMemo(() => {
+    // Counted once at publish time when the server holds this market, rather
+    // than by walking every parcel in the browser.
+    if (server?.ready && server.assets) {
+      return server.assets.map((entry) => ({ value: entry.value, count: entry.count }))
+    }
     const counts = new Map<string, number>()
     for (const row of rows) {
       const at = String(row.at || '').trim()
@@ -1626,7 +1811,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return [...counts.entries()]
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count)
-  }, [rows])
+  }, [rows, server])
 
   /*
    * The one filtered set.
@@ -1638,6 +1823,13 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * expression the size of the county.
    */
   const filtered = useMemo(() => {
+    // Answered by the server where it can be. `ids` is null there for exactly
+    // the same reason this returns null below: nothing is filtered, so the map
+    // draws the whole market rather than a list of every parcel in it.
+    if (server?.ready) {
+      if (!found || found.ids == null) return null
+      return found.rows as Record<string, string | number | null>[]
+    }
     const needle = query.trim().toLowerCase()
     const lo = (raw: string) => (raw.trim() === '' ? null : Number(raw))
     const vMin = lo(value.min)
@@ -1668,15 +1860,40 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       out.push(row)
     }
     return out
-  }, [rows, query, assets, value, acres, ownerPick])
+  }, [rows, query, assets, value, acres, ownerPick, server, found])
 
-  const filterIds = useMemo(
-    () => (filtered ? filtered.map((row) => row.id as number | string) : null),
-    [filtered],
-  )
+  /*
+   * What the map highlights.
+   *
+   * From the server this is the whole matching set, not the page — the list
+   * shows two hundred parcels but the map draws every one that matched, which
+   * is the difference between a search result and a map.
+   */
+  const filterIds = useMemo(() => {
+    if (server?.ready) return found?.ids ?? null
+    return filtered ? filtered.map((row) => row.id as number | string) : null
+  }, [filtered, server, found])
 
   /** What the current set adds up to. The report is a reading, not a second query. */
   const summary = useMemo(() => {
+    // Read off the same query that produced the map, so the report and the
+    // map can never describe different sets.
+    if (server?.ready) {
+      if (found) {
+        return {
+          count: found.count,
+          total: found.total,
+          acreage: found.acreage,
+          byAsset: found.byAsset,
+        }
+      }
+      return {
+        count: server.count ?? 0,
+        total: server.total ?? 0,
+        acreage: server.acreage ?? 0,
+        byAsset: (server.assets ?? []).map((a) => [a.value, a.count] as [string, number]),
+      }
+    }
     const set = filtered ?? rows
     let total = 0
     let acreage = 0
@@ -1693,7 +1910,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       acreage,
       byAsset: [...byAsset.entries()].sort((a, b) => b[1] - a[1]),
     }
-  }, [filtered, rows])
+  }, [filtered, rows, server, found])
 
   /*
    * What this market can actually show.
@@ -1705,8 +1922,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    * county that simply has no such record.
    */
   const coverage = useMemo(() => {
+    // From the server this is what the county publishes rather than what a
+    // sample of loaded parcels happens to carry — the same question, answered
+    // from the market's own column list instead of inferred.
+    const published = server?.ready ? new Set(server.keys ?? []) : null
     const has = (key: string) =>
-      rows.length > 0 && rows.some((row) => row[key] !== null && row[key] !== '' && row[key] !== 0)
+      published
+        ? published.has(key)
+        : rows.length > 0 && rows.some((row) => row[key] !== null && row[key] !== '' && row[key] !== 0)
     return {
       owner: has('ow'),
       zoning: has('zn'),
@@ -1718,7 +1941,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       portfolios: has('po'),
       backOffices: has('bo'),
     }
-  }, [rows])
+  }, [rows, server])
 
   /**
    * The market's owner groups, largest holding first.
@@ -1730,10 +1953,21 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
    */
   const ownerList = useMemo(() => {
     if (!owners) return []
-    const seen = new Set<string>()
-    for (const row of rows) {
-      if (row.po != null) seen.add(`p:${row.po}`)
-      if (row.bo != null) seen.add(`b:${row.bo}`)
+    /*
+     * Which groups this market actually references.
+     *
+     * The downloaded path could see every parcel and so could rule out a group
+     * with nothing to show. The server path never holds the whole county in
+     * the browser — that is the point — so it trusts owners.json instead,
+     * which the pipeline derives from these same parcels and therefore cannot
+     * name a group the market does not have.
+     */
+    const seen = server?.ready ? null : new Set<string>()
+    if (seen) {
+      for (const row of rows) {
+        if (row.po != null) seen.add(`p:${row.po}`)
+        if (row.bo != null) seen.add(`b:${row.bo}`)
+      }
     }
     const out: {
       key: string
@@ -1748,7 +1982,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       const groups = owners[kind]
       if (!groups) continue
       for (const [id, g] of Object.entries(groups)) {
-        if (!seen.has(`${kind}:${id}`)) continue
+        if (seen && !seen.has(`${kind}:${id}`)) continue
         const names = g.t ?? []
         out.push({
           key: `${kind}:${id}`,
@@ -1767,7 +2001,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       }
     }
     return out.sort((a, b) => b.value - a.value)
-  }, [owners, rows])
+  }, [owners, rows, server])
 
   const pickedOwner = useMemo(
     () => (ownerPick ? ownerList.find((o) => o.key === `${ownerPick.kind}:${ownerPick.id}`) ?? null : null),
@@ -1853,15 +2087,55 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     ]
   }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy])
 
+  /*
+   * Collecting the rows an export writes.
+   *
+   * One path reads what is already in memory; the other pages the server,
+   * because the county is no longer in the browser to slice. Both stop at the
+   * same cap, so the file matches the count on the button either way.
+   */
+  const exportRows = async () => {
+    if (!active || exporting) return
+    if (!server?.ready) {
+      exportCsv((filtered ?? rows).slice(0, CSV_LIMIT), active)
+      return
+    }
+    setExporting(true)
+    try {
+      const collected: Record<string, string | number | null>[] = []
+      const want = Math.min(summary.count, CSV_LIMIT)
+      while (collected.length < want) {
+        const page = await api.parcels.search(active, serverQuery, {
+          limit: 1000,
+          offset: collected.length,
+        })
+        if (!page.rows.length) break
+        collected.push(...(page.rows as Record<string, string | number | null>[]))
+      }
+      exportCsv(collected.slice(0, want), active)
+    } catch {
+      setError('Could not collect the rows for that export.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   /** The centre of the selected parcel, from its bounding box in the index. */
   const centre = useMemo(() => {
-    if (selected == null || !index?.bb) return null
+    if (selected == null) return null
+    if (server?.ready) {
+      const box = serverParcel?.bb
+      if (!Array.isArray(box) || box.length !== 4) return null
+      const [bw, bs, be, bn] = box as number[]
+      return { lat: (bs + bn) / 2, lng: (bw + be) / 2 }
+    }
+    if (!index?.bb) return null
     const row = rowOf.get(selected)
     if (row == null) return null
     const [w, s, e, n] = index.bb.slice(row * 4, row * 4 + 4)
     if (![w, s, e, n].every(Number.isFinite)) return null
     return { lat: (s + n) / 2, lng: (w + e) / 2 }
-  }, [selected, index, rowOf])
+  }, [selected, index, rowOf, server, serverParcel])
 
   /*
    * The scout writes into the same filter state a person would, so the map,
@@ -2473,7 +2747,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               {market?.stats && (
                 <p className="mt-1 text-[11px] text-muted">
                   {market.stats.parcels.toLocaleString()} parcels · {money(market.stats.value)}
-                  {!index && <span> · loading detail…</span>}
+                  {!(server?.ready || index) && <span> · loading detail…</span>}
                 </p>
               )}
             </div>
@@ -2858,12 +3132,20 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-            {!index && <p className="text-[11px] text-muted">Loading the market's records…</p>}
+            {!(server?.ready || index) && (
+              <p className="text-[11px] text-muted">Loading the market's records…</p>
+            )}
             {query.trim() !== '' && filtered && (
               <>
                 <p className="text-[11px] text-muted">
-                  {filtered.length.toLocaleString()} match{filtered.length === 1 ? '' : 'es'}
-                  {filtered.length > 200 && ', showing the first 200'}
+                  {/*
+                    * How many matched, which is not how many are listed. The
+                    * server answers with a page; saying "200 matches" when a
+                    * county holds four thousand would be a lie the old path
+                    * could not tell because it held everything.
+                    */}
+                  {summary.count.toLocaleString()} match{summary.count === 1 ? '' : 'es'}
+                  {summary.count > filtered.length && `, showing the first ${filtered.length}`}
                 </p>
                 <ul className="divide-y divide-line">
                   {filtered.slice(0, 200).map((row) => (
@@ -2890,7 +3172,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
         {rail === 'filter' && (
           <div className="space-y-3">
-            {!index ? (
+            {!(server?.ready || index) ? (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
@@ -2959,7 +3241,15 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
                 <div className="flex items-center justify-between border-t border-line pt-2">
                   <span className="text-xs text-muted">
-                    {(filtered ?? rows).length.toLocaleString()} of {rows.length.toLocaleString()}
+                    {/*
+                      * How many the filter keeps, of how many there are. From
+                      * the server both numbers are counts of the whole market
+                      * rather than lengths of what happens to be in memory —
+                      * the page holds two hundred rows and would otherwise
+                      * report a county as "200 of 200".
+                      */}
+                    {summary.count.toLocaleString()} of{' '}
+                    {(server?.ready ? (server.count ?? 0) : rows.length).toLocaleString()}
                   </span>
                   <button
                     type="button"
@@ -2982,12 +3272,21 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
         {rail === 'report' && (
           <div className="space-y-3">
-            {!index ? (
+            {/*
+              * Ready means different things on the two paths: the whole index
+              * downloaded, or the server saying it can answer. Either way the
+              * numbers below are real before they are shown.
+              */}
+            {!(server?.ready || index) ? (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
                 <p className="text-[11px] text-muted">
-                  {filtered ? 'The parcels matching your filter.' : 'Every parcel in this market.'}
+                  {searching
+                    ? 'Counting…'
+                    : filtered
+                      ? 'The parcels matching your filter.'
+                      : 'Every parcel in this market.'}
                 </p>
                 <dl className="space-y-1 text-xs">
                   <Row label="Parcels" value={summary.count.toLocaleString()} />
@@ -3012,11 +3311,20 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 )}
                 <button
                   type="button"
-                  className="w-full rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
-                  onClick={() => exportCsv(filtered ?? rows, active ?? 'market')}
+                  disabled={exporting}
+                  className="w-full rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-60"
+                  onClick={exportRows}
                 >
-                  Export {summary.count.toLocaleString()} rows as CSV
+                  {exporting
+                    ? 'Collecting rows…'
+                    : `Export ${Math.min(summary.count, CSV_LIMIT).toLocaleString()} rows as CSV`}
                 </button>
+                {summary.count > CSV_LIMIT && (
+                  <p className="text-[11px] text-muted">
+                    The most valuable {CSV_LIMIT.toLocaleString()} of{' '}
+                    {summary.count.toLocaleString()}. Narrow the filter to export a different set.
+                  </p>
+                )}
                 <div className="border-t border-line pt-2">
                   <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
                     Map snapshot

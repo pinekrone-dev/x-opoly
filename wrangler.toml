@@ -72,6 +72,21 @@ migrations_dir = "migrations"
 binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads"
 
+# The searchable county.
+#
+# Its own database, not the one holding the surveys: a market is millions of
+# parcel rows against the CRM's thousands, and putting them together would slow
+# every migration and weigh every backup down with data that is rebuilt from
+# the county each month anyway. Nothing here is authored by a customer — it is
+# published by the pipeline and can be refilled from the counties at any time.
+#
+# If this binding is ever absent the app does not break: the GIS falls back to
+# downloading each market's published index, which is what it did before.
+[[d1_databases]]
+binding = "PARCELS"
+database_name = "landquotient-parcels"
+database_id = "4e2fa3cb-c04c-4350-bdce-598b3ca3f891"
+
 # The Prospector parcel data, served publicly at data.realestateaistudio.com.
 # Bound here so the pipeline's GitHub Actions run can publish county rebuilds
 # through /api/gis/ingest — authenticated by the run's own OIDC token, so no
@@ -142,6 +157,11 @@ binding = "DB"
 database_name = "sitesurvey-cre-staging"
 database_id = "80c534a6-5092-461b-93c4-c8dc19d799f5"
 migrations_dir = "migrations"
+
+[[env.staging.d1_databases]]
+binding = "PARCELS"
+database_name = "landquotient-parcels-staging"
+database_id = "221665a5-978a-446f-be9d-4ee60e10f0d6"
 
 [[env.staging.r2_buckets]]
 binding = "BUCKET"
