@@ -178,6 +178,7 @@ try {
   })
   check('POST /api/surveys creates a survey', created.status === 201, `status ${created.status}`)
   surveyId = created.body?.survey?.id
+  const surveyName = created.body?.survey?.name ?? ''
   if (!surveyId) throw new Error(`No survey id came back: ${JSON.stringify(created.body)}`)
 
   // Stages are seeded with the survey; the sidebar is built around them.
@@ -390,8 +391,9 @@ try {
   check('and is credited to the flyer', imageAdded.body?.image?.source === 'flyer-crop',
     String(imageAdded.body?.image?.source))
 
-  // 3. Load it in a real browser.
-  browser = await chromium.launch()
+  // 3. Load it in a real browser. CI installs Playwright's own build; a
+  // sandbox with a system Chromium can point at it instead.
+  browser = await chromium.launch({ executablePath: process.env.SMOKE_CHROMIUM || undefined })
   // acceptDownloads is explicit rather than relied on: the export check
   // depends on it, and a default that changes would fail as a mystery timeout.
   const context = await browser.newContext({
@@ -633,13 +635,13 @@ try {
   // schedule — and on a cold worker that can take well over the guessed
   // pause this used to be. Wait for the content itself; the arrival times
   // come last, so they get their own wait before anything reads the page.
-  await page.waitForSelector('text=Site tour', { timeout: 30000 }).catch(() => undefined)
+  await page.waitForSelector('text=SITE TOUR', { timeout: 30000 }).catch(() => undefined)
   await page
     .waitForFunction(() => /\d{1,2}:\d{2}\s?(AM|PM)/i.test(document.body.innerText), { timeout: 30000 })
     .catch(() => undefined)
   await page.waitForTimeout(500)
   const bookText = await page.textContent('body')
-  check('the book names the survey', bookText?.includes('Site tour') ?? false)
+  check('the book names the survey', bookText?.includes(surveyName) ?? false)
   check('the book lists a stop', bookText?.includes(PINS[0].name) ?? false)
   const bookImages = await page.$$eval('.book-page img', (nodes) =>
     nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
@@ -667,9 +669,10 @@ try {
       const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
       const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise
 
+      // The designed book: a cover, an itinerary page, then one page per stop.
       check(
-        'the book is a cover plus one page per stop',
-        doc.numPages === PINS.length + 1,
+        'the book is a cover, an itinerary, and one page per stop',
+        doc.numPages === PINS.length + 2,
         `${doc.numPages} pages for ${PINS.length} stops`,
       )
 
