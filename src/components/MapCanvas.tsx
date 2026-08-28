@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import maplibregl from 'maplibre-gl'
 import { Protocol } from 'pmtiles'
 import type { Property, TileConfig } from '../types'
@@ -164,6 +164,17 @@ interface Props {
    * the same point. Existing callers that only read lat and lng are unaffected.
    */
   onViewChange?: (center: { lat: number; lng: number; zoom: number }) => void
+  /**
+   * A hook the view fills with "photograph the map, now".
+   *
+   * A ref rather than a callback prop on purpose: the capture function only
+   * exists while a live, loaded map instance does, and a ref lets the export
+   * button ask at click time without the map re-rendering to keep a prop
+   * fresh. The capture waits for a render frame, because reading a WebGL
+   * canvas outside one returns black — the buffer is not preserved, and
+   * preserving it full-time taxes every frame to serve a rare export.
+   */
+  captureRef?: MutableRefObject<(() => Promise<HTMLCanvasElement | null>) | null>
   /** The survey's pipeline, for pin colours that match the sidebar. */
   stages?: { id: string; color: string }[]
   /** Tour start and end, drawn as their own flags — a tour begins at the
@@ -337,6 +348,7 @@ export default function MapCanvas({
   onSelect,
   onMapClick,
   onViewChange,
+  captureRef,
   stages,
   anchors = null,
   zones = null,
@@ -609,6 +621,26 @@ export default function MapCanvas({
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
     map.current = instance
+    if (captureRef) {
+      captureRef.current = () =>
+        new Promise((resolve) => {
+          if (!ready.current) {
+            resolve(null)
+            return
+          }
+          // Copied inside the render event, where the buffer is guaranteed
+          // full — one frame later it may already be cleared.
+          instance.once('render', () => {
+            const source = instance.getCanvas()
+            const copy = document.createElement('canvas')
+            copy.width = source.width
+            copy.height = source.height
+            copy.getContext('2d')?.drawImage(source, 0, 0)
+            resolve(copy)
+          })
+          instance.triggerRepaint()
+        })
+    }
     // For the browser checks: the instance is reachable from the DOM, so a
     // test can read the real layer order instead of inferring it from pixels.
     ;(host as HTMLDivElement & { __map?: maplibregl.Map }).__map = instance
@@ -656,6 +688,7 @@ export default function MapCanvas({
         /* a half-built map is still better dropped than left attached */
       }
       contextLost.current = false
+      if (captureRef) captureRef.current = null
       map.current = null
       ready.current = false
       markers.current.clear()

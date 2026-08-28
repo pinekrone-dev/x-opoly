@@ -12,6 +12,7 @@ import GisRail, {
 } from '../components/GisRail'
 import { api } from '../api'
 import { navigate } from '../lib/router'
+import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import type { Comp, Deal, MapView, Place, TileConfig } from '../types'
 
 /*
@@ -926,6 +927,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [viewBusy, setViewBusy] = useState(false)
   const [viewNote, setViewNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
   const here = useRef<{ lat: number; lng: number; zoom: number } | null>(null)
+  /** Filled by the map while it lives; the export buttons ask at click time. */
+  const captureMap = useRef<(() => Promise<HTMLCanvasElement | null>) | null>(null)
+  const [snapshotting, setSnapshotting] = useState<'png' | 'pdf' | null>(null)
+  const [snapshotError, setSnapshotError] = useState<string | null>(null)
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -2293,6 +2298,52 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   const market = markets.find((m) => m.slug === active)
 
+  /**
+   * The map exactly as framed, saved as a file.
+   *
+   * The caption band names what a bare screenshot loses: which market, when,
+   * what was filtered, and what the colours mean — plus the attribution the
+   * county's licence asks for. The legend lists only what is actually
+   * switched on, because a key describing layers that are not in the picture
+   * is a small lie in a document that will outlive the session.
+   */
+  const exportSnapshot = async (kind: 'png' | 'pdf') => {
+    setSnapshotting(kind)
+    setSnapshotError(null)
+    try {
+      const frame = await captureMap.current?.()
+      if (!frame) throw new Error('The map is not ready to photograph yet.')
+      const legend = [
+        ...(showParcels ? [{ color: '#01A3A8', label: 'Assessor parcels' }] : []),
+        ...extras.map((layer) => ({
+          color: layer.color,
+          label: shownLayers.find((l) => l.id === layer.id)?.label ?? layer.id,
+        })),
+        ...(choropleth ? [{ color: '#818cf8', label: 'Demographics' }] : []),
+      ]
+      const stamp = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      })
+      const composed = composeMapImage(frame, {
+        title: market ? `${market.name} · ${market.region}` : 'Land Quotient',
+        subtitle: `${
+          filtered ? `${filtered.length.toLocaleString()} parcels matching the filter` : 'Full market'
+        } · ${stamp} · Land Quotient`,
+        legend,
+        attribution: (meta?.attribution ?? '').replace(/&amp;/g, '&'),
+      })
+      const file = `${active ?? 'market'}-map-${new Date().toISOString().slice(0, 10)}`
+      if (kind === 'png') await saveCanvasPng(composed, `${file}.png`)
+      else await saveCanvasPdf(composed, `${file}.pdf`, composed ? `${market?.name ?? 'Market'} map` : 'Map')
+    } catch (cause) {
+      setSnapshotError(cause instanceof Error ? cause.message : 'The snapshot could not be saved.')
+    } finally {
+      setSnapshotting(null)
+    }
+  }
+
   return (
     <div className="relative h-full w-full">
       {meta?.tiles && meta.heavyBase ? (
@@ -2328,6 +2379,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           onViewChange={(where) => {
             here.current = where
           }}
+          captureRef={captureMap}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
           extras={extras}
@@ -2933,6 +2985,36 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 >
                   Export {summary.count.toLocaleString()} rows as CSV
                 </button>
+                <div className="border-t border-line pt-2">
+                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
+                    Map snapshot
+                  </p>
+                  <p className="text-[11px] leading-snug text-muted">
+                    The map exactly as framed right now — layers, colours and filters — with a
+                    caption naming the market and what the colours mean.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      type="button"
+                      className="flex-1 rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
+                      disabled={snapshotting !== null}
+                      onClick={() => exportSnapshot('png')}
+                    >
+                      {snapshotting === 'png' ? 'Saving…' : 'Save as PNG'}
+                    </button>
+                    <button
+                      type="button"
+                      className="flex-1 rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
+                      disabled={snapshotting !== null}
+                      onClick={() => exportSnapshot('pdf')}
+                    >
+                      {snapshotting === 'pdf' ? 'Saving…' : 'Save as PDF'}
+                    </button>
+                  </div>
+                  {snapshotError ? (
+                    <p className="mt-1 text-[11px] text-rose-600">{snapshotError}</p>
+                  ) : null}
+                </div>
                 <p className="text-[11px] leading-snug text-faint">
                   Figures are the county's own, reproduced rather than estimated. An assessed
                   value is a tax figure, not a market appraisal.
