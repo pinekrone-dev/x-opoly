@@ -114,6 +114,15 @@ const PARCEL_COLORS: [string, string][] = [
   ['Vacant land', '#1baf7a'],
   ['Single family', '#9AA1B4'],
 ]
+/*
+ * The outline colour when nothing shades the map.
+ *
+ * Near-black rather than black: pure #000 against a pale basemap reads as a
+ * printing artefact, and against the dark basemap it disappears entirely.
+ * This is the brand's ink, which is what every other line in the product uses.
+ */
+const PARCEL_INK = '#0f172a'
+
 const PARCEL_OTHER = '#5C6377'
 
 /** One hue, light to dark. A value is a magnitude, never a set of categories. */
@@ -446,6 +455,10 @@ export default function MapCanvas({
   const anchorMarkers = useRef<maplibregl.Marker[]>([])
   const zoneLabels = useRef<maplibregl.Marker[]>([])
   const popup = useRef<maplibregl.Popup | null>(null)
+  /** Whether the URL named a view before this map was built. */
+  const hadHash = useRef(false)
+  /** Whether the caller's view has been applied even once. */
+  const viewApplied = useRef(false)
   const attribution = useRef<maplibregl.AttributionControl | null>(null)
 
   const clickHandler = useRef(onMapClick)
@@ -503,6 +516,16 @@ export default function MapCanvas({
     const host = container.current
 
     const home = homeView()
+    /*
+     * Read before the map exists, because the map rewrites it.
+     *
+     * With `hash: true` MapLibre keeps the URL in step with the view, so by
+     * the time anything else runs there is always a hash and asking then tells
+     * you nothing. Asking here distinguishes the two cases that matter: a
+     * fresh visit, which should open where the market opens, and a reload or a
+     * pasted link, which already says where to be and must not be overridden.
+     */
+    hadHash.current = /^#[\d.]+\//.test(window.location.hash)
     let instance: maplibregl.Map
     try {
       instance = buildMap()
@@ -520,6 +543,16 @@ export default function MapCanvas({
     function buildMap() {
       return new maplibregl.Map({
       container: host,
+      /*
+       * The view lives in the URL.
+       *
+       * Refreshing used to drop you back at the market's default centre,
+       * which on a county-wide map means losing the block you were reading.
+       * MapLibre's own hash keeps zoom and centre in the address bar, so a
+       * refresh returns to the same spot — and a pasted URL opens on it,
+       * which is the same feature seen from the other side.
+       */
+      hash: true,
       style: {
         version: 8,
         sources: { [BASEMAP_SOURCE]: emptySource() as never },
@@ -1127,20 +1160,9 @@ export default function MapCanvas({
           onExtraPick({ layerId: layer.id, properties: props })
           return
         }
-        const order = layer.fields?.length ? layer.fields : Object.keys(props)
-        const rows = order
-          .filter((field) => props[field] != null && props[field] !== '')
-          .map(
-            (field) =>
-              `<div><span style="color:#6b7280">${escapeHtml(field)}: </span>${escapeHtml(
-                String(props[field]),
-              )}</div>`,
-          )
-        if (!rows.length) return
-        new maplibregl.Popup({ closeButton: true, maxWidth: '260px' })
-          .setLngLat(event.lngLat)
-          .setHTML(`<div style="font-size:12px;line-height:1.45">${rows.join('')}</div>`)
-          .addTo(instance)
+        // No handler, nothing to say. The panel is the only place a
+        // feature's fields are ever read out now; a popup here would be a
+        // second, worse copy of it that covers the map while it does so.
       }
       for (const suffix of ['fill', 'line', 'point']) {
         const id = `x-${layer.id}-${suffix}`
@@ -1178,16 +1200,18 @@ export default function MapCanvas({
       if (instance.getLayer('parcel-fill')) {
         if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
       }
-      new maplibregl.Popup({ closeButton: true, maxWidth: '240px' })
-        .setLngLat(event.lngLat)
-        .setHTML(String(info))
-        .addTo(instance)
+      // Into the panel with everything else. A tract is context, and context
+      // belongs beside the subject rather than floating over it.
+      onExtraPick?.({
+        layerId: 'census-tract',
+        properties: event.features?.[0]?.properties ?? {},
+      })
     }
     instance.on('click', 'shading-fill', open)
     return () => {
       instance.off('click', 'shading-fill', open)
     }
-  }, [loaded, onMapClick, choropleth])
+  }, [loaded, onMapClick, choropleth, onExtraPick])
 
   // Start and end flags for the tour.
   useEffect(() => {
@@ -1492,16 +1516,31 @@ export default function MapCanvas({
       0.7,
       ['boolean', ['feature-state', 'hover'], false],
       washOff ? 0.28 : Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
-      // Not zero when the wash is off: a wholly transparent fill stops
-      // hit-testing in some renderers, and the click target is the point.
+      /*
+       * Not zero, even though this reads as "no fill".
+       *
+       * A wholly transparent fill stops hit-testing, and the click target is
+       * the entire point of drawing every parcel. Two per cent is below what
+       * the eye resolves against any basemap — the outline is what you see —
+       * while still giving the renderer a surface to catch the click on.
+       */
       washOff ? 0.02 : parcels.opacity ?? 0.34,
     ])
-    instance.setPaintProperty('parcel-line', 'line-opacity', washOff ? 0.35 : 0.5)
+    /*
+     * Outline-only draws in ink, not in land use.
+     *
+     * With the wash on, the line repeats the fill's colour because the two are
+     * one shape reading as one thing. With it off, the colour would be the
+     * only thing left carrying land use, and a map of thin coloured threads
+     * reads as noise. Ink says "here is a parcel" and nothing else, which is
+     * what an unshaded map is for.
+     */
+    instance.setPaintProperty('parcel-line', 'line-opacity', washOff ? 0.85 : 0.5)
     instance.setPaintProperty('parcel-line', 'line-color', [
       'case',
       ['boolean', ['feature-state', 'sel'], false],
       '#C4A6FF',
-      color,
+      washOff ? PARCEL_INK : color,
     ])
   }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp, parcels?.fillVisible])
 
@@ -1594,10 +1633,23 @@ export default function MapCanvas({
     }
   }, [loaded, parcels?.selectedParcelId, parcels?.url, parcels?.sourceLayer])
 
-  // Go where the caller says, when the caller says it changed.
+  /*
+   * Go where the caller says, when the caller says it changed.
+   *
+   * With one exception, and it is the whole of "the map stays put when I
+   * refresh": the first thing a market does is ask for its own centre, which
+   * would throw away the position the URL just restored. A hash that was
+   * already there is the more specific instruction, so the first ask is
+   * skipped and every later one — switching markets, opening a saved view —
+   * still moves the map.
+   */
   useEffect(() => {
     const instance = map.current
     if (!instance || !loaded || !view) return
+    if (!viewApplied.current) {
+      viewApplied.current = true
+      if (hadHash.current) return
+    }
     instance.jumpTo({ center: view.center, zoom: view.zoom })
   }, [loaded, view?.key])
 

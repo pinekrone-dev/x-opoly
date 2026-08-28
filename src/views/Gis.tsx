@@ -3470,6 +3470,23 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                 />
               </dl>
 
+              {/*
+                * What the roll alone can say is four lines, and on a bare map
+                * that is all a click ever returns. Rather than let the card
+                * read as the whole story, it names the thing that would make
+                * it longer — and opens the panel that does it, because a hint
+                * you have to go and find is barely a hint.
+                */}
+              {!published.some((layer) => layerOn[layer.id]) && (
+                <button
+                  type="button"
+                  onClick={() => setRail('layers')}
+                  className="mt-2 w-full rounded-md border border-dashed border-line px-2 py-1.5 text-left text-[11px] text-muted hover:border-brand hover:text-body"
+                >
+                  Add data layers to see more about this parcel →
+                </button>
+              )}
+
               {/* Who holds it, from the pipeline's resolved groups: the
                   portfolio is one holder across spelling variants, the back
                   office one mailing address across many entity names. */}
