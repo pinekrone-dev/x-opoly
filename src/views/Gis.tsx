@@ -2218,9 +2218,21 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           max: f.acresMax != null ? String(f.acresMax) : '',
         })
         setQuery(f.keyword ?? '')
+        /*
+         * The budget, once it starts to matter.
+         *
+         * Only shown past four fifths, and only when a model was actually
+         * called — most hunts are read by the rule parser and cost nothing,
+         * so mentioning a budget on those would be noise about a limit the
+         * person is not approaching.
+         */
+        const spent =
+          res.budget && res.budget.used > res.budget.cap * 0.8
+            ? ` ${res.budget.used} of ${res.budget.cap} AI hunts used today.`
+            : ''
         setHuntNote({
           tone: 'ok',
-          text: res.explanation ?? 'Filters set below — adjust them freely.',
+          text: `${res.explanation ?? 'Filters set below — adjust them freely.'}${spent}`,
         })
       }
     } catch (cause) {

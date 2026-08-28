@@ -114,6 +114,7 @@ import {
   saveComps,
 } from './lib/comps.js'
 import { deleteView, listViews, renameView, saveView } from './lib/mapviews.js'
+import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -492,6 +493,38 @@ export function createApp({ db, storage, env = {} }) {
     if (verdict.allowed) return null
     c.header('Retry-After', String(verdict.retryAfterSeconds))
     return c.json({ error: 'Too many attempts. Slow down and try again shortly.', code: 'rate_limited' }, 429)
+  }
+
+  /**
+   * Answers 429 when this workspace has spent its day's AI budget, else null.
+   *
+   * Sits beside `limited` rather than replacing it, because they stop
+   * different things: that one stops a burst from one address, this one stops
+   * a sustained spend by one workspace. A script held just under the burst
+   * limit runs seventeen thousand model calls a day and never trips it.
+   *
+   * The message names the cap and when it resets. "Too many attempts" tells
+   * somebody who has hit a daily budget nothing they can act on.
+   */
+  const afforded = async (c, kind) => {
+    const user = c.get('user')
+    // Opportunistic housekeeping: there is no cron here, and one row per
+    // workspace per kind per day is not urgent but should not grow forever.
+    if (Math.random() < 0.005) await sweepUsage(db).catch(() => {})
+    const verdict = await spend(db, { teamId: user?.teamId ?? null, kind, env })
+    if (verdict.allowed) return null
+    c.header('Retry-After', String(verdict.retryAfterSeconds))
+    return c.json(
+      {
+        error:
+          `This workspace has used its ${verdict.cap.toLocaleString()} AI requests for today. ` +
+          `The budget resets at midnight UTC.`,
+        code: 'ai_budget',
+        cap: verdict.cap,
+        used: verdict.used,
+      },
+      429,
+    )
   }
 
   app.get('/api/auth/me', async (c) => {
@@ -1712,8 +1745,12 @@ export function createApp({ db, storage, env = {} }) {
    * without a key the heuristic answers and says so.
    */
   app.post('/api/gis/scout', async (c) => {
-    const throttled = limited(c, 'scout', 120, 10 * 60 * 1000)
+    // 120 in ten minutes was set when this was the only guard; with a daily
+    // budget behind it the burst limit only has to stop a hammering, and 30
+    // is well above what a person typing sentences reaches.
+    const throttled = limited(c, 'scout', 30, 10 * 60 * 1000)
     if (throttled) return throttled
+
 
     const body = await c.req.json().catch(() => ({}))
     const prompt = String(body?.prompt ?? '').trim().slice(0, 500)
@@ -1736,22 +1773,36 @@ export function createApp({ db, storage, env = {} }) {
      */
     const ruled = heuristicScout(prompt, vocab)
     if (!ruled.empty) {
+      // Answered without a model, so nothing is charged. This is the common
+      // case, and charging it would lock somebody out of the AI over three
+      // hundred hunts that never cost anything.
       return c.json({ ...ruled, explanation: null, source: 'rules', provider: null, model: null })
     }
 
     const aiThrottled = limited(c, 'scout-ai', 10, 10 * 60 * 1000)
     if (aiThrottled) return aiThrottled
 
+    // Only here, where a model is actually about to be called, does the day's
+    // budget get spent.
+    const overspent = await afforded(c, 'scout')
+    if (overspent) return overspent
+
     try {
-      return c.json(await runScout(prompt, vocab, resolveProvider(env), env))
+      const answer = await runScout(prompt, vocab, resolveProvider(env), env)
+      // Carried back so the budget becomes visible as it is used rather than
+      // arriving as a refusal out of nowhere.
+      const budget = await usageToday(db, c.get('user')?.teamId ?? null, env)
+      return c.json(budget ? { ...answer, budget: budget.scout } : answer)
     } catch (cause) {
       return c.json({ error: cause?.message || 'The scout could not read that hunt.' }, 422)
     }
   })
 
   app.post('/api/surveys/:id/paste', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -1795,8 +1846,10 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.post('/api/surveys/:id/flyer', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -1959,8 +2012,10 @@ export function createApp({ db, storage, env = {} }) {
    * they ask for rather than something that happens to them.
    */
   app.post('/api/properties/:id/extract', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const id = c.req.param('id')
     const { property, error } = await requireProperty(c, id)
     if (error) return error

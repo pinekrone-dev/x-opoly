@@ -158,6 +158,8 @@ export const api = {
       source: 'ai' | 'heuristic' | 'rules'
       provider: string | null
       model: string | null
+      /** Today's AI spend, present only when a model was actually called. */
+      budget?: { used: number; cap: number }
     }>('/api/gis/scout', json(input)),
 
   /*

@@ -284,6 +284,20 @@ export const SCHEMA_STATEMENTS = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  /*
+   * What each workspace has spent on the AI, per day.
+   *
+   * In the database rather than in memory because Worker isolates recycle
+   * often, and a daily cap that resets several times a day is decorative.
+   * One row per workspace per kind per day; swept after a week.
+   */
+  `CREATE TABLE IF NOT EXISTS ai_usage (
+    team_id TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (team_id, day, kind)
+  )`,
   `CREATE TABLE IF NOT EXISTS comps (
     id             TEXT PRIMARY KEY,
     team_id        TEXT NOT NULL,
