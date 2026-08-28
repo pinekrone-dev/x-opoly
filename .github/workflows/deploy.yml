@@ -1,4 +1,5 @@
-# Deploys the Worker from GitHub, so no terminal is needed.
+# Deploys the Worker from GitHub — staging first, production only after
+# staging proves out.
 #
 # One-time setup, all in the browser:
 #   1. Cloudflare dashboard → My Profile → API Tokens → Create Token
@@ -8,14 +9,24 @@
 #         CLOUDFLARE_API_TOKEN   the token from step 1
 #         CLOUDFLARE_ACCOUNT_ID  Cloudflare dashboard → Workers & Pages,
 #                                the Account ID shown in the right sidebar
-#   3. GitHub → Actions tab → "Deploy to Cloudflare" → Run workflow.
 #
-# After that it deploys on every push to this branch.
+# The order is the point of this file. A push lands on the staging Worker —
+# its own D1, its own R2, no routes, so nothing it does can touch production
+# or its data — and the smoke test drives that staging deployment in a real
+# browser. Only when staging answers healthy does the same build go to
+# production. A push that would take the site down stops at staging, where
+# being down costs nothing.
+#
+# The smoke test needs an account to exercise anything behind the login, and
+# staging's separate database starts without one. The seed step claims a
+# fresh staging workspace with the smoke account — the register endpoint's
+# first-account path needs no verification email — and is a no-op once the
+# workspace is claimed. The never-register rule is about production, whose
+# database this pipeline cannot reach.
 #
 # ANTHROPIC_API_KEY is deliberately NOT set here. Add it once in the
-# Cloudflare dashboard (Workers & Pages → sitesurvey-cre → Settings →
-# Variables and Secrets → Add, type "Secret"), so the key lives only in
-# Cloudflare rather than in GitHub as well.
+# Cloudflare dashboard, so the key lives only in Cloudflare rather than in
+# GitHub as well.
 
 name: Deploy to Cloudflare
 
@@ -27,10 +38,12 @@ on:
   workflow_dispatch: # adds a "Run workflow" button in the Actions tab
 
 jobs:
-  deploy:
+  # --- test, build, and prove the build on staging ---------------------------
+  staging:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+    timeout-minutes: 20
+    outputs:
+      deployable: ${{ steps.token.outputs.present }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,29 +69,103 @@ jobs:
 
       - run: npm ci
 
-      # A broken build should never reach production.
+      # A broken build should never reach staging, let alone production.
       - run: npm test
 
       - run: npm run build
 
-      # Cloudflare's own Git integration also deploys this repo, so the API
-      # token here is optional. Without it, this workflow still builds and
-      # tests every push; it just does not deploy, rather than failing red on
-      # a secret that was never meant to exist.
-      - name: Deploy the Worker
+      - name: Deploy to staging
         if: steps.token.outputs.present == 'true'
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy --env staging
+
+      - name: Install a browser
+        if: steps.token.outputs.present == 'true'
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      # The same rollout race smoke.yml guards against: a 200 from staging is
+      # not proof the new version answered it. Wait for this commit's own
+      # bundle before believing anything the smoke test says about it.
+      - name: Wait for this commit to be live on staging
+        if: steps.token.outputs.present == 'true'
+        run: node scripts/wait-for-deploy.mjs "https://landquotient-staging.shiny-butterfly-2b90.workers.dev"
+
+      # A fresh staging database has no accounts, and the smoke test refuses
+      # to run blind. First contact claims the workspace with the smoke
+      # account; once claimed, this answers 4xx and the login below is the
+      # path that works. Either way the smoke test gets an account.
+      - name: Seed the smoke account if staging is unclaimed
+        if: steps.token.outputs.present == 'true'
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+        run: |
+          if [ -z "$SMOKE_EMAIL" ]; then
+            echo "SMOKE_EMAIL is not set; the smoke test will say what it needs"
+            exit 0
+          fi
+          code=$(curl -s -o /tmp/seed -w '%{http_code}' \
+            -X POST "https://landquotient-staging.shiny-butterfly-2b90.workers.dev/api/auth/register" \
+            -H 'content-type: application/json' \
+            --data "{\"name\":\"Smoke Test\",\"email\":\"$SMOKE_EMAIL\",\"password\":\"$SMOKE_PASSWORD\"}")
+          if [ "$code" = "201" ]; then
+            echo "staging was unclaimed; the smoke account now owns it"
+          else
+            echo "staging already claimed (HTTP $code); the smoke test signs in instead"
+          fi
+
+      - name: Smoke test staging
+        if: steps.token.outputs.present == 'true'
+        env:
+          SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
+          SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+        run: node scripts/smoke.mjs "https://landquotient-staging.shiny-butterfly-2b90.workers.dev"
+
+      - name: Upload the staging screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-smoke-shots
+          path: |
+            smoke-map.png
+            smoke-book.png
+          if-no-files-found: ignore
 
       - name: Note that deploying was skipped
         if: steps.token.outputs.present == 'false'
         run: |
           echo "CLOUDFLARE_API_TOKEN is not set, so this run built and tested"
-          echo "the app but did not deploy it."
-          echo
-          echo "That is fine if Cloudflare's Git integration is connected to"
-          echo "this repo, which deploys on push without any token here."
-          echo "To deploy from GitHub instead, add the two repository secrets"
-          echo "described at the top of this file."
+          echo "the app but did not deploy it. Add the two repository secrets"
+          echo "described at the top of this file to enable deploys."
+
+  # --- the same build goes to production only after staging held -------------
+  production:
+    needs: staging
+    if: needs.staging.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Rebuilt rather than passed between jobs: the build is deterministic
+      # from the commit, and an artifact hand-off is one more thing that can
+      # differ from what staging actually ran.
+      - run: npm run build
+
+      - name: Deploy to production
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
