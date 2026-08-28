@@ -84,7 +84,8 @@ import {
 import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
-import { resolveProvider } from './lib/ai.js'
+import { askJson, resolveProvider } from './lib/ai.js'
+import { BOOK_STYLE_PROMPT, normalizeBookStyle } from './lib/bookstyle.js'
 import { heuristicScout, runScout } from './lib/scout.js'
 import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
@@ -1795,6 +1796,65 @@ export function createApp({ db, storage, env = {} }) {
       return c.json(budget ? { ...answer, budget: budget.scout } : answer)
     } catch (cause) {
       return c.json({ error: cause?.message || 'The scout could not read that hunt.' }, 422)
+    }
+  })
+
+  /*
+   * Restyles the tour book from a sentence.
+   *
+   * The style has six levers and the model may only move those: the answer
+   * is normalized down to the known keys, so a model that invents an option
+   * invents nothing. Costs a "read" from the day's AI budget, because it is
+   * one small completion — and an instruction the rules could never need a
+   * model for is still sent to one, since parsing style intent is exactly
+   * the fuzzy step the model is for.
+   */
+  app.post('/api/surveys/:id/book-style', async (c) => {
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+
+    const body = await c.req.json().catch(() => ({}))
+    const instruction = String(body?.instruction ?? '').trim().slice(0, 500)
+
+    // A direct style object needs no model and costs no budget.
+    if (!instruction && body?.style) {
+      const saved = await updateSurvey(db, survey.id, { bookStyle: body.style })
+      return c.json({ book: saved.book })
+    }
+    if (!instruction) return c.json({ error: 'Say how the book should change.' }, 400)
+
+    const provider = resolveProvider(env)
+    if (!provider) {
+      return c.json(
+        {
+          error:
+            'Restyling with AI needs an AI key. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or ' +
+            'XAI_API_KEY on the server, or adjust the options by hand.',
+        },
+        422,
+      )
+    }
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
+
+    try {
+      const answer = await askJson(
+        provider,
+        {
+          system: BOOK_STYLE_PROMPT,
+          user:
+            `Current style: ${JSON.stringify(normalizeBookStyle(survey.book))}\n` +
+            `Instruction: ${instruction}`,
+        },
+        env,
+      )
+      const saved = await updateSurvey(db, survey.id, { bookStyle: answer })
+      return c.json({ book: saved.book })
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'The restyle failed.'
+      return c.json({ error: message }, 502)
     }
   })
 

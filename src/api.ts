@@ -1,4 +1,4 @@
-import type {
+import type { BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -294,6 +294,8 @@ export const api = {
       body: file,
     }),
 
+  bookStyle: (surveyId: string, input: { instruction?: string; style?: Partial<BookStyle> }) =>
+    request<{ book: BookStyle }>(`/api/surveys/${surveyId}/book-style`, json(input)),
   planTour: (surveyId: string, options: TourRequest = {}) =>
     request<TourPlan>(`/api/surveys/${surveyId}/tour`, json(options)),
   saveTourOrder: (surveyId: string, order: string[]) =>

@@ -454,6 +454,7 @@ export const COLUMN_ADDITIONS = [
   // QR puts a directions code on each tour book stop. Both broker choices.
   ['surveys', 'share_demographics', 'INTEGER NOT NULL DEFAULT 0'],
   ['surveys', 'share_qr', 'INTEGER NOT NULL DEFAULT 1'],
+  ['surveys', 'book_style', 'TEXT'],
 
   // The last routed tour, as JSON: road geometry, legs, and the stop order.
   // Saved so repeat views (and the client's shared link) reuse the routed

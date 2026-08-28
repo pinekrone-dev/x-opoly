@@ -7,6 +7,7 @@
  */
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
+import { normalizeBookStyle } from './bookstyle.js'
 import { fieldsBySurvey, listPropertyFields, listStages, seedStages } from './stages.js'
 import { listZones } from './zones.js'
 import { imagesBySurvey, listImages } from './images.js'
@@ -80,6 +81,9 @@ const SURVEY_FIELDS = {
   // shade nothing while the legend named it confidently.
   share_metric: (v) => (SHARE_METRICS.has(String(v)) ? String(v) : 'population'),
   share_qr: (v) => (v ? 1 : 0),
+  // Stored as JSON, but never as given: the style is validated down to its
+  // six known levers so a stored book can only describe a book we can draw.
+  book_style: (v) => JSON.stringify(normalizeBookStyle(v)),
   tour_start_time: (v) => text(v, 20),
   tour_stop_minutes: (v) => integer(v, 0, 600),
   tour_start_address: (v) => text(v, 300),
@@ -171,6 +175,13 @@ function mapSurvey(row) {
       metric: row.share_metric || 'population',
       showQr: row.share_qr == null ? true : toBool(row.share_qr),
     },
+    book: (() => {
+      try {
+        return normalizeBookStyle(row.book_style ? JSON.parse(row.book_style) : null)
+      } catch {
+        return normalizeBookStyle(null)
+      }
+    })(),
     tour: {
       startTime: row.tour_start_time || '10:00',
       stopMinutes: row.tour_stop_minutes ?? 20,

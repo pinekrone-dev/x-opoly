@@ -223,6 +223,54 @@ CREATE TABLE IF NOT EXISTS zones (
     created_at   TEXT NOT NULL
   );
 
+CREATE TABLE IF NOT EXISTS map_views (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    created_by TEXT,
+    market     TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+CREATE TABLE IF NOT EXISTS ai_usage (
+    team_id TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (team_id, day, kind)
+  );
+
+CREATE TABLE IF NOT EXISTS comps (
+    id             TEXT PRIMARY KEY,
+    team_id        TEXT NOT NULL,
+    market         TEXT,
+    source_key     TEXT NOT NULL,
+    address        TEXT,
+    name           TEXT,
+    price_str      TEXT,
+    price          REAL,
+    sale_lease     TEXT,
+    prop_type      TEXT,
+    sqft           REAL,
+    acres          REAL,
+    units          REAL,
+    cap_rate       REAL,
+    year_built     REAL,
+    price_per_sf   REAL,
+    price_per_acre REAL,
+    price_per_unit REAL,
+    url            TEXT,
+    source         TEXT,
+    scraped_at     TEXT,
+    lat            REAL,
+    lng            REAL,
+    placed         TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+  );
+
 CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id);
 
 CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token);
@@ -254,3 +302,7 @@ CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest);
 CREATE INDEX IF NOT EXISTS idx_zones_survey ON zones(survey_id);
 
 CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_map_views_team ON map_views(team_id, market);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key);

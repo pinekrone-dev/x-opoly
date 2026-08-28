@@ -205,6 +205,8 @@ export interface Survey {
     /** Print a QR directions code on each tour book stop. */
     showQr?: boolean
   }
+  /** The tour book's style: the preset's six levers. */
+  book: BookStyle
   tour: {
     startTime: string
     stopMinutes: number
@@ -214,6 +216,16 @@ export interface Survey {
   pinCount?: number
   createdAt: string
   updatedAt: string
+}
+
+/** How the tour book dresses: which cover, which accent, what rides along. */
+export interface BookStyle {
+  cover: 'navy' | 'light'
+  accent: string
+  showSchedule: boolean
+  showDetails: boolean
+  showQr: boolean
+  intro: string | null
 }
 
 /** Where a tour begins or ends — an address, not necessarily one of the sites. */
