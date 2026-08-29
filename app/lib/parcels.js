@@ -94,6 +94,19 @@ const INSERT_COLUMNS = [
  */
 const ROWS_PER_STATEMENT = 250
 
+/*
+ * How much serialized JSON one statement carries, and one batch.
+ *
+ * Rows are not all the same size — a county of bare land parcels and a county
+ * of long owner names differ by several times per row — so a fixed row count
+ * is only a guess at how big a request gets. These are the real ceilings, and
+ * they are measured rather than assumed: rows are accumulated until the next
+ * one would cross the limit. ROWS_PER_STATEMENT stays as an upper bound so a
+ * market of very small rows does not build one enormous statement.
+ */
+const JSON_BYTES_PER_STATEMENT = 40_000
+const JSON_BYTES_PER_BATCH = 250_000
+
 /** Statements per batch. D1 commits a batch as one transaction. */
 const STATEMENTS_PER_BATCH = 10
 
@@ -212,14 +225,39 @@ export async function putParcels(db, market, raws) {
     `INSERT OR REPLACE INTO parcels (${INSERT_COLUMNS.join(',')}) ` +
     `SELECT ?1,${extracts} FROM json_each(?2)`
 
+  // Each row as its own JSON fragment, so a statement can be filled to a byte
+  // budget instead of a row count.
+  const parts = rows.map((row) => JSON.stringify(row.slice(1)))
+
   const statements = []
-  for (let i = 0; i < rows.length; i += ROWS_PER_STATEMENT) {
-    const slice = rows.slice(i, i + ROWS_PER_STATEMENT)
-    statements.push([sql, [market, JSON.stringify(slice.map((row) => row.slice(1)))]])
+  for (let i = 0; i < parts.length; ) {
+    let bytes = 2                                   // the enclosing brackets
+    let end = i
+    while (end < parts.length && end - i < ROWS_PER_STATEMENT) {
+      const next = parts[end].length + (end > i ? 1 : 0)
+      if (end > i && bytes + next > JSON_BYTES_PER_STATEMENT) break
+      bytes += next
+      end += 1
+    }
+    statements.push({ bytes, call: [sql, [market, `[${parts.slice(i, end).join(',')}]`]] })
+    i = end
   }
-  for (let i = 0; i < statements.length; i += STATEMENTS_PER_BATCH) {
-    await db.batch(statements.slice(i, i + STATEMENTS_PER_BATCH))
+
+  // And batches filled the same way, since a batch is one request carrying all
+  // of its statements' parameters.
+  let batch = []
+  let bytes = 0
+  for (const statement of statements) {
+    if (batch.length && (batch.length >= STATEMENTS_PER_BATCH ||
+        bytes + statement.bytes > JSON_BYTES_PER_BATCH)) {
+      await db.batch(batch)
+      batch = []
+      bytes = 0
+    }
+    batch.push(statement.call)
+    bytes += statement.bytes
   }
+  if (batch.length) await db.batch(batch)
   return rows.length
 }
 

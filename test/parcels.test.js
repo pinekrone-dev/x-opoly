@@ -174,3 +174,78 @@ describe('market summary', () => {
     assert.equal((await searchParcels(db, 'gone-xx', {})).count, 0)
   })
 })
+
+/*
+ * What a publish actually puts on the wire.
+ *
+ * The first version of the insert sent one placeholder per column per row, and
+ * every publish failed: fifty rows was 850 bindings, and D1 allows a hundred.
+ * The cure was to stop counting rows and send them as one JSON parameter, so
+ * these check the two ceilings that replaced the old one — bindings per
+ * statement, and bytes per request — against rows wide enough to breach a
+ * fixed row count.
+ */
+describe('what a publish sends', () => {
+  /** Records every call instead of running it. */
+  function recorder() {
+    const calls = []
+    return {
+      calls,
+      db: {
+        run: async () => {},
+        batch: async (statements) => { calls.push(statements) },
+      },
+    }
+  }
+
+  // A county whose rows are long: real owner names and addresses, not the
+  // three-word placeholders the rest of this file uses.
+  const wide = Array.from({ length: 4000 }, (_, i) => ({
+    id: 900000 + i,
+    ad: `${1000 + i} Northwest Bartholomew Ridge Parkway Building ${i} Suite 1400`,
+    ow: `Bartholomew Ridge Capital Partners Holdings ${i} Limited Liability Company`,
+    gid: `PARCEL-IDENTIFIER-${i}-A`,
+    at: 'Industrial',
+    mv: 1000 + i,
+    ac: 1,
+    bb: [-97.5, 30.5, -97.49, 30.51],
+  }))
+
+  test('no statement carries more bindings than D1 accepts', async () => {
+    const { db, calls } = recorder()
+    await putParcels(db, 'wide-zz', wide)
+    const most = Math.max(...calls.flat().map(([, binds]) => binds.length))
+    // D1's limit is 100. The point of the JSON parameter is that this is a
+    // constant: two, however many rows the statement holds.
+    assert.equal(most, 2)
+  })
+
+  test('no statement carries more bytes than the budget, however wide the rows', async () => {
+    const { db, calls } = recorder()
+    await putParcels(db, 'wide-zz', wide)
+    const statements = calls.flat()
+    assert.ok(statements.length > 1, 'four thousand wide rows is more than one statement')
+    for (const [, binds] of statements) {
+      assert.ok(binds[1].length <= 40_000, `a statement carried ${binds[1].length} bytes`)
+    }
+  })
+
+  test('no batch carries more bytes than the budget', async () => {
+    const { db, calls } = recorder()
+    await putParcels(db, 'wide-zz', wide)
+    for (const batch of calls) {
+      const bytes = batch.reduce((sum, [, binds]) => sum + binds[1].length, 0)
+      assert.ok(bytes <= 250_000, `a batch carried ${bytes} bytes`)
+    }
+  })
+
+  test('every row still arrives, and in its own place', async () => {
+    const { db, calls } = recorder()
+    const sent = await putParcels(db, 'wide-zz', wide)
+    assert.equal(sent, wide.length)
+    const rows = calls.flat().flatMap(([, binds]) => JSON.parse(binds[1]))
+    assert.equal(rows.length, wide.length)
+    // Position 0 of the JSON tuple is the parcel id — the column after market.
+    assert.deepEqual(rows.map((row) => row[0]).slice(0, 3), ['900000', '900001', '900002'])
+  })
+})
