@@ -37,6 +37,26 @@ function registerPmtiles() {
 const PARCEL_SOURCE = 'parcels'
 
 /*
+ * The zoom below which parcels are not drawn at all.
+ *
+ * This is the difference between a map that opens and a map that eats the
+ * GPU. A county's tiles start at zoom 11, and a single zoom-11 tile over
+ * Maricopa carries a large share of 1.74 million polygons — every one of
+ * which the browser must decode, triangulate and hold in GPU buffers. At that
+ * zoom a parcel is smaller than a pixel, so the entire cost buys a grey smear
+ * that nobody can read and nobody can click.
+ *
+ * It was drawing them because nothing said not to. Each step up the pyramid
+ * quarters the parcels in a tile, so 13 is where a tile becomes a sane thing
+ * to ask a browser for and a parcel becomes a shape rather than a speck.
+ *
+ * Below this the map is for orientation — basemap, demographics, the places
+ * already pinned — and the county is searched from the panel, which is
+ * answered by the server and never needed the geometry at all.
+ */
+const PARCEL_MIN_ZOOM = 13
+
+/*
  * How much GPU memory this map asks for, and what it settles for.
  *
  * A browser takes the graphics context away when it is short of GPU memory,
@@ -486,6 +506,14 @@ export default function MapCanvas({
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
+  /*
+   * Whether the view is currently below the zoom at which parcels are drawn.
+   *
+   * Kept in state rather than read where it is needed, because it has to
+   * re-render the note when the map moves and the map does not re-render
+   * anything by itself.
+   */
+  const [tooFarOut, setTooFarOut] = useState(false)
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
@@ -717,6 +745,13 @@ export default function MapCanvas({
     const onVisible = () => {
       if (document.visibilityState === 'visible' && !ready.current && contextLost.current) rebuild()
     }
+
+    // Whether the parcels would be drawn at this zoom, kept current as the
+    // map moves. Read off the map rather than tracked alongside it, so the
+    // note can never disagree with what is on screen.
+    const watchZoom = () => setTooFarOut(instance.getZoom() < PARCEL_MIN_ZOOM)
+    watchZoom()
+    instance.on('zoomend', watchZoom)
     canvas.addEventListener('webglcontextlost', onLost)
     canvas.addEventListener('webglcontextrestored', onRestored)
     document.addEventListener('visibilitychange', onVisible)
@@ -784,6 +819,7 @@ export default function MapCanvas({
     return () => {
       window.clearTimeout(slowStart)
       window.clearTimeout(retry)
+      instance.off('zoomend', watchZoom)
       canvas.removeEventListener('webglcontextlost', onLost)
       canvas.removeEventListener('webglcontextrestored', onRestored)
       document.removeEventListener('visibilitychange', onVisible)
@@ -1517,6 +1553,10 @@ export default function MapCanvas({
         type: 'fill',
         source: PARCEL_SOURCE,
         'source-layer': sourceLayer,
+        // Not merely hidden: a layer with a minzoom stops the tiles under it
+        // being requested at all, so this is a download that never happens as
+        // well as geometry that never reaches the GPU.
+        minzoom: PARCEL_MIN_ZOOM,
         paint: { 'fill-color': PARCEL_OTHER, 'fill-opacity': 0.34 },
       },
       below,
@@ -1527,6 +1567,7 @@ export default function MapCanvas({
         type: 'line',
         source: PARCEL_SOURCE,
         'source-layer': sourceLayer,
+        minzoom: PARCEL_MIN_ZOOM,
         paint: {
           'line-color': PARCEL_OTHER,
           'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.4, 15, 0.9, 18, 1.6],
@@ -1873,13 +1914,19 @@ export default function MapCanvas({
         </div>
       ) : null}
 
-      {basemapNote || parcelNote ? (
+      {basemapNote || parcelNote || (parcels && tooFarOut) ? (
         <div
           role="status"
           className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] space-y-1 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
         >
           {basemapNote ? <p>{basemapNote}</p> : null}
           {parcelNote ? <p>{parcelNote}</p> : null}
+          {/* Otherwise a county with no outlines on it reads as missing data,
+              which is exactly the wrong conclusion — the data is there and the
+              panel is already searching all of it. */}
+          {parcels && tooFarOut && !parcelNote ? (
+            <p>Zoom in to see parcel outlines. Searching and filtering already cover the whole county.</p>
+          ) : null}
         </div>
       ) : null}
 

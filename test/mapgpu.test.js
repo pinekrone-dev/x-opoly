@@ -32,6 +32,41 @@ before(() => {
   steps = new Function(`return ${literal[1]}`)()
 })
 
+describe('the zoom below which parcels are not drawn', () => {
+  /*
+   * The single largest thing keeping this map alive.
+   *
+   * A county's tiles begin at zoom 11, and one zoom-11 tile over Maricopa
+   * carries a large share of 1.74 million polygons for the browser to decode,
+   * triangulate and hold in GPU buffers — to render a grey smear, since a
+   * parcel at that zoom is smaller than a pixel. Nothing said not to, so it
+   * did. Removing the gate would put that back while every other memory
+   * measure here stayed in place and appeared to be doing its job.
+   */
+  test('parcels are gated, and the gate is above the zoom the tiles start at', () => {
+    const gate = /const PARCEL_MIN_ZOOM = (\d+)/.exec(source)
+    assert.ok(gate, 'the gate must be a constant, not a number buried in a layer')
+    // The pipeline cuts tiles from zoom 11. A gate at or below that is no gate.
+    assert.ok(Number(gate[1]) > 11, 'a gate at the pyramid floor gates nothing')
+  })
+
+  test('both parcel layers carry it, not just the one that is easy to see', () => {
+    // The outline is what people look at, but the fill is what holds the
+    // triangulated polygons — gating only the visible one would leave the
+    // expensive one drawing.
+    const fill = /id: 'parcel-fill',[\s\S]{0,400}?minzoom: PARCEL_MIN_ZOOM/.test(source)
+    const line = /id: 'parcel-line',[\s\S]{0,400}?minzoom: PARCEL_MIN_ZOOM/.test(source)
+    assert.ok(fill, 'the fill layer is ungated')
+    assert.ok(line, 'the line layer is ungated')
+  })
+
+  test('a county with no outlines on it explains itself', () => {
+    // Otherwise it reads as missing data, which is the wrong conclusion: the
+    // data is there and the panel is already searching all of it.
+    assert.match(source, /Zoom in to see parcel outlines/)
+  })
+})
+
 describe('the GPU memory ladder', () => {
   test('every rung asks for strictly less than the one above it', () => {
     assert.ok(steps.length >= 2, 'a ladder of one rung is not a ladder')
