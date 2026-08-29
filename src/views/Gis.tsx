@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import MapCanvas from '../components/MapCanvas'
+import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
 import ParcelPanel, { type PanelGroup } from '../components/ParcelPanel'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import GisRail, {
@@ -193,6 +193,21 @@ interface PublishedLayer {
    */
   tiles?: string
   sourceLayer?: string
+  /*
+   * What this layer can be coloured by, counted at build time.
+   *
+   * Colouring by category is the point of an overlay — one pink wash over
+   * 22,000 zoning districts says "there is zoning here", while a colour per
+   * district says which blocks are commercial. It used to be derived by
+   * walking the features in the browser, which a tiled layer deliberately
+   * never holds, so tiling a layer would have silently cost the feature that
+   * makes it worth looking at.
+   *
+   * The pipeline has every feature at build time and the browser does not, so
+   * the count belongs there: done once on a server rather than in every
+   * browser, every session.
+   */
+  categories?: { field: string; values: [string, number][] }[]
   minzoom?: number
   maxzoom?: number
   count?: number
@@ -1434,6 +1449,13 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const layerCategories = useMemo(() => {
     const out: Record<string, { field: string; values: [string, number][] }[]> = {}
     for (const layer of shownLayers) {
+      // Counted upstream where every feature was in hand. Preferred over
+      // sampling even when both are available: this one saw the whole county
+      // rather than the first four thousand of it.
+      if (layer.categories?.length) {
+        out[layer.id] = layer.categories
+        continue
+      }
       const data = shownData[layer.id]
       if (!data?.features?.length) continue
       const sample = data.features.slice(0, 4000)
@@ -2758,7 +2780,25 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           // reframes and panning around within one does not. Null until the
           // market says where it is, which leaves the map on its own opening
           // view rather than holding the map back until it can be told.
-          view={layerView ?? (meta ? { center: meta.center, zoom: meta.zoom, key: active ?? '' } : null)}
+          /*
+           * A county opens close enough to see its parcels.
+           *
+           * Markets declare an opening zoom of around 12, and parcels are
+           * drawn from 13 — so a county opened on its own declared view and
+           * showed no outlines at all, which reads as a market with no data
+           * rather than a camera one step too far out. The floor is the gate
+           * itself, so the two can never drift apart.
+           */
+          view={
+            layerView ??
+            (meta
+              ? {
+                  center: meta.center,
+                  zoom: Math.max(meta.zoom, PARCEL_MIN_ZOOM),
+                  key: active ?? '',
+                }
+              : null)
+          }
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.

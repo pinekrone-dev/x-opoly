@@ -54,7 +54,7 @@ const PARCEL_SOURCE = 'parcels'
  * already pinned — and the county is searched from the panel, which is
  * answered by the server and never needed the geometry at all.
  */
-const PARCEL_MIN_ZOOM = 13
+export const PARCEL_MIN_ZOOM = 13
 
 /*
  * How much GPU memory this map asks for, and what it settles for.
