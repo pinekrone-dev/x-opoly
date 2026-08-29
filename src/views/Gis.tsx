@@ -2646,13 +2646,28 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   return (
     <div className="relative h-full w-full">
-      {meta?.tiles && meta.heavyBase ? (
-        <MapCanvas
+      {/*
+        The map is not waiting for anything.
+
+        It used to be rendered only once the market's meta.json had arrived,
+        which made a small request on another origin the gate on whether the
+        product appeared at all: any hitch there and the whole view was a line
+        of text where the map should be. That is a hard failure built out of a
+        soft one, and it is what "the map isn't loading" turned out to mean.
+
+        So the basemap opens immediately, at the map's own default view, and
+        everything else arrives on top of it as it becomes available — the
+        county's centre and its parcels when meta lands, layers when someone
+        switches them on. Nothing below blocks the first paint, and a failure
+        is now a notice over a working map rather than a blank page.
+      */}
+      <MapCanvas
           tiles={tiles}
           basemaps={basemaps}
           properties={[]}
           parcels={
-            {
+            meta?.tiles && meta.heavyBase
+              ? {
                   url: `${viaProxy(meta.heavyBase)}parcels.pmtiles`,
                   fillVisible: showParcels,
                   colorBy: parcelColorBy === 'auto' ? (meta.colorBy === 'value' ? 'value' : 'group') : parcelColorBy,
@@ -2670,11 +2685,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                   opacity,
                   valueRamp: rampOf(parcelRamp),
                 }
+              : null
           }
           // A record chosen in the panel takes the camera; otherwise the
           // market's own centre does, keyed on the slug so switching county
-          // reframes and panning around within one does not.
-          view={layerView ?? { center: meta.center, zoom: meta.zoom, key: active ?? '' }}
+          // reframes and panning around within one does not. Null until the
+          // market says where it is, which leaves the map on its own opening
+          // view rather than holding the map back until it can be told.
+          view={layerView ?? (meta ? { center: meta.center, zoom: meta.zoom, key: active ?? '' } : null)}
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.
@@ -2690,20 +2708,30 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           choroplethOpacity={censusOpacity}
           extras={extras}
         />
-      ) : stale ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted">
-          <p>This tab is running an older version of Land Quotient than the server. Reload to pick up the update.</p>
+
+      {/* Said over the map rather than instead of it. An out-of-date tab and
+          an unreachable catalogue are both worth telling someone about, and
+          neither is a reason to take away a map that works. */}
+      {stale && (
+        <div className="pointer-events-auto absolute left-1/2 top-3 z-[600] flex -translate-x-1/2 items-center gap-3 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-body shadow-lg backdrop-blur">
+          <span>This tab is running an older version than the server.</span>
           <button
             type="button"
             onClick={() => window.location.reload()}
-            className="rounded-lg bg-ink px-4 py-2 text-sm font-medium text-white"
+            className="rounded-md bg-ink px-2.5 py-1 text-xs font-medium text-white"
           >
-            Reload now
+            Reload
           </button>
         </div>
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-sm text-muted">
-          {error ?? (active ? 'Loading parcels…' : 'No markets available.')}
+      )}
+      {!stale && error && (
+        <div className="absolute left-1/2 top-3 z-[600] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-body shadow-lg backdrop-blur">
+          {error}
+        </div>
+      )}
+      {!stale && !error && active && !meta && (
+        <div className="absolute left-1/2 top-3 z-[600] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-muted shadow-lg backdrop-blur">
+          Loading the county…
         </div>
       )}
 

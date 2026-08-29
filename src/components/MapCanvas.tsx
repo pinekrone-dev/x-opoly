@@ -35,6 +35,15 @@ function registerPmtiles() {
 }
 
 const PARCEL_SOURCE = 'parcels'
+
+/*
+ * How far a restored position may sit from the market it is restored into.
+ *
+ * Degrees, and deliberately loose: a county is a degree or so across, and the
+ * point is not to police where someone was looking but to catch a position
+ * that belongs to a different part of the country entirely.
+ */
+const SAME_MARKET_DEGREES = 3
 const BASEMAP_SOURCE = 'basemap'
 const BASEMAP_LAYER = 'basemap'
 
@@ -1642,13 +1651,30 @@ export default function MapCanvas({
    * already there is the more specific instruction, so the first ask is
    * skipped and every later one — switching markets, opening a saved view —
    * still moves the map.
+   *
+   * But only when the two are talking about the same place. The hash survives
+   * everything — a reload, a hard reload, closing the tab and opening the
+   * link again — so a position left over from another county strands the map
+   * a thousand miles from the parcels it just loaded, and every reload puts
+   * it back. That looks exactly like a map that will not load, and it cannot
+   * be cleared by reloading, which is the worst property a bug can have.
+   *
+   * So the restore has to agree with the market. If it does not, the market
+   * wins: it is the thing the person just chose, and the hash is a memory of
+   * something else.
    */
   useEffect(() => {
     const instance = map.current
     if (!instance || !loaded || !view) return
     if (!viewApplied.current) {
       viewApplied.current = true
-      if (hadHash.current) return
+      if (hadHash.current) {
+        const here = instance.getCenter()
+        const stray =
+          Math.abs(here.lng - view.center[0]) > SAME_MARKET_DEGREES ||
+          Math.abs(here.lat - view.center[1]) > SAME_MARKET_DEGREES
+        if (!stray) return
+      }
     }
     instance.jumpTo({ center: view.center, zoom: view.zoom })
   }, [loaded, view?.key])
