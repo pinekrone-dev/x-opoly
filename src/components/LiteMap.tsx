@@ -28,6 +28,8 @@ const LITE_PARCEL_MIN = 13
 const LITE_PARCEL_DEEPEST = 16
 /** Tiles fetched per view, at most. A screen is 6–12 tiles; runaway is a bug. */
 const TILES_PER_VIEW = 16
+/** Tiles quietly prefetched around the view, at most, once the view is drawn. */
+const RING_PREFETCH = 12
 
 const tileX = (lng: number, z: number) => Math.floor(((lng + 180) / 360) * 2 ** z)
 const tileY = (lat: number, z: number) => {
@@ -159,6 +161,42 @@ export default function LiteMap({
 
       const visible: GeoJSON.Feature[] = []
       for (const [x, y] of wanted) visible.push(...(fetched.current.get(`${z}/${x}/${y}`) ?? []))
+
+      /*
+       * What is on screen comes first; the ring around it comes after.
+       *
+       * The screen's own tiles are fetched and drawn before anything else is
+       * even considered — that is the ordering above. Then, once the view is
+       * painted and the browser is idle, one ring of surrounding tiles is
+       * warmed into the cache, so a pan in any direction starts from tiles
+       * already in hand instead of from a cold request. Prefetching never
+       * competes with the visible work and never triggers a redraw: it only
+       * fills the cache the next pan will read.
+       */
+      const idle: (fn: () => void) => void =
+        'requestIdleCallback' in window
+          ? (fn) => (window as Window & { requestIdleCallback: (f: () => void) => void }).requestIdleCallback(fn)
+          : (fn) => window.setTimeout(fn, 350)
+      idle(() => {
+        const ring: [number, number][] = []
+        for (let x = x0 - 1; x <= x1 + 1; x += 1) {
+          for (let y = y0 - 1; y <= y1 + 1; y += 1) {
+            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue
+            if (x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) continue
+            if (fetched.current.has(`${z}/${x}/${y}`)) continue
+            if (ring.length < RING_PREFETCH) ring.push([x, y])
+          }
+        }
+        for (const [x, y] of ring) {
+          const at = `${z}/${x}/${y}`
+          fetch(`${base}/${at}.json`)
+            .then((res) => (res.ok ? res.json() : null))
+            .then((doc: GeoJSON.FeatureCollection | null) => {
+              if (doc) fetched.current.set(at, doc.features ?? [])
+            })
+            .catch(() => undefined)
+        }
+      })
 
       parcelPane.current?.remove()
       parcelPane.current = L.geoJSON(
