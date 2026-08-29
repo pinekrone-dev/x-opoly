@@ -1557,6 +1557,79 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
 
+  /*
+   * The catalogue, read from this origin.
+   *
+   * These files decide whether the product has anything to show: markets.json
+   * is the list of counties, and a market's meta.json is where it opens and
+   * how it is drawn. The browser used to fetch them straight from the data
+   * domain, which makes every one of them subject to that bucket's CORS
+   * policy — and a cross-origin refusal does not look like a refusal. It
+   * arrives as `TypeError: Failed to fetch` with status 0, the market list
+   * comes back empty, no county is ever chosen, and the whole view is blank.
+   * The map appeared broken because the app had been told there were no
+   * markets.
+   *
+   * Read through this origin instead and there is no cross-origin request to
+   * refuse. The browser asks the app for the app's own data, which is what it
+   * looked like it was doing all along.
+   *
+   * Two things keep this from becoming a way to read the bucket. The names
+   * are the same allowlist the ingest side writes through, so nothing can be
+   * fetched that the pipeline could not have put there; and the market is
+   * matched as a slug, so no path can climb out of its county. When there is
+   * no bucket bound — the Node server, a preview — it fetches the public file
+   * from the data domain server-side, where CORS does not apply either.
+   */
+  const CATALOG_ORIGIN = (env.PARCEL_CATALOG_ORIGIN || 'https://data.realestateaistudio.com')
+    .replace(/\/$/, '')
+
+  app.get('/catalog/*', async (c) => {
+    const path = new URL(c.req.url).pathname.replace(/^\/catalog\//, '')
+    const parts = path.split('/')
+
+    let key = null
+    let contentType = null
+    if (parts.length === 1 && parts[0] in INGEST_ROOT_FILES) {
+      key = parts[0]
+      contentType = INGEST_ROOT_FILES[parts[0]]
+    } else if (parts.length === 2 && /^[a-z0-9-]{2,40}$/.test(parts[0])) {
+      const file = parts[1]
+      if (file in INGEST_FILES) contentType = INGEST_FILES[file]
+      else if (INGEST_LAYER_FILE.test(file)) contentType = 'application/geo+json'
+      if (contentType) key = `${parts[0]}/${file}`
+    }
+    if (!key) return c.json({ error: 'No such catalogue file.' }, 404)
+
+    // A day in the browser, a minute at the edge. The catalogue changes when a
+    // county is rebuilt, which is monthly — but a stale market list is the one
+    // thing that would make this whole route pointless, so the edge re-checks
+    // often and the browser is told it may keep what it has.
+    const headers = {
+      'content-type': contentType,
+      'cache-control': 'public, max-age=86400',
+      // Harmless here and useful everywhere: this is public county data, and
+      // saying so means a preview deployment on another hostname can read it
+      // too rather than rediscovering this same failure.
+      'access-control-allow-origin': '*',
+    }
+
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(key)
+      if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
+      return new Response(object.body, { headers })
+    }
+
+    // No bucket here. Fetch the public file the same way anyone would, except
+    // from the server, where there is no origin to be refused for.
+    const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
+      headers: { 'user-agent': 'LandQuotient/1.0 (+https://survey.realestateaistudio.com)' },
+    })
+    if (!answer.ok) return c.json({ error: 'No such catalogue file.' }, answer.status === 404 ? 404 : 502)
+    return new Response(answer.body, { headers })
+  })
+
   app.post('/api/gis/ingest', async (c) => {
     const throttled = limited(c, 'ingest', 300, 10 * 60 * 1000)
     if (throttled) return throttled

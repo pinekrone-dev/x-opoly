@@ -776,13 +776,14 @@ try {
      * reach differently.
      */
     const catalogue = await page.evaluate(async () => {
-      // Only the address the app actually reads. The first version of this
-      // also asserted on the same-origin /catalog path, which serves the SPA
-      // shell because nothing routes it — a true observation about a path
-      // this view never asks for, reported as a failure of the view. A check
-      // that fails on something the product does not do is noise, and worse
-      // than noise here, because a red gate stops deploys.
-      const bases = ['https://data.realestateaistudio.com']
+      // The address the app actually reads, which is now this origin. It used
+      // to read the data domain directly, and that is exactly what broke: a
+      // cross-origin refusal there arrives as `TypeError: Failed to fetch`
+      // with status 0, the market list comes back empty, and the view is
+      // blank because the app was told there are no counties. The direct
+      // address is still probed, but only for the record — a refusal there is
+      // no longer the product's problem.
+      const bases = ['/catalog', 'https://data.realestateaistudio.com']
       const out = []
       for (const base of bases) {
         try {
@@ -801,9 +802,15 @@ try {
       return out
     })
     for (const answer of catalogue) {
-      check(`the market catalogue answers as JSON from ${answer.base}`,
-        answer.status === 200 && Array.isArray(answer.slugs) && answer.slugs.length > 0,
-        `status ${answer.status} ${answer.type} ${answer.slugs ? answer.slugs.join(' ') : answer.head}`)
+      const ok = answer.status === 200 && Array.isArray(answer.slugs) && answer.slugs.length > 0
+      const detail = `status ${answer.status} ${answer.type} ${answer.slugs ? answer.slugs.join(' ') : answer.head}`
+      if (answer.base === '/catalog') {
+        check('the market catalogue answers as JSON from this origin', ok, detail)
+      } else {
+        // Reported, never asserted. Whether another origin's bucket will talk
+        // to this one is that bucket's business now, not the product's.
+        console.log(`NOTE  the data domain direct: ${detail}`)
+      }
     }
 
     // The onboarding tour sits over the panel on a workspace that has never

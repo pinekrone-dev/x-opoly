@@ -48,7 +48,23 @@ const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
  * VITE_PARCEL_PROXY rewrites the absolute data host that meta.json hands back.
  * Neither is set in a normal build, so production talks to the real hosts.
  */
-const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || CATALOG_DEFAULT
+/*
+ * Read from this origin by default.
+ *
+ * The catalogue used to be fetched straight from the data domain, which put
+ * every one of these files behind that bucket's CORS policy. A refusal there
+ * does not announce itself: it arrives as `TypeError: Failed to fetch` with
+ * status 0, the market list comes back empty, no county is chosen, and the
+ * view is blank. The map looked broken when the app had simply been told
+ * there were no markets — and it only looked broken from some origins, which
+ * is what made it so hard to see.
+ *
+ * The app now serves the same files itself, so there is no cross-origin
+ * request left to refuse. CATALOG_DEFAULT stays as the address the server
+ * reads from, and as the fallback below for anything serving this bundle
+ * without that route.
+ */
+const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
 const DATA_PROXY = import.meta.env.VITE_PARCEL_PROXY || ''
 
 function viaProxy(url: string): string {
@@ -60,6 +76,24 @@ function viaProxy(url: string): string {
 const asJson = (r: Response) => {
   if (!r.ok) throw new Error(`${r.status}`)
   return r.json()
+}
+
+/*
+ * A catalogue file, from this origin, or from the data domain if this origin
+ * does not serve one.
+ *
+ * The fallback is for a deployment running this bundle without the catalogue
+ * route — a preview, an older Worker, the dev server. It is deliberately a
+ * fallback rather than the first choice: the direct fetch is the one that can
+ * be refused cross-origin, and the whole point is not to depend on it.
+ */
+async function catalogue(path: string) {
+  try {
+    return await asJson(await fetch(`${CATALOG}/${path}`))
+  } catch (first) {
+    if (CATALOG === CATALOG_DEFAULT) throw first
+    return asJson(await fetch(`${CATALOG_DEFAULT}/${path}`))
+  }
 }
 
 /*
@@ -999,8 +1033,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [huntNote, setHuntNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
 
   useEffect(() => {
-    fetch(`${CATALOG}/markets.json`)
-      .then(asJson)
+    catalogue('markets.json')
       .then((d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
@@ -1037,8 +1070,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setLayerStyle({})
     setLayerColorBy({})
     setError(null)
-    fetch(`${CATALOG}/${active}/meta.json`)
-      .then(asJson)
+    catalogue(`${active}/meta.json`)
       .then(setMeta)
       .catch(() => {
         bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not load that market.')))
