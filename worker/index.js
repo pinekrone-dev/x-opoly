@@ -136,7 +136,21 @@ export default {
       return Response.redirect(url.toString(), 301)
     }
 
-    if (url.pathname.startsWith('/api/')) {
+    /*
+     * What the app answers, as opposed to what the asset binding answers.
+     *
+     * This was `/api/` alone, and the catalogue route added beside the API
+     * went to the static assets instead — which serve index.html for anything
+     * they do not recognise, so `/catalog/markets.json` came back as the HTML
+     * shell with a 200 on it. Nothing failed; the browser simply tried to
+     * parse a web page as a market list and found no counties in it.
+     *
+     * Worth naming because the tests could not see it: the Node server hands
+     * every path to the same app, so a route registered there works there. It
+     * is only here that the two runtimes disagree about who answers, and only
+     * here that a route can exist and never be reached.
+     */
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/')) {
       if (env.DB) {
         // Let the request through even if migrating failed: routes that do not
         // touch the database still work, and the ones that do will report the
