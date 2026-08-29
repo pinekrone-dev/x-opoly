@@ -731,6 +731,23 @@ try {
     }
   })
 
+  /*
+   * The parcel tiles, counted per market.
+   *
+   * A basemap paints whether or not a single parcel arrives, so "the canvas
+   * has pixels" is not evidence that the map has the county on it. What a
+   * person means by the map not loading is usually this: streets, no parcels.
+   * pmtiles are read by HTTP range request, so a market that drew anything
+   * leaves a trail of 200s and 206s here and one that drew nothing leaves
+   * none.
+   */
+  const tiles = { ok: 0, bad: [] }
+  page.on('response', (response) => {
+    if (!/\.pmtiles/.test(response.url())) return
+    if (response.status() === 200 || response.status() === 206) tiles.ok += 1
+    else tiles.bad.push(`${response.status()} ${response.url().split('/').pop()}`)
+  })
+
   const gis = await page.goto(`${BASE}/gis`, { waitUntil: 'domcontentloaded', timeout: 45000 })
   check('GET /gis serves the app', gis?.status() === 200, `status ${gis?.status()}`)
 
@@ -759,7 +776,13 @@ try {
      * reach differently.
      */
     const catalogue = await page.evaluate(async () => {
-      const bases = ['https://data.realestateaistudio.com', '/catalog']
+      // Only the address the app actually reads. The first version of this
+      // also asserted on the same-origin /catalog path, which serves the SPA
+      // shell because nothing routes it — a true observation about a path
+      // this view never asks for, reported as a failure of the view. A check
+      // that fails on something the product does not do is noise, and worse
+      // than noise here, because a red gate stops deploys.
+      const bases = ['https://data.realestateaistudio.com']
       const out = []
       for (const base of bases) {
         try {
@@ -806,6 +829,7 @@ try {
        * cannot tell the two apart.
        */
       for (const slug of options) {
+        const before = tiles.ok
         await page.selectOption('#gis-market', slug).catch(() => undefined)
         // The market's meta, its server status and its first search, in that
         // order. Generous because a cold Worker adds a second on the first ask.
@@ -817,7 +841,11 @@ try {
         check(`${slug}: nothing on the panel reports a failure`,
           !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
           text.slice(0, 240))
+        check(`${slug}: the parcel tiles were read`, tiles.ok > before,
+          `${tiles.ok - before} pmtiles responses`)
       }
+      check('no parcel tile came back an error', tiles.bad.length === 0,
+        tiles.bad.slice(0, 4).join(' | '))
     }
   }
 
