@@ -5,6 +5,7 @@ import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
+import LiteMap from './LiteMap'
 
 /*
  * The map engine.
@@ -51,6 +52,28 @@ const PARCEL_SOURCE = 'parcels'
  * Capped per page load, silent on failure, and never allowed to throw:
  * diagnosis must not break the thing it is diagnosing.
  */
+/*
+ * Whether this browser should skip WebGL entirely and open the basic map.
+ *
+ * Two ways in: the machine has no WebGL at all — acceleration off, a policy,
+ * a driver denylist — or a person (or a previous failure) chose the basic
+ * map and the choice was kept. The probe is cheap and runs once per page.
+ */
+function liteWanted(): boolean {
+  try {
+    if (window.localStorage.getItem('lq-lite') === '1') return true
+  } catch {
+    /* storage denied says nothing about the GPU */
+  }
+  try {
+    const probe = document.createElement('canvas')
+    if (!probe.getContext('webgl2') && !probe.getContext('webgl')) return true
+  } catch {
+    return true
+  }
+  return false
+}
+
 let tattled = 0
 function tattle(kind: string, detail: Record<string, unknown> = {}) {
   if (tattled >= 5) return
@@ -575,6 +598,37 @@ export default function MapCanvas({
   const autoTries = useRef(0)
   /** How far down the memory ladder this session has had to go. */
   const gpuLevel = useRef(0)
+  /*
+   * The basic-map tier — the answer to "this has to work for everyone".
+   *
+   * A person whose WebGL is broken did nothing wrong and cannot be asked to
+   * fix a driver. When the full map cannot run — no WebGL at all, a context
+   * the browser keeps taking away, a start that hangs twice — the map drops
+   * to Leaflet and Canvas 2D rather than presenting a grey rectangle with
+   * advice. The choice is remembered, and reversible from the banner.
+   */
+  const [lite, setLite] = useState(liteWanted)
+  const enterLite = (why: string) => {
+    tattle('lite-mode-entered', { why })
+    try {
+      window.localStorage.setItem('lq-lite', '1')
+    } catch {
+      /* the session still gets the basic map; only the memory of it is lost */
+    }
+    setLite(true)
+  }
+  const exitLite = () => {
+    try {
+      window.localStorage.removeItem('lq-lite')
+    } catch {
+      /* nothing to forget */
+    }
+    autoTries.current = 0
+    gpuLevel.current = 0
+    setLite(false)
+    setAttempt((n) => n + 1)
+  }
+
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
@@ -665,7 +719,9 @@ export default function MapCanvas({
   // Create the map once; React never re-renders into this subtree.
   useEffect(() => {
     if (!container.current || map.current) return
+    if (lite) return
     const host = container.current
+    if (!host) return
 
     const home = homeView()
     /*
@@ -807,11 +863,10 @@ export default function MapCanvas({
         // Only said once every step has been tried. At this point the machine
         // genuinely has no room, and it is worth saying so plainly rather
         // than leaving a grey rectangle unexplained.
-        setEngineNote(
-          'This browser is out of GPU memory even with the map at its lowest quality. ' +
-            'Closing other tabs or windows frees it up.',
-        )
         tattle('gave-up', { gpuLevel: gpuLevel.current })
+        // Every rung of the memory ladder has been tried; the machine has no
+        // room for a WebGL map today. The basic map needs none.
+        enterLite('context-lost-repeatedly')
       }
     }
     const onRestored = rebuild
@@ -860,6 +915,11 @@ export default function MapCanvas({
       // The hang is the one failure with no event to hook, so it is reported
       // here, at the moment it is declared rather than suspected.
       tattle('start-hung', { startupError: startupError.current, attempt: attempt })
+      // One silent retry has already happened. An engine that hangs twice on
+      // this machine is not going to start on the third ask, and the person
+      // watching the grey grid needs a map, not a diagnosis.
+      enterLite('start-hung-twice')
+      return
       setEngineNote(
         startupError.current
           ? `The map engine stopped while starting — ${startupError.current}`
@@ -943,7 +1003,7 @@ export default function MapCanvas({
       markers.current.clear()
       labels.current.clear()
     }
-  }, [attempt])
+  }, [attempt, lite])
 
   // The basemap is its own source and layer so it can be swapped without
   // tearing down the map, which would drop every pin and reset the viewport.
@@ -1957,6 +2017,32 @@ export default function MapCanvas({
     } catch {
       /* a viewer with storage disabled just loses the preference */
     }
+  }
+
+  /*
+   * The basic tier takes over the whole component, not a corner of it.
+   *
+   * Everything above this line — recovery, budgets, beacons — exists to keep
+   * the WebGL map alive. When the machine cannot run one, none of it
+   * applies, and rendering the full chrome around a dead canvas is exactly
+   * the grey rectangle this replaces. The panels around the map are
+   * untouched either way: they were always server-driven.
+   */
+  if (lite) {
+    return (
+      <LiteMap
+        tiles={active}
+        properties={properties}
+        stages={stages}
+        view={view}
+        parcelsUrl={parcels?.url ?? null}
+        selectedParcelId={parcels?.selectedParcelId ?? null}
+        onSelect={onSelect}
+        onSelectParcel={parcels?.onSelectParcel}
+        onViewChange={onViewChange}
+        onExit={exitLite}
+      />
+    )
   }
 
   return (

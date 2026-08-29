@@ -8,6 +8,11 @@
  */
 
 import { Hono } from 'hono'
+import { VectorTile } from '@mapbox/vector-tile'
+// pbf v5 split the old default export into reader and writer; only reading
+// happens here, and @mapbox/vector-tile v3 is built against this interface.
+import { PbfReader } from 'pbf'
+import { FetchSource, PMTiles } from 'pmtiles'
 
 import { BUILD_COMMIT } from './lib/build-info.js'
 import { nowIso } from './lib/ids.js'
@@ -1605,9 +1610,94 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
   const CATALOG_ORIGIN = (env.PARCEL_CATALOG_ORIGIN || 'https://data.realestateaistudio.com')
     .replace(/\/$/, '')
 
+  /*
+   * Open tile archives, kept for the life of the isolate.
+   *
+   * A PMTiles instance carries the archive's decoded directory, and the
+   * directory is the expensive part: without this cache every lite tile
+   * would re-read it from R2 before reading the tile itself. Bounded, since
+   * an isolate serves a handful of markets, not an unbounded set.
+   */
+  const archives = new Map()
+  const archiveFor = (key) => {
+    if (archives.has(key)) return archives.get(key)
+    const bucket = env.PROSPECTOR_DATA
+    const source =
+      bucket && typeof bucket.get === 'function'
+        ? {
+            getKey: () => key,
+            getBytes: async (offset, length) => {
+              const object = await bucket.get(key, { range: { offset, length } })
+              if (!object) throw new Error(`no archive at ${key}`)
+              return { data: await object.arrayBuffer() }
+            },
+          }
+        : new FetchSource(`${CATALOG_ORIGIN}/${key}`)
+    const archive = new PMTiles(source)
+    if (archives.size > 16) archives.clear()
+    archives.set(key, archive)
+    return archive
+  }
+
   app.get('/catalog/*', async (c) => {
     const path = new URL(c.req.url).pathname.replace(/^\/catalog\//, '')
     const parts = path.split('/')
+
+    /*
+     * The lite map's tiles: the same parcel archive, served one tile at a
+     * time as plain GeoJSON.
+     *
+     * This exists so the map can work on a machine with no usable GPU at
+     * all. The WebGL map reads the archive itself and hands binary tiles to
+     * the graphics card; a browser whose WebGL is broken, disabled, or
+     * software-rendered gets nothing from that path — not even the basemap,
+     * since the whole map draws through one canvas. The lite path instead
+     * asks this route for one tile's worth of parcels as GeoJSON and draws
+     * them with Canvas 2D, which every browser has.
+     *
+     * The decode runs here rather than in the browser on purpose. The point
+     * of the tier is to ask nothing of the weak machine: the server holds
+     * the directory, seeks the tile, and unpacks the protobuf, and the
+     * client receives coordinates it can draw with no library at all.
+     *
+     *   /catalog/<market>/lite/<z>/<x>/<y>.json
+     */
+    if (parts.length === 5 && parts[1] === 'lite' && /^[a-z0-9-]{2,40}$/.test(parts[0])) {
+      const z = Number(parts[2])
+      const x = Number(parts[3])
+      const y = Number(parts[4].replace(/\.json$/, ''))
+      // The parcel pyramid runs zoom 11 to 16; outside it there is no tile
+      // to serve, and answering anything but 404 would invent one.
+      if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)) {
+        return c.json({ error: 'Tiles are addressed as z/x/y integers.' }, 400)
+      }
+      if (z < 11 || z > 16 || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) {
+        return c.json({ error: 'Outside the tile pyramid.' }, 404)
+      }
+      try {
+        const tile = await archiveFor(`${parts[0]}/parcels.pmtiles`).getZxy(z, x, y)
+        const features = []
+        if (tile?.data) {
+          const decoded = new VectorTile(new PbfReader(new Uint8Array(tile.data)))
+          const layer = decoded.layers.parcels
+          for (let i = 0; layer && i < layer.length; i += 1) {
+            const feature = layer.feature(i)
+            const shaped = feature.toGeoJSON(x, y, z)
+            if (feature.id != null) shaped.id = feature.id
+            features.push(shaped)
+          }
+        }
+        return new Response(JSON.stringify({ type: 'FeatureCollection', features }), {
+          headers: {
+            'content-type': 'application/geo+json',
+            'cache-control': 'public, max-age=86400',
+            'access-control-allow-origin': '*',
+          },
+        })
+      } catch (cause) {
+        return c.json({ error: `No tiles for that market: ${cause.message}` }, 404)
+      }
+    }
 
     let key = null
     let contentType = null

@@ -910,6 +910,33 @@ try {
         tiles.bad.slice(0, 4).join(' | '))
 
       /*
+       * The no-GPU path's server half, against the real archive.
+       *
+       * The basic map asks the server for one tile's worth of parcels as
+       * GeoJSON instead of drawing the archive through WebGL. A browser
+       * falls back to it precisely when everything else has failed, so this
+       * is the one endpoint that must not be discovered broken at that
+       * moment. Austin's downtown tile has thousands of parcels; zero
+       * features here means the decode broke, whatever the status code says.
+       */
+      const lite = await page.evaluate(async () => {
+        const lat = 30.2672, lng = -97.7431, z = 14
+        const x = Math.floor(((lng + 180) / 360) * 2 ** z)
+        const rad = (lat * Math.PI) / 180
+        const y = Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** z)
+        try {
+          const res = await fetch(`/catalog/austin-tx/lite/${z}/${x}/${y}.json`)
+          const doc = res.ok ? await res.json() : null
+          return { status: res.status, features: doc?.features?.length ?? 0 }
+        } catch (error) {
+          return { status: 0, features: 0, error: String(error).slice(0, 120) }
+        }
+      })
+      check('the basic map can get parcels with no GPU at all',
+        lite.status === 200 && lite.features > 0,
+        `status ${lite.status}, ${lite.features} features ${lite.error ?? ''}`)
+
+      /*
        * A position left over from somewhere else.
        *
        * The map keeps its view in the URL so a refresh returns you to the

@@ -133,6 +133,30 @@ describe('the catalogue route', () => {
     assert.equal(res.headers.get('accept-ranges'), 'bytes')
   })
 
+  /*
+   * The lite map's tiles — the no-GPU path's server half.
+   *
+   * What is pinned here is the confinement: an address outside the pyramid
+   * or off the grid is refused before any archive is touched, because a
+   * request invented past the pyramid's edge would read as a broken source
+   * to the one browser that is already having the worst day of the fleet.
+   */
+  test('a lite tile outside the pyramid is refused without a fetch', async () => {
+    asked.length = 0
+    assert.equal((await get('/catalog/austin-tx/lite/10/1/1.json')).status, 404)
+    assert.equal((await get('/catalog/austin-tx/lite/17/1/1.json')).status, 404)
+    assert.equal((await get('/catalog/austin-tx/lite/13/-1/1.json')).status, 404)
+    assert.equal((await get('/catalog/austin-tx/lite/13/999999/1.json')).status, 404)
+    assert.deepEqual(asked, [], 'nothing outside the pyramid may reach the archive')
+  })
+
+  test('a lite tile address must be integers', async () => {
+    asked.length = 0
+    assert.equal((await get('/catalog/austin-tx/lite/abc/1/1.json')).status, 400)
+    assert.equal((await get('/catalog/austin-tx/lite/13/1.5/1.json')).status, 400)
+    assert.deepEqual(asked, [])
+  })
+
   test('a refused address never becomes a request', async () => {
     asked.length = 0
     await get('/catalog/austin-tx/secrets.json')
