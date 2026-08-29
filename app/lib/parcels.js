@@ -80,12 +80,19 @@ const INSERT_COLUMNS = [
 /*
  * How many rows ride in one INSERT.
  *
- * SQLite counts every bound value against one statement's limit, so this is
- * rows x 17 columns and has to stay well under it on both runtimes. Fifty is
- * 850 bindings — comfortably inside, and large enough that the per-statement
- * overhead stops mattering.
+ * Not bounded by the parameter limit any more, and that is the point. The
+ * first version sent one placeholder per column per row — fifty rows was 850
+ * bindings, which I reasoned was "comfortably inside" SQLite's 999. D1's limit
+ * is 100, not 999, and every publish failed with "too many SQL variables".
+ *
+ * Tuning the number down to five rows would have obeyed the limit and made
+ * Austin seventy-five thousand statements. So the rows travel as one JSON
+ * parameter instead and SQLite unpacks them with json_each: two bindings per
+ * statement regardless of how many rows it carries. What is left to size is
+ * the JSON itself, which is bytes rather than an undocumented count, and 250
+ * rows lands around 60 KB — well inside the 100 KB a statement may be.
  */
-const ROWS_PER_STATEMENT = 50
+const ROWS_PER_STATEMENT = 250
 
 /** Statements per batch. D1 commits a batch as one transaction. */
 const STATEMENTS_PER_BATCH = 10
@@ -190,16 +197,25 @@ export async function putParcels(db, market, raws) {
   const rows = raws.map((raw) => parcelRow(market, raw)).filter(Boolean)
   if (!rows.length) return 0
 
-  const placeholder = `(${INSERT_COLUMNS.map(() => '?').join(',')})`
+  /*
+   * One statement, two bindings, any number of rows.
+   *
+   * `market` is the same for every row in the call, so it binds once; the rest
+   * arrive as a JSON array of arrays and json_each walks it. The column list
+   * and the json_extract list are generated from the same array, so they
+   * cannot drift apart — which matters, because a silent off-by-one here would
+   * file every owner name under the wrong column and nothing would complain.
+   */
+  const rest = INSERT_COLUMNS.slice(1)
+  const extracts = rest.map((_, at) => `json_extract(value,'$[${at}]')`).join(',')
+  const sql =
+    `INSERT OR REPLACE INTO parcels (${INSERT_COLUMNS.join(',')}) ` +
+    `SELECT ?1,${extracts} FROM json_each(?2)`
+
   const statements = []
   for (let i = 0; i < rows.length; i += ROWS_PER_STATEMENT) {
     const slice = rows.slice(i, i + ROWS_PER_STATEMENT)
-    statements.push([
-      `INSERT OR REPLACE INTO parcels (${INSERT_COLUMNS.join(',')}) VALUES ${slice
-        .map(() => placeholder)
-        .join(',')}`,
-      slice.flat(),
-    ])
+    statements.push([sql, [market, JSON.stringify(slice.map((row) => row.slice(1)))]])
   }
   for (let i = 0; i < statements.length; i += STATEMENTS_PER_BATCH) {
     await db.batch(statements.slice(i, i + STATEMENTS_PER_BATCH))
