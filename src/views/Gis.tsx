@@ -183,6 +183,18 @@ interface PublishedLayer {
   kind: 'point' | 'polygon' | 'line'
   color: string
   file: string
+  /*
+   * The same layer as a tile archive, when the market has been tiled.
+   *
+   * `file` stays beside it so a market that has not been tiled keeps working
+   * untouched — markets migrate one at a time, and both paths stay live. When
+   * this is set the GeoJSON is never fetched at all, which is the whole point:
+   * Austin's zoning is 41 MB downloaded and parsed before one district draws.
+   */
+  tiles?: string
+  sourceLayer?: string
+  minzoom?: number
+  maxzoom?: number
   count?: number
   /** How many the source holds here, when it would say. */
   total?: number | null
@@ -1196,6 +1208,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   useEffect(() => {
     if (!active) return
     for (const layer of published) {
+      // A tiled layer has nothing to download. The map reads the archive by
+      // range as it draws, so fetching the county here would reintroduce the
+      // exact cost the tiles exist to remove.
+      if (layer.tiles) continue
       if (!layerOn[layer.id] || layerData[layer.id] || layerBusy[layer.id]) continue
       setLayerBusy((busy) => ({ ...busy, [layer.id]: true }))
       fetch(`${CATALOG}/${active}/${layer.file}`)
@@ -1471,15 +1487,27 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     return out
   }, [layerCategories, layerColorBy])
 
-  /** What the map should draw: every layer switched on, with its geometry. */
+  /**
+   * What the map should draw: every layer switched on, with its geometry.
+   *
+   * A tiled layer qualifies as soon as it is switched on, because there is
+   * nothing to wait for — the archive is read as the map draws. A layer that
+   * is still GeoJSON waits for its download, as it always did.
+   */
   const extras = useMemo(
     () =>
       shownLayers
-        .filter((layer) => layerOn[layer.id] && shownData[layer.id])
+        .filter((layer) => layerOn[layer.id] && (layer.tiles ? true : shownData[layer.id]))
         .map((layer) => ({
           id: layer.id,
           kind: layer.kind,
-          data: shownData[layer.id],
+          data: layer.tiles ? null : shownData[layer.id],
+          // Through this origin, like the parcels and for the same reason: a
+          // cross-origin refusal on a tile archive is silent.
+          tiles: layer.tiles ? `${CATALOG}/${active}/${layer.tiles}` : null,
+          sourceLayer: layer.sourceLayer ?? layer.id,
+          minzoom: layer.minzoom ?? null,
+          maxzoom: layer.maxzoom ?? null,
           color: layerStyle[layer.id]?.color ?? layer.color,
           opacity: layerStyle[layer.id]?.opacity ?? 0.7,
           fields: layer.fields,
@@ -1487,7 +1515,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
             : null,
         })),
-    [shownLayers, layerOn, shownData, layerStyle, categoryPaint],
+    [shownLayers, layerOn, shownData, layerStyle, categoryPaint, active],
   )
 
   /*

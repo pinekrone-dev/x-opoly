@@ -1554,6 +1554,21 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
    */
   const INGEST_LAYER_FILE = /^layer-[a-z0-9-]{1,40}\.geojson$/
 
+  /*
+   * The same layers, as tile archives.
+   *
+   * A published overlay used to be one GeoJSON file fetched whole — Austin's
+   * zoning is 41 MB of it, parsed into an object graph several times that size
+   * before a single district appears. Tiled, the same layer is read by range
+   * like the parcels are, and a viewport costs hundreds of kilobytes.
+   *
+   * Named by slug rather than with the `layer-` prefix, because the tiles are
+   * cut alongside `parcels.pmtiles` and share its naming. The bound is the
+   * same in either case: a slug and a fixed extension, so nothing can address
+   * a file the pipeline could not have written or climb out of its county.
+   */
+  const INGEST_TILE_FILE = /^[a-z0-9-]{1,40}\.pmtiles$/
+
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
 
@@ -1597,6 +1612,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       const file = parts[1]
       if (file in INGEST_FILES) contentType = INGEST_FILES[file]
       else if (INGEST_LAYER_FILE.test(file)) contentType = 'application/geo+json'
+      else if (INGEST_TILE_FILE.test(file)) contentType = 'application/octet-stream'
       if (contentType) key = `${parts[0]}/${file}`
     }
     if (!key) return c.json({ error: 'No such catalogue file.' }, 404)
@@ -1694,14 +1710,19 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       if (!/^[a-z0-9-]{2,40}$/.test(market)) {
         return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
       }
-      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file)) {
+      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file) && !INGEST_TILE_FILE.test(file)) {
         return c.json(
-          { error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, or a layer-<name>.geojson.` },
+          {
+            error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, ` +
+              'a layer-<name>.geojson, or a <name>.pmtiles.',
+          },
           400,
         )
       }
       key = `${market}/${file}`
-      contentType = INGEST_FILES[file] ?? 'application/geo+json'
+      contentType =
+        INGEST_FILES[file] ??
+        (INGEST_TILE_FILE.test(file) ? 'application/octet-stream' : 'application/geo+json')
     }
     const action = String(c.req.query('action') || 'put')
 

@@ -210,7 +210,26 @@ const VALUE_RAMP = ['#EDE7FA', '#D6C6F3', '#BBA0EA', '#9D77DD', '#7F4FCB', '#603
 export interface ExtraLayer {
   id: string
   kind: 'point' | 'polygon' | 'line'
-  data: GeoJSON.FeatureCollection
+  /**
+   * The whole layer as GeoJSON, for a market that has not been tiled yet.
+   *
+   * This is the expensive path and it is on its way out: Austin's zoning was
+   * 41 MB of JSON parsed into an object graph several times that size before
+   * a single district could be drawn. Null when `tiles` is set, which is the
+   * point of `tiles` being set.
+   */
+  data?: GeoJSON.FeatureCollection | null
+  /**
+   * The layer as a tile archive, read by range like the parcels are.
+   *
+   * A viewport's worth of tiles is hundreds of kilobytes against tens of
+   * megabytes for the county, and nothing outside the view is ever decoded.
+   */
+  tiles?: string | null
+  /** The layer's name inside the archive. Required for tiles, absent without. */
+  sourceLayer?: string | null
+  minzoom?: number | null
+  maxzoom?: number | null
   color: string
   opacity: number
   /** Property names worth showing when one is clicked, in reading order. */
@@ -1192,19 +1211,43 @@ export default function MapCanvas({
 
     for (const layer of wanted) {
       const source = `x-${layer.id}`
-      const existing = instance.getSource(source) as maplibregl.GeoJSONSource | undefined
+      const existing = instance.getSource(source)
       if (existing) {
-        existing.setData(layer.data)
+        // Only a GeoJSON source can be handed new data. A tiled one is read
+        // from the archive and has nothing to be given.
+        if (!layer.tiles) (existing as maplibregl.GeoJSONSource).setData(layer.data as GeoJSON.FeatureCollection)
       } else {
-        instance.addSource(source, { type: 'geojson', data: layer.data })
+        if (layer.tiles) {
+          registerPmtiles()
+          instance.addSource(source, {
+            type: 'vector',
+            url: `pmtiles://${layer.tiles}`,
+            ...(layer.minzoom == null ? {} : { minzoom: layer.minzoom }),
+            // Past this MapLibre overzooms the deepest tile, which is what
+            // should happen: the geometry is already as detailed as it gets.
+            ...(layer.maxzoom == null ? {} : { maxzoom: layer.maxzoom }),
+          })
+        } else {
+          instance.addSource(source, { type: 'geojson', data: layer.data as GeoJSON.FeatureCollection })
+        }
+        /*
+         * `source-layer` names the layer inside a tile archive, and is the
+         * single easiest thing to get wrong here: a vector layer without it,
+         * or a GeoJSON layer with it, draws nothing and reports no error. An
+         * empty map with a clean console is the whole symptom.
+         */
+        const within = layer.tiles && layer.sourceLayer ? { 'source-layer': layer.sourceLayer } : {}
+        // Below the zoom the archive carries, a tiled layer has nothing to
+        // draw and should not ask for tiles that do not exist.
+        const from = layer.tiles && layer.minzoom != null ? { minzoom: layer.minzoom } : {}
         const specs: maplibregl.LayerSpecification[] =
           layer.kind === 'point'
-            ? [{ id: `x-${layer.id}-point`, type: 'circle', source, paint: {} }]
+            ? [{ id: `x-${layer.id}-point`, type: 'circle', source, ...within, ...from, paint: {} }]
             : layer.kind === 'line'
-              ? [{ id: `x-${layer.id}-line`, type: 'line', source, paint: {} }]
+              ? [{ id: `x-${layer.id}-line`, type: 'line', source, ...within, ...from, paint: {} }]
               : [
-                  { id: `x-${layer.id}-fill`, type: 'fill', source, paint: {} },
-                  { id: `x-${layer.id}-line`, type: 'line', source, paint: {} },
+                  { id: `x-${layer.id}-fill`, type: 'fill', source, ...within, ...from, paint: {} },
+                  { id: `x-${layer.id}-line`, type: 'line', source, ...within, ...from, paint: {} },
                 ]
         for (const spec of specs) instance.addLayer(spec, insertBefore(spec.id))
       }
