@@ -845,11 +845,32 @@ try {
        * loop a real change of market, which is the thing being tested.
        */
       for (const slug of [...options.slice(1), options[0]]) {
-        const before = tiles.ok
         await page.selectOption('#gis-market', slug).catch(() => undefined)
         // The market's meta, its server status and its first search, in that
         // order. Generous because a cold Worker adds a second on the first ask.
         await page.waitForTimeout(7000)
+
+        /*
+         * In past the zoom where parcels are drawn.
+         *
+         * A county opens at about zoom 12 and the parcels are gated at 13,
+         * because one zoom-11 tile over a large county is a million polygons
+         * for a grey smear. So counting tiles at the opening view counts
+         * zero, correctly, and says nothing about whether the county draws.
+         *
+         * The map keeps its position in the address bar and moves when that
+         * changes, which is a way to ask it to go somewhere without needing
+         * a handle on it. Same place, closer in.
+         */
+        const at = /^#([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)/.exec(await page.evaluate(() => window.location.hash))
+        if (at) {
+          await page.evaluate((to) => { window.location.hash = to }, `#15/${at[2]}/${at[3]}`)
+          await page.waitForTimeout(4000)
+        }
+        const before = tiles.ok
+        await page.evaluate((to) => { window.location.hash = to },
+          at ? `#15.5/${at[2]}/${at[3]}` : '#15.5/30.27/-97.74')
+        await page.waitForTimeout(5000)
         const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
         const count = text.match(/([\d,]{4,})\s*parcels/i)
         check(`${slug}: the panel states a parcel count`, count != null,
@@ -857,7 +878,7 @@ try {
         check(`${slug}: nothing on the panel reports a failure`,
           !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
           text.slice(0, 240))
-        check(`${slug}: the parcel tiles were read`, tiles.ok > before,
+        check(`${slug}: the parcel tiles are read once past the zoom gate`, tiles.ok > before,
           `${tiles.ok - before} pmtiles responses`)
       }
       check('no parcel tile came back an error', tiles.bad.length === 0,
