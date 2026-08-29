@@ -853,24 +853,23 @@ try {
         /*
          * In past the zoom where parcels are drawn.
          *
-         * A county opens at about zoom 12 and the parcels are gated at 13,
-         * because one zoom-11 tile over a large county is a million polygons
-         * for a grey smear. So counting tiles at the opening view counts
+         * A county opens at the gate itself, and a tile is only fetched once
+         * the view moves inside it — so counting at the opening view counts
          * zero, correctly, and says nothing about whether the county draws.
          *
-         * The map keeps its position in the address bar and moves when that
-         * changes, which is a way to ask it to go somewhere without needing
-         * a handle on it. Same place, closer in.
+         * Zoomed with the map's own control rather than by writing the
+         * address bar. Writing the hash looked like the tidier way to ask and
+         * moved nothing at all: every market reported no tiles, which read as
+         * eight broken counties rather than one instruction the map never
+         * received. The control is what the survey map's own check already
+         * uses, and that one has been passing all along.
          */
-        const at = /^#([\d.]+)\/(-?[\d.]+)\/(-?[\d.]+)/.exec(await page.evaluate(() => window.location.hash))
-        if (at) {
-          await page.evaluate((to) => { window.location.hash = to }, `#15/${at[2]}/${at[3]}`)
-          await page.waitForTimeout(4000)
-        }
         const before = tiles.ok
-        await page.evaluate((to) => { window.location.hash = to },
-          at ? `#15.5/${at[2]}/${at[3]}` : '#15.5/30.27/-97.74')
-        await page.waitForTimeout(5000)
+        for (let step = 0; step < 3; step += 1) {
+          await page.click('.maplibregl-ctrl-zoom-in', { timeout: 5000 }).catch(() => undefined)
+          await page.waitForTimeout(1200)
+        }
+        await page.waitForTimeout(4000)
         const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
         const count = text.match(/([\d,]{4,})\s*parcels/i)
         check(`${slug}: the panel states a parcel count`, count != null,
