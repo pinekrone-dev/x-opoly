@@ -749,14 +749,76 @@ try {
     }))
     check('the GIS map has real size', size.w > 400 && size.h > 300, `${size.w}x${size.h}`)
 
-    const gisText = (await page.textContent('body')) ?? ''
-    check('the market panel is not stuck loading',
-      !/Loading parcels…|Could not load that market/.test(gisText),
-      gisText.slice(0, 300))
-    // The count is the proof the server answered: it comes from the sealed
-    // market rather than from anything the browser downloaded.
-    check('the panel states a parcel count', /[\d,]{3,}\s*(parcels|of)/i.test(gisText),
-      gisText.replace(/\s+/g, ' ').slice(0, 300))
+    /*
+     * The catalogue, asked for from inside the page.
+     *
+     * Every market in the picker comes from this one file, so if it does not
+     * answer as JSON then no market loads and the failure looks like "the map
+     * is broken" rather than "one file is missing". It has to be read from
+     * the page because it is served from another origin that a runner may
+     * reach differently.
+     */
+    const catalogue = await page.evaluate(async () => {
+      const bases = ['https://data.realestateaistudio.com', '/catalog']
+      const out = []
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}/markets.json`, { cache: 'no-store' })
+          const body = await res.text()
+          let slugs = null
+          try {
+            slugs = (JSON.parse(body).markets || []).map((m) => `${m.slug}:${m.status}`)
+          } catch { slugs = null }
+          out.push({ base, status: res.status, type: res.headers.get('content-type') || '',
+                     slugs, head: slugs ? '' : body.slice(0, 120) })
+        } catch (error) {
+          out.push({ base, status: 0, type: '', slugs: null, head: String(error).slice(0, 120) })
+        }
+      }
+      return out
+    })
+    for (const answer of catalogue) {
+      check(`the market catalogue answers as JSON from ${answer.base}`,
+        answer.status === 200 && Array.isArray(answer.slugs) && answer.slugs.length > 0,
+        `status ${answer.status} ${answer.type} ${answer.slugs ? answer.slugs.join(' ') : answer.head}`)
+    }
+
+    // The onboarding tour sits over the panel on a workspace that has never
+    // chosen a county, and a click that lands on it is not a click on the map.
+    for (const label of ['Skip', 'Done']) {
+      await page.click(`button:has-text("${label}")`, { timeout: 2500 }).catch(() => undefined)
+    }
+    await page.click('[data-tour="layers"], text=Layers', { timeout: 5000 }).catch(() => undefined)
+    await page.waitForTimeout(600)
+
+    const picker = await page.$('#gis-market')
+    check('the market picker is on the panel', picker != null)
+    if (picker) {
+      const options = await page.$$eval('#gis-market option', (nodes) =>
+        nodes.map((n) => n.value).filter(Boolean))
+      check('the picker lists the published markets', options.length > 0, options.join(' '))
+
+      /*
+       * Every market, not just the first.
+       *
+       * "None of them load" is a different fault from "one of them loads",
+       * and a test that only ever opens the market that happens to sort first
+       * cannot tell the two apart.
+       */
+      for (const slug of options) {
+        await page.selectOption('#gis-market', slug).catch(() => undefined)
+        // The market's meta, its server status and its first search, in that
+        // order. Generous because a cold Worker adds a second on the first ask.
+        await page.waitForTimeout(7000)
+        const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
+        const count = text.match(/([\d,]{4,})\s*parcels/i)
+        check(`${slug}: the panel states a parcel count`, count != null,
+          count ? count[1] : text.slice(0, 240))
+        check(`${slug}: nothing on the panel reports a failure`,
+          !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
+          text.slice(0, 240))
+      }
+    }
   }
 
   check('no uncaught errors in the GIS', gisErrors.length === 0, gisErrors.slice(0, 3).join(' | '))
