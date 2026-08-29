@@ -17,16 +17,28 @@ const temp = useTempData()
 let app
 /** Every address the route reached for, so the key mapping can be read back. */
 const asked = []
+/** And every Range it carried, which is what makes the tiles readable. */
+const ranges = []
 const realFetch = globalThis.fetch
 
 before(async () => {
   // No bucket here, so the route fetches the public file through — the path a
   // deployment without the binding takes. Standing in for that origin is what
   // turns "did not 404" into "asked for exactly this file".
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, init = {}) => {
     asked.push(String(url))
-    return new Response('{"markets":[]}', {
-      status: 200, headers: { 'content-type': 'application/json' },
+    const range = init.headers?.range
+    if (!range) {
+      return new Response('{"markets":[]}', {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    }
+    ranges.push(range)
+    const [, from, to] = /^bytes=(\d+)-(\d*)$/.exec(range)
+    const end = to === '' ? 999 : Number(to)
+    return new Response('x'.repeat(end - Number(from) + 1), {
+      status: 206,
+      headers: { 'content-range': `bytes ${from}-${end}/1000` },
     })
   }
   app = await createServer({
@@ -82,6 +94,43 @@ describe('the catalogue route', () => {
     asked.length = 0
     assert.equal((await get('/catalog/owners.json')).status, 404)
     assert.deepEqual(asked, [], 'a refused name never reaches the origin')
+  })
+
+  /*
+   * Byte ranges, because a pmtiles archive is read that way.
+   *
+   * The map seeks a directory and then the one tile under the viewport — a
+   * few kilobytes out of hundreds of megabytes. A route that ignored Range
+   * and answered with the whole file would still look correct in a browser,
+   * and would turn every map open back into downloading a county, which is
+   * the download this whole change exists to remove.
+   */
+  test('a range is carried through and answered as one', async () => {
+    asked.length = 0
+    ranges.length = 0
+    const res = await app.fetch(new Request('http://localhost/catalog/austin-tx/parcels.pmtiles', {
+      headers: { range: 'bytes=100-199' },
+    }))
+    assert.equal(res.status, 206, 'a ranged ask must not be answered with the whole file')
+    assert.equal(res.headers.get('content-range'), 'bytes 100-199/1000')
+    assert.deepEqual(ranges, ['bytes=100-199'], 'the range reached the origin unchanged')
+  })
+
+  test('an open-ended range is carried through too', async () => {
+    ranges.length = 0
+    const res = await app.fetch(new Request('http://localhost/catalog/austin-tx/parcels.pmtiles', {
+      headers: { range: 'bytes=900-' },
+    }))
+    assert.equal(res.status, 206)
+    assert.deepEqual(ranges, ['bytes=900-'])
+  })
+
+  test('an unranged ask still says it would accept one', async () => {
+    const res = await get('/catalog/austin-tx/parcels.pmtiles')
+    assert.equal(res.status, 200)
+    // A client decides whether to ask for a range by reading this off a plain
+    // response first, so it has to be on every answer rather than only on 206s.
+    assert.equal(res.headers.get('accept-ranges'), 'bytes')
   })
 
   test('a refused address never becomes a request', async () => {

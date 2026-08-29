@@ -43,10 +43,14 @@ import type {
 const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
 
 /*
- * Both hosts are overridable so the map can be looked at from a sandbox that
- * cannot reach the open internet: VITE_PARCEL_CATALOG moves the catalogue,
- * VITE_PARCEL_PROXY rewrites the absolute data host that meta.json hands back.
- * Neither is set in a normal build, so production talks to the real hosts.
+ * One address for everything the pipeline publishes, overridable so the map
+ * can be looked at from a sandbox that cannot reach the open internet.
+ *
+ * There used to be a second knob here that rewrote the absolute data host
+ * meta.json hands back, because the heavy files were fetched from that host
+ * directly. They are not any more — tiles, the index and the details go
+ * through this same origin, which is what removed the cross-origin failure —
+ * so the knob had nothing left to rewrite.
  */
 /*
  * Read from this origin by default.
@@ -65,13 +69,6 @@ const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
  * without that route.
  */
 const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
-const DATA_PROXY = import.meta.env.VITE_PARCEL_PROXY || ''
-
-function viaProxy(url: string): string {
-  if (!DATA_PROXY || !url.startsWith('https://')) return url
-  return url.replace(/^https:\/\/([^/]+)/, `${DATA_PROXY}/$1`)
-}
-
 /** A fetch that treats an error page as the failure it is, not as JSON. */
 const asJson = (r: Response) => {
   if (!r.ok) throw new Error(`${r.status}`)
@@ -1115,7 +1112,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     // out, and starting the download before the answer arrives would defeat it.
     if (!server || server.ready) return
     let cancelled = false
-    fetch(`${viaProxy(meta.heavyBase)}index.json`)
+    fetch(`${CATALOG}/${active}/index.json`)
       .then((r) => r.json())
       .then((data: MarketIndex) => {
         if (cancelled) return
@@ -1709,7 +1706,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     setDetailsLoading(true)
     const market = active
     Promise.all([
-      fetch(`${viaProxy(base)}details.json`).then((r) => r.json()),
+      // Same origin as the rest of the catalogue, for the same reason.
+      fetch(`${CATALOG}/${market}/details.json`).then((r) => r.json()),
       fetch(`${CATALOG}/${market}/codes.json`).then((r) => r.json()).catch(() => ({})),
     ])
       .then(([record, table]) => {
@@ -2700,7 +2698,15 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           parcels={
             meta?.tiles && meta.heavyBase
               ? {
-                  url: `${viaProxy(meta.heavyBase)}parcels.pmtiles`,
+                  // Same origin as everything else. This used to be the
+                  // absolute address out of meta.json, which put the tiles
+                  // behind the data bucket's CORS policy exactly as the
+                  // catalogue was: the map drew streets, no parcels, and said
+                  // "County parcels could not be loaded (Failed to fetch)".
+                  // The route behind this serves byte ranges, which is how a
+                  // pmtiles archive is read — a few kilobytes per tile rather
+                  // than the county.
+                  url: `${CATALOG}/${active}/parcels.pmtiles`,
                   fillVisible: showParcels,
                   colorBy: parcelColorBy === 'auto' ? (meta.colorBy === 'value' ? 'value' : 'group') : parcelColorBy,
                   valueBreaks,

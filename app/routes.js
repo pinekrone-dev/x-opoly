@@ -1601,10 +1601,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     }
     if (!key) return c.json({ error: 'No such catalogue file.' }, 404)
 
-    // A day in the browser, a minute at the edge. The catalogue changes when a
-    // county is rebuilt, which is monthly — but a stale market list is the one
-    // thing that would make this whole route pointless, so the edge re-checks
-    // often and the browser is told it may keep what it has.
+    // A day in the browser. The catalogue changes when a county is rebuilt,
+    // which is monthly, and a tile archive not at all within a build.
     const headers = {
       'content-type': contentType,
       'cache-control': 'public, max-age=86400',
@@ -1612,22 +1610,58 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       // saying so means a preview deployment on another hostname can read it
       // too rather than rediscovering this same failure.
       'access-control-allow-origin': '*',
+      // Announced on every answer, not only on ranged ones: a client decides
+      // whether to ask for a range by looking at a plain response first.
+      'accept-ranges': 'bytes',
     }
+
+    /*
+     * Byte ranges, because the parcel tiles are read that way.
+     *
+     * A pmtiles archive is one file of hundreds of megabytes that the map
+     * reads a few kilobytes of at a time — it seeks a directory, then the one
+     * tile under the viewport. Serving it whole would mean downloading a
+     * county to draw a block, which is the download this entire change exists
+     * to remove. So a Range on the way in has to be a range on the way out,
+     * and anything else silently turns the map back into that download.
+     */
+    const asked = c.req.header('range')
+    const wants = /^bytes=(\d+)-(\d*)$/.exec(asked || '')
+    const offset = wants ? Number(wants[1]) : 0
+    const last = wants && wants[2] !== '' ? Number(wants[2]) : null
 
     const bucket = env.PROSPECTOR_DATA
     if (bucket && typeof bucket.get === 'function') {
-      const object = await bucket.get(key)
+      const object = await bucket.get(
+        key,
+        wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
+      )
       if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
-      return new Response(object.body, { headers })
+      if (!wants) return new Response(object.body, { headers })
+      const served = object.range?.length ?? object.size - offset
+      const end = offset + served - 1
+      return new Response(object.body, {
+        status: 206,
+        headers: { ...headers, 'content-range': `bytes ${offset}-${end}/${object.size}` },
+      })
     }
 
     // No bucket here. Fetch the public file the same way anyone would, except
-    // from the server, where there is no origin to be refused for.
+    // from the server, where there is no origin to be refused for — carrying
+    // the range through so this path reads tiles the same way.
     const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
-      headers: { 'user-agent': 'LandQuotient/1.0 (+https://survey.realestateaistudio.com)' },
+      headers: {
+        'user-agent': 'LandQuotient/1.0 (+https://survey.realestateaistudio.com)',
+        ...(asked ? { range: asked } : {}),
+      },
     })
-    if (!answer.ok) return c.json({ error: 'No such catalogue file.' }, answer.status === 404 ? 404 : 502)
-    return new Response(answer.body, { headers })
+    if (!answer.ok && answer.status !== 206) {
+      return c.json({ error: 'No such catalogue file.' }, answer.status === 404 ? 404 : 502)
+    }
+    const through = { ...headers }
+    const span = answer.headers.get('content-range')
+    if (span) through['content-range'] = span
+    return new Response(answer.body, { status: answer.status, headers: through })
   })
 
   app.post('/api/gis/ingest', async (c) => {
