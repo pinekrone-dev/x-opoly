@@ -864,12 +864,35 @@ try {
          * received. The control is what the survey map's own check already
          * uses, and that one has been passing all along.
          */
+        const zoomOf = async () =>
+          Number(/^#([\d.]+)/.exec(await page.evaluate(() => window.location.hash))?.[1] ?? NaN)
+        const opened = await zoomOf()
         const before = tiles.ok
-        for (let step = 0; step < 3; step += 1) {
-          await page.click('.maplibregl-ctrl-zoom-in', { timeout: 5000 }).catch(() => undefined)
-          await page.waitForTimeout(1200)
+
+        /*
+         * Zoomed with the wheel, over the map itself.
+         *
+         * Two tidier-looking ways failed silently before this one. Writing the
+         * address bar moved nothing. Clicking the zoom control hit the panel
+         * that sits over the top-left corner of this page, and a click that
+         * lands on the wrong element throws, which was being swallowed. Both
+         * reported eight counties failing to draw when nothing had asked them
+         * to draw anything.
+         *
+         * The wheel goes to whatever is under the pointer, so putting the
+         * pointer in the middle of the canvas is unambiguous about who is
+         * being asked.
+         */
+        const box = await (await page.$('canvas.maplibregl-canvas'))?.boundingBox()
+        if (box) {
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+          for (let step = 0; step < 4; step += 1) {
+            await page.mouse.wheel(0, -400)
+            await page.waitForTimeout(900)
+          }
         }
         await page.waitForTimeout(4000)
+        const reached = await zoomOf()
         const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
         const count = text.match(/([\d,]{4,})\s*parcels/i)
         check(`${slug}: the panel states a parcel count`, count != null,
@@ -877,8 +900,11 @@ try {
         check(`${slug}: nothing on the panel reports a failure`,
           !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
           text.slice(0, 240))
+        // The zoom is reported either way. Without it a failure cannot say
+        // whether the county would not draw or was never asked to, and those
+        // are opposite problems that look identical from here.
         check(`${slug}: the parcel tiles are read once past the zoom gate`, tiles.ok > before,
-          `${tiles.ok - before} pmtiles responses`)
+          `${tiles.ok - before} pmtiles responses, zoom ${opened} -> ${reached}`)
       }
       check('no parcel tile came back an error', tiles.bad.length === 0,
         tiles.bad.slice(0, 4).join(' | '))
