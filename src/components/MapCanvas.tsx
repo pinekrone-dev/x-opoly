@@ -37,6 +37,59 @@ function registerPmtiles() {
 const PARCEL_SOURCE = 'parcels'
 
 /*
+ * A failing map reports what it saw, from the browser that actually failed.
+ *
+ * Every diagnosis of "the map isn't loading" so far was made from a clean
+ * headless browser where the map loads — which is how four real faults each
+ * took an extra round to find, and how a machine-level WebGL failure stayed
+ * invisible for a day. So the map now testifies for itself: on a start that
+ * throws, a context that is taken, or a load that hangs, it posts what it
+ * can see — whether WebGL exists here at all, and which renderer answers,
+ * since "SwiftShader" in that field is the whole diagnosis: it means the
+ * browser is software-rendering because GPU acceleration is off or denied.
+ *
+ * Capped per page load, silent on failure, and never allowed to throw:
+ * diagnosis must not break the thing it is diagnosing.
+ */
+let tattled = 0
+function tattle(kind: string, detail: Record<string, unknown> = {}) {
+  if (tattled >= 5) return
+  tattled += 1
+  try {
+    let webgl = false
+    let webgl2 = false
+    let renderer: string | null = null
+    try {
+      const probe = document.createElement('canvas')
+      let gl = probe.getContext('webgl2') as WebGLRenderingContext | null
+      webgl2 = gl != null
+      if (!gl) gl = probe.getContext('webgl') as WebGLRenderingContext | null
+      webgl = gl != null
+      const debug = gl?.getExtension('WEBGL_debug_renderer_info')
+      if (gl && debug) renderer = String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL))
+    } catch {
+      /* a probe that throws is itself the finding: webgl stays false */
+    }
+    fetch('/api/diag/map', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind,
+        ...detail,
+        webgl,
+        webgl2,
+        renderer,
+        dpr: window.devicePixelRatio,
+        page: window.location.pathname,
+        screen: `${window.innerWidth}x${window.innerHeight}`,
+      }),
+    }).catch(() => undefined)
+  } catch {
+    /* never let the report become a second failure */
+  }
+}
+
+/*
  * The zoom below which parcels are not drawn at all.
  *
  * This is the difference between a map that opens and a map that eats the
@@ -636,6 +689,10 @@ export default function MapCanvas({
       setEngineNote(
         `The map engine could not start${cause instanceof Error && cause.message ? ` — ${cause.message}` : ''}.`,
       )
+      tattle('engine-start-failed', {
+        message: cause instanceof Error ? cause.message : String(cause),
+        attempt: attempt,
+      })
       return
     }
 
@@ -740,6 +797,7 @@ export default function MapCanvas({
        * instantly tends to get the new context evicted alongside the old one,
        * before the browser has actually freed anything.
        */
+      tattle('context-lost', { attempt: autoTries.current, gpuLevel: gpuLevel.current })
       if (autoTries.current < GPU_STEPS.length + 1) {
         autoTries.current += 1
         gpuLevel.current = Math.min(gpuLevel.current + 1, GPU_STEPS.length - 1)
@@ -753,6 +811,7 @@ export default function MapCanvas({
           'This browser is out of GPU memory even with the map at its lowest quality. ' +
             'Closing other tabs or windows frees it up.',
         )
+        tattle('gave-up', { gpuLevel: gpuLevel.current })
       }
     }
     const onRestored = rebuild
@@ -798,6 +857,9 @@ export default function MapCanvas({
         rebuild()
         return
       }
+      // The hang is the one failure with no event to hook, so it is reported
+      // here, at the moment it is declared rather than suspected.
+      tattle('start-hung', { startupError: startupError.current, attempt: attempt })
       setEngineNote(
         startupError.current
           ? `The map engine stopped while starting — ${startupError.current}`

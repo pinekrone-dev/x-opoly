@@ -429,6 +429,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     // Public census data: the shared client map shades its block groups
     // without a session, and nothing here is private to the workspace.
     /^\/api\/demographics$/,
+    // The map's own trouble reports. Public of necessity: this fires at the
+    // exact moment the app is failing, possibly before anyone could sign in,
+    // and a beacon that requires a session cannot describe a broken login
+    // screen. Write-only — no GET is registered on the path, so exempting it
+    // exposes nothing to read.
+    /^\/api\/diag\/map$/,
     // Stripe calls this unauthenticated; the webhook signature is the auth.
     /^\/api\/billing\/webhook$/,
     // The parcel pipeline calls this from GitHub Actions; a verified OIDC
@@ -1678,6 +1684,43 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const span = answer.headers.get('content-range')
     if (span) through['content-range'] = span
     return new Response(answer.body, { status: answer.status, headers: through })
+  })
+
+  /*
+   * What a failing map saw, reported by the map itself.
+   *
+   * Every diagnosis of "the map isn't loading" so far has been made from a
+   * clean headless browser where the map loads fine — which is how four real
+   * faults each took an extra round to find, and how a machine-level WebGL
+   * failure stayed invisible for a day. This is the end of diagnosing by
+   * guess: when the map cannot start, loses its GPU context, or hangs, the
+   * browser that actually failed posts what it saw, and the report can be
+   * read from the database instead of inferred from here.
+   *
+   * Deliberately small and bounded: a 4 KB cap on the report, a rate limit
+   * per address, and only the newest five hundred rows kept. It stores what
+   * the page chose to say and the user agent, nothing more.
+   */
+  app.post('/api/diag/map', async (c) => {
+    const throttled = limited(c, 'diag', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+    let report
+    try {
+      report = JSON.stringify(await c.req.json()).slice(0, 4000)
+    } catch {
+      return c.json({ error: 'A JSON body is required.' }, 400)
+    }
+    await db.run(
+      'CREATE TABLE IF NOT EXISTS diag (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, ua TEXT, report TEXT NOT NULL)',
+    )
+    await db.run('INSERT INTO diag (at, ua, report) VALUES (?, ?, ?)', [
+      new Date().toISOString(),
+      (c.req.header('user-agent') || '').slice(0, 300),
+      report,
+    ])
+    // Bounded, so a looping failure cannot grow the table without limit.
+    await db.run('DELETE FROM diag WHERE id <= (SELECT MAX(id) FROM diag) - 500')
+    return c.json({ noted: true })
   })
 
   app.post('/api/gis/ingest', async (c) => {
