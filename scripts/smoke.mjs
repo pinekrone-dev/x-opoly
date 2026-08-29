@@ -726,9 +726,22 @@ try {
   page.on('pageerror', (error) => gisErrors.push(error.message))
   page.on('response', (response) => {
     const url = response.url()
-    if (response.status() >= 400 && /\/api\/gis\/|\/catalog\/|index\.json|meta\.json|\.pmtiles/.test(url)) {
-      gisFailures.push(`${response.status()} ${url.replace(BASE, '')}`)
-    }
+    if (response.status() < 400) return
+    if (!/\/api\/gis\/|\/catalog\/|index\.json|meta\.json|\.pmtiles/.test(url)) return
+    /*
+     * Overlay layers are the one catalog file a market may honestly not
+     * have. They are published by a separate job from the county build, so
+     * a market always exists for a while before its layers do — Orange
+     * County blocked this gate on exactly that, with a map that was
+     * otherwise perfect: the parcels drew, the count was right, the tiles
+     * read. The GIS offers no overlays when it 404s here and carries on.
+     *
+     * Only a missing one is forgiven. A 500 means the file is there and
+     * the catalog is broken, which is the failure this check exists for,
+     * and every other file stays a hard dependency.
+     */
+    if (response.status() === 404 && /\/layers\.json$/.test(url)) return
+    gisFailures.push(`${response.status()} ${url.replace(BASE, '')}`)
   })
 
   /*
