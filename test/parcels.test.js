@@ -211,6 +211,38 @@ describe('market summary', () => {
     assert.equal((await searchParcels(db, 'big-xx', {})).count, 0)
   })
 
+  /*
+   * A lot recorded under several APNs is still one lot.
+   *
+   * Orange County's seal read 2,153,800 acres inside a county of 606,707,
+   * because SUM(ac) added each shared outline once per assessment on it.
+   * The catalog card had already been fixed the same way; this is the same
+   * arithmetic on the server, and it was missed the first time.
+   */
+  test('a shared lot contributes its acreage once, not once per assessment', async () => {
+    await putParcels(db, 'lots-xx', [
+      { id: 1, ad: 'unit 1', mv: 100, ac: 12, sh: 4 },
+      { id: 2, ad: 'unit 2', mv: 100, ac: 12, sh: 4 },
+      { id: 3, ad: 'unit 3', mv: 100, ac: 12, sh: 4 },
+      { id: 4, ad: 'unit 4', mv: 100, ac: 12, sh: 4 },
+      { id: 5, ad: 'its own lot', mv: 100, ac: 3 },
+    ])
+    const sealed = await sealMarket(db, 'lots-xx', {})
+    assert.equal(sealed.n, 5)
+    // 12 for the shared lot, plus 3 — not 48 plus 3.
+    assert.equal(sealed.acreage, 15)
+    assert.equal((await marketSummary(db, 'lots-xx')).acreage, 15)
+  })
+
+  test('a market whose parcels each own their geometry is unaffected', async () => {
+    await putParcels(db, 'plain-xx', [
+      { id: 1, ad: 'a', mv: 1, ac: 2 },
+      { id: 2, ad: 'b', mv: 1, ac: 3 },
+    ])
+    const sealed = await sealMarket(db, 'plain-xx', {})
+    assert.equal(sealed.acreage, 5)
+  })
+
   test('clearing a market that was never published is done immediately', async () => {
     const answer = await clearMarket(db, 'never-xx')
     assert.equal(answer.done, true)

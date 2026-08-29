@@ -309,10 +309,27 @@ export async function putParcels(db, market, raws) {
  * divide, and the value breaks the choropleth shades by. Computing them here
  * means opening a market costs one small read instead of a county.
  */
+/*
+ * A lot's acreage, counted once however many assessments sit on it.
+ *
+ * Orange County publishes legal lots: 971,160 assessment records on 693,441
+ * distinct outlines, because a condominium's units and any lot split between
+ * several APNs each carry the whole lot's boundary. A plain SUM(ac) therefore
+ * added the shared lots once per record and made the county 2,153,800 acres —
+ * inside a real one of 606,707. Dividing by how many assessments share the
+ * outline contributes each lot exactly once, which comes back to 417,973.
+ *
+ * `sh` rides in the rest blob and is absent on the ordinary case, so this
+ * reads as 1 for every market whose parcels each own their geometry. MAX
+ * guards a zero from ever becoming a division.
+ */
+const ACRES_PER_LOT = "ac / MAX(COALESCE(json_extract(rest,'$.sh'), 1), 1)"
+
 export async function sealMarket(db, market, { keys = [], builtAt = null } = {}) {
   await ensureParcelSchema(db)
   const totals = await db.get(
-    'SELECT COUNT(*) AS n, COALESCE(SUM(mv),0) AS total, COALESCE(SUM(ac),0) AS acreage FROM parcels WHERE market = ?',
+    'SELECT COUNT(*) AS n, COALESCE(SUM(mv),0) AS total, ' +
+      `COALESCE(SUM(${ACRES_PER_LOT}),0) AS acreage FROM parcels WHERE market = ?`,
     [market],
   )
   const assets = await db.all(
@@ -469,7 +486,7 @@ export async function searchParcels(db, market, filters = {}, { limit = PAGE_SIZ
   const from = Math.max(Number(offset) || 0, 0)
 
   const totals = await db.get(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(mv),0) AS total, COALESCE(SUM(ac),0) AS acreage
+    `SELECT COUNT(*) AS n, COALESCE(SUM(mv),0) AS total, COALESCE(SUM(${ACRES_PER_LOT}),0) AS acreage
        FROM parcels WHERE ${sql}`,
     params,
   )
