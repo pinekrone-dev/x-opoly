@@ -37,6 +37,47 @@ function registerPmtiles() {
 const PARCEL_SOURCE = 'parcels'
 
 /*
+ * How much GPU memory this map asks for, and what it settles for.
+ *
+ * A browser takes the graphics context away when it is short of GPU memory,
+ * and it takes it from the tab that is easiest to evict rather than the tab
+ * that is greedy. So a person with a full browser loses the map through no
+ * fault of their own, and the only advice we had for them was to close other
+ * tabs — which is not advice, it is asking them to rearrange their day around
+ * our defaults.
+ *
+ * These are the two things that actually cost memory here. `pixelRatio` sets
+ * how many physical pixels the framebuffer holds: on a 3x phone screen a
+ * full-window map is nine times the pixels of a 1x one, for every buffer the
+ * renderer keeps. `maxTileCacheSize` bounds how many decoded tiles are held
+ * in GPU buffers beyond the ones on screen.
+ *
+ * Step 0 is what everyone gets, and it is already less than the default asks
+ * for: capping at 2 leaves a retina display pixel-identical and stops a 3x
+ * screen quadrupling the bill for a difference nobody can see at arm's
+ * length. The later steps are what a machine under real pressure gets, and
+ * they trade sharpness for existing at all — which is the right trade, since
+ * the alternative on offer was a grey rectangle.
+ */
+const GPU_STEPS = [
+  // Everyone. `levels` is MapLibre's own knob and it defaults to 5 — five
+  // zoom levels of tiles held per source, on top of what is on screen, for
+  // each of the basemap and the parcels. Three is still more than a pinch or
+  // a scroll wheel can outrun, and it scales with the window rather than
+  // being a number guessed against one monitor.
+  { cap: 2, levels: 3, tiles: null, note: null },
+  { cap: 1.5, levels: 2, tiles: 24, note: 'Running the map at reduced quality to fit the memory this browser has spare.' },
+  { cap: 1, levels: 1, tiles: 10, note: 'Running the map at its lowest quality — this browser is very short of GPU memory.' },
+]
+
+/** The step's settings, resolved against this screen. */
+function gpuStep(level: number) {
+  const step = GPU_STEPS[Math.min(level, GPU_STEPS.length - 1)]
+  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+  return { pixelRatio: Math.min(dpr, step.cap), levels: step.levels, tiles: step.tiles, note: step.note }
+}
+
+/*
  * How far a restored position may sit from the market it is restored into.
  *
  * Degrees, and deliberately loose: a county is a degree or so across, and the
@@ -440,6 +481,8 @@ export default function MapCanvas({
   // machine whose GPU refuses WebGL outright would otherwise rebuild in a
   // loop forever; the button has no such limit.
   const autoTries = useRef(0)
+  /** How far down the memory ladder this session has had to go. */
+  const gpuLevel = useRef(0)
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
@@ -550,8 +593,15 @@ export default function MapCanvas({
     }
 
     function buildMap() {
+      const budget = gpuStep(gpuLevel.current)
       return new maplibregl.Map({
       container: host,
+      // See GPU_STEPS. Asked for explicitly rather than left to the default,
+      // because the default is "as much as this screen implies" and that is
+      // what gets the context taken away on a busy machine.
+      pixelRatio: budget.pixelRatio,
+      maxTileCacheZoomLevels: budget.levels,
+      ...(budget.tiles == null ? {} : { maxTileCacheSize: budget.tiles }),
       /*
        * The view lives in the URL.
        *
@@ -589,7 +639,10 @@ export default function MapCanvas({
       startupError.current = null
       autoTries.current = 0
       setLoaded(true)
-      setEngineNote(null)
+      // A map that came back at reduced quality says so. Silently looking
+      // softer than it did a minute ago is the kind of thing people notice
+      // and cannot explain, and an unexplained change reads as a fault.
+      setEngineNote(gpuStep(gpuLevel.current).note)
     }
     instance.on('load', markReady)
 
@@ -626,14 +679,32 @@ export default function MapCanvas({
        * A few seconds' pause gives the browser room to actually free the
        * GPU; rebuilding instantly tends to get the new context evicted too.
        */
-      if (autoTries.current < 3) {
+      /*
+       * And come back smaller.
+       *
+       * The first version of this retried three times and asked for exactly
+       * as much memory each time, which is three ways of finding out the same
+       * thing: if it did not fit, it still does not fit. Then it told the
+       * person to close some tabs, which is the one repair we have no way to
+       * make and they have no reason to want to.
+       *
+       * Every attempt now steps down the ladder, so recovery is a smaller map
+       * rather than the same map again. The pause matters too — rebuilding
+       * instantly tends to get the new context evicted alongside the old one,
+       * before the browser has actually freed anything.
+       */
+      if (autoTries.current < GPU_STEPS.length + 1) {
         autoTries.current += 1
+        gpuLevel.current = Math.min(gpuLevel.current + 1, GPU_STEPS.length - 1)
         setEngineNote('The browser took the graphics context back — restarting the map…')
         retry = window.setTimeout(rebuild, 2500)
       } else {
+        // Only said once every step has been tried. At this point the machine
+        // genuinely has no room, and it is worth saying so plainly rather
+        // than leaving a grey rectangle unexplained.
         setEngineNote(
-          'The browser keeps taking the graphics context away, which usually means it is out of GPU memory. ' +
-            'Closing other tabs tends to cure it.',
+          'This browser is out of GPU memory even with the map at its lowest quality. ' +
+            'Closing other tabs or windows frees it up.',
         )
       }
     }
