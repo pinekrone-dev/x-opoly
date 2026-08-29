@@ -835,7 +835,16 @@ try {
        * and a test that only ever opens the market that happens to sort first
        * cannot tell the two apart.
        */
-      for (const slug of options) {
+      /*
+       * The market already showing goes last.
+       *
+       * Selecting the option that is already selected changes nothing, so no
+       * tiles are read and the count for it comes back zero — not because
+       * that county is broken but because nothing happened. Starting at the
+       * second option and coming back to the first makes every step in this
+       * loop a real change of market, which is the thing being tested.
+       */
+      for (const slug of [...options.slice(1), options[0]]) {
         const before = tiles.ok
         await page.selectOption('#gis-market', slug).catch(() => undefined)
         // The market's meta, its server status and its first search, in that
