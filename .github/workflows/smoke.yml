@@ -84,4 +84,5 @@ jobs:
           path: |
             smoke-map.png
             smoke-book.png
+            smoke-gis.png
           if-no-files-found: warn

@@ -705,6 +705,64 @@ try {
     check('Export PDF downloads a file', false, error.message.split('\n')[0])
   }
   await page.screenshot({ path: 'smoke-book.png', fullPage: false })
+
+  /*
+   * The GIS, which this test did not open until it had already shipped a
+   * broken one.
+   *
+   * The parcel search moved to the server, and a market only takes that path
+   * once its rows are published and sealed. Every run of this test until then
+   * had been exercising the fallback — the browser downloading the county —
+   * because no market was ready yet. So the path that real users would hit
+   * first was the one path never opened here, and it reached them broken.
+   *
+   * What this checks is deliberately blunt: the map paints, no script threw,
+   * and no request the view depends on came back an error. A blank map with a
+   * clean console is still a blank map, so the canvas is measured rather than
+   * merely found.
+   */
+  const gisErrors = []
+  const gisFailures = []
+  page.on('pageerror', (error) => gisErrors.push(error.message))
+  page.on('response', (response) => {
+    const url = response.url()
+    if (response.status() >= 400 && /\/api\/gis\/|\/catalog\/|index\.json|meta\.json|\.pmtiles/.test(url)) {
+      gisFailures.push(`${response.status()} ${url.replace(BASE, '')}`)
+    }
+  })
+
+  const gis = await page.goto(`${BASE}/gis`, { waitUntil: 'domcontentloaded', timeout: 45000 })
+  check('GET /gis serves the app', gis?.status() === 200, `status ${gis?.status()}`)
+
+  const gisMap = await page
+    .waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 })
+    .catch(() => null)
+  check('the GIS map paints a canvas', gisMap != null,
+    gisMap ? '' : ((await page.textContent('body')) ?? '').slice(0, 300))
+
+  if (gisMap) {
+    // Long enough for the market status, the tiles and the first search to
+    // settle. A map that is going to fail generally fails in this window.
+    await page.waitForTimeout(9000)
+    const size = await page.$eval('canvas.maplibregl-canvas', (node) => ({
+      w: node.clientWidth, h: node.clientHeight,
+    }))
+    check('the GIS map has real size', size.w > 400 && size.h > 300, `${size.w}x${size.h}`)
+
+    const gisText = (await page.textContent('body')) ?? ''
+    check('the market panel is not stuck loading',
+      !/Loading parcels…|Could not load that market/.test(gisText),
+      gisText.slice(0, 300))
+    // The count is the proof the server answered: it comes from the sealed
+    // market rather than from anything the browser downloaded.
+    check('the panel states a parcel count', /[\d,]{3,}\s*(parcels|of)/i.test(gisText),
+      gisText.replace(/\s+/g, ' ').slice(0, 300))
+  }
+
+  check('no uncaught errors in the GIS', gisErrors.length === 0, gisErrors.slice(0, 3).join(' | '))
+  check('no failed requests the GIS depends on', gisFailures.length === 0,
+    gisFailures.slice(0, 4).join(' | '))
+  await page.screenshot({ path: 'smoke-gis.png', fullPage: false })
 } catch (error) {
   failed = true
   console.error(`\nSmoke test threw: ${error.stack || error.message}`)
