@@ -866,6 +866,15 @@ try {
        * here with a position no market of ours is anywhere near.
        */
       const target = options[0]
+      // Away first, so this is a real document load.
+      //
+      // Navigating from /gis to /gis#... differs only by the fragment, which
+      // the browser treats as a same-document navigation: nothing reloads, the
+      // map is never rebuilt, and the case under test — a fresh visit carrying
+      // somebody else's position — never happens. The first version of this
+      // check did exactly that and reported a failure the product does not
+      // have, while saying nothing about the one it did.
+      await page.goto('about:blank')
       await page.goto(`${BASE}/gis#12/40.7128/-74.0060`, {
         waitUntil: 'domcontentloaded', timeout: 45000,
       })
