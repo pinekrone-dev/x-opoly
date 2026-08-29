@@ -846,6 +846,34 @@ try {
       }
       check('no parcel tile came back an error', tiles.bad.length === 0,
         tiles.bad.slice(0, 4).join(' | '))
+
+      /*
+       * A position left over from somewhere else.
+       *
+       * The map keeps its view in the URL so a refresh returns you to the
+       * block you were reading. The hash outlives the tab, though, so one
+       * belonging to another county used to be restored over a market a
+       * thousand miles away — parcels loaded, camera in a different state,
+       * and reloading put it straight back because the hash came too. A
+       * failure a reload cannot clear is the worst kind, so it is pinned
+       * here with a position no market of ours is anywhere near.
+       */
+      const target = options[0]
+      await page.goto(`${BASE}/gis#12/40.7128/-74.0060`, {
+        waitUntil: 'domcontentloaded', timeout: 45000,
+      })
+      await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 }).catch(() => null)
+      await page.waitForTimeout(9000)
+      // The map writes its own position back, so the address bar is the
+      // honest answer to where it actually ended up.
+      const landed = await page.evaluate(() => window.location.hash)
+      const parts = landed.replace('#', '').split('/')
+      const lat = Number(parts[1])
+      const lng = Number(parts[2])
+      check('a hash from another part of the country does not strand the map',
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+          (Math.abs(lat - 40.7128) > 1 || Math.abs(lng - -74.006) > 1),
+        `${target} opened at ${landed || '(no hash written)'}`)
     }
   }
 
