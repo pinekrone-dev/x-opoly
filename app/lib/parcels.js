@@ -190,11 +190,51 @@ export function parcelRow(market, raw) {
   ]
 }
 
-/** Drop everything a market published. Used before a rebuild replaces it. */
-export async function clearMarket(db, market) {
+/*
+ * Rows removed per statement, and per request.
+ *
+ * One `DELETE FROM parcels WHERE market = ?` is the obvious way to do this
+ * and it does not survive a county. Orange County's rebuild had to remove
+ * 971,160 rows, each carrying five secondary indexes, and D1 answered
+ * "exceeded its CPU time limit and was reset" — three times, because the
+ * retry re-sent exactly the same impossible statement.
+ *
+ * So the work is bounded twice: a statement deletes at most CLEAR_CHUNK
+ * rows, and a request spends at most CLEAR_BUDGET before handing control
+ * back. The caller repeats until it is told the market is empty, which
+ * makes clearing a county a sequence of small, resumable steps instead of
+ * one that no amount of retrying can complete.
+ */
+export const CLEAR_CHUNK = 2000
+export const CLEAR_BUDGET = 50_000
+
+/**
+ * Drop part of what a market published, up to a budget.
+ *
+ * Returns how many rows went and whether the market is now empty. The seal
+ * is dropped only on the pass that empties it, so a market half-cleared by
+ * an interrupted run still reads as unsealed rather than as a market with
+ * half a county in it.
+ */
+export async function clearMarket(db, market, budget = CLEAR_BUDGET) {
   await ensureParcelSchema(db)
-  await db.run('DELETE FROM parcels WHERE market = ?', [market])
-  await db.run('DELETE FROM parcel_markets WHERE market = ?', [market])
+  let removed = 0
+  while (removed < budget) {
+    const result = await db.run(
+      'DELETE FROM parcels WHERE rowid IN ' +
+        '(SELECT rowid FROM parcels WHERE market = ? LIMIT ?)',
+      [market, CLEAR_CHUNK],
+    )
+    const gone = Number(result?.changes ?? 0)
+    removed += gone
+    // A short pass means the market held fewer rows than the chunk asked
+    // for, which is how the end is recognised without a second count query.
+    if (gone < CLEAR_CHUNK) {
+      await db.run('DELETE FROM parcel_markets WHERE market = ?', [market])
+      return { removed, done: true }
+    }
+  }
+  return { removed, done: false }
 }
 
 /**

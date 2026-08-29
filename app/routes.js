@@ -2038,8 +2038,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
 
     try {
       if (action === 'clear') {
-        await clearMarket(parcels, market)
-        return c.json({ cleared: market })
+        // Bounded, and says whether it finished. A county holds more rows
+        // than one request can delete inside D1's CPU budget, so the caller
+        // repeats this until `done` — see clearMarket.
+        const { removed, done } = await clearMarket(parcels, market)
+        return c.json({ cleared: market, removed, done })
       }
       if (action === 'rows') {
         const body = await c.req.json().catch(() => null)

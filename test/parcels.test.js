@@ -4,6 +4,7 @@ import test, { before, describe } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 
 import {
+  CLEAR_CHUNK,
   MAX_HIGHLIGHT_IDS,
   clearMarket,
   filtersActive,
@@ -169,9 +170,59 @@ describe('market summary', () => {
   test('clearing a market removes both its rows and its summary', async () => {
     await putParcels(db, 'gone-xx', [{ id: 1, ad: 'x', mv: 1, ac: 1 }])
     await sealMarket(db, 'gone-xx', {})
-    await clearMarket(db, 'gone-xx')
+    const answer = await clearMarket(db, 'gone-xx')
+    assert.equal(answer.done, true)
+    assert.equal(answer.removed, 1)
     assert.equal(await marketSummary(db, 'gone-xx'), null)
     assert.equal((await searchParcels(db, 'gone-xx', {})).count, 0)
+  })
+
+  /*
+   * A county does not clear in one statement.
+   *
+   * `DELETE FROM parcels WHERE market = ?` met Orange County's 971,160 rows
+   * with "D1 DB exceeded its CPU time limit and was reset", and the retry
+   * re-sent exactly the same impossible statement three more times. The work
+   * is bounded now, and the caller is told whether to come back.
+   */
+  test('a market larger than one pass clears across several, and says so', async () => {
+    const many = []
+    for (let i = 0; i < CLEAR_CHUNK + 40; i += 1) {
+      many.push({ id: i, ad: `${i} Wide St`, mv: 1, ac: 1 })
+    }
+    for (let i = 0; i < many.length; i += 500) {
+      await putParcels(db, 'big-xx', many.slice(i, i + 500))
+    }
+    await sealMarket(db, 'big-xx', {})
+    assert.equal((await searchParcels(db, 'big-xx', {})).count, many.length)
+
+    // A budget below the row count cannot finish, and must not pretend to.
+    const first = await clearMarket(db, 'big-xx', CLEAR_CHUNK)
+    assert.equal(first.done, false)
+    assert.equal(first.removed, CLEAR_CHUNK)
+    // The seal outlives a partial clear: a half-emptied market must not read
+    // as a market that still holds a county.
+    assert.notEqual(await marketSummary(db, 'big-xx'), null)
+
+    const second = await clearMarket(db, 'big-xx', CLEAR_CHUNK)
+    assert.equal(second.done, true)
+    assert.equal(second.removed, 40)
+    assert.equal(await marketSummary(db, 'big-xx'), null)
+    assert.equal((await searchParcels(db, 'big-xx', {})).count, 0)
+  })
+
+  test('clearing a market that was never published is done immediately', async () => {
+    const answer = await clearMarket(db, 'never-xx')
+    assert.equal(answer.done, true)
+    assert.equal(answer.removed, 0)
+  })
+
+  test('clearing one market leaves its neighbours alone', async () => {
+    await putParcels(db, 'keep-xx', [{ id: 1, ad: 'stays', mv: 1, ac: 1 }])
+    await putParcels(db, 'drop-xx', [{ id: 1, ad: 'goes', mv: 1, ac: 1 }])
+    await clearMarket(db, 'drop-xx')
+    assert.equal((await searchParcels(db, 'keep-xx', {})).count, 1)
+    assert.equal((await searchParcels(db, 'drop-xx', {})).count, 0)
   })
 })
 
