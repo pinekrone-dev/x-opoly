@@ -26,8 +26,18 @@ import type { Property, TileConfig } from '../types'
 /** Zooms the parcel archive actually holds; asking outside it invents 404s. */
 const LITE_PARCEL_MIN = 13
 const LITE_PARCEL_DEEPEST = 16
-/** Tiles fetched per view, at most. A screen is 6–12 tiles; runaway is a bug. */
-const TILES_PER_VIEW = 16
+/*
+ * Tiles fetched per view: sized from the screen, never assumed.
+ *
+ * The first version fixed this at sixteen, and a 1350-pixel window at zoom 13
+ * needs eighteen — so the right edge of a wide screen simply never got its
+ * parcels asked for, and the map looked like data was missing when the truth
+ * was that nothing had requested it. The budget now covers whatever the
+ * viewport actually spans, with a hard ceiling only as a runaway guard, and
+ * tiles are fetched centre-out so if anything is ever cut short it is a
+ * corner, not the middle of what someone is reading.
+ */
+const TILES_HARD_CEILING = 40
 /** Tiles quietly prefetched around the view, at most, once the view is drawn. */
 const RING_PREFETCH = 12
 
@@ -140,10 +150,16 @@ export default function LiteMap({
       const x1 = tileX(bounds.getEast(), z)
       const y0 = tileY(bounds.getNorth(), z)
       const y1 = tileY(bounds.getSouth(), z)
-      const wanted: [number, number][] = []
-      for (let x = x0; x <= x1 && wanted.length < TILES_PER_VIEW; x += 1) {
-        for (let y = y0; y <= y1 && wanted.length < TILES_PER_VIEW; y += 1) wanted.push([x, y])
+      const all: [number, number][] = []
+      for (let x = x0; x <= x1; x += 1) {
+        for (let y = y0; y <= y1; y += 1) all.push([x, y])
       }
+      // Centre-out, so a ceiling ever being hit costs a corner, not the
+      // middle of the block someone is looking at.
+      const cx = (x0 + x1) / 2
+      const cy = (y0 + y1) / 2
+      all.sort((a, b) => (Math.abs(a[0] - cx) + Math.abs(a[1] - cy)) - (Math.abs(b[0] - cx) + Math.abs(b[1] - cy)))
+      const wanted = all.slice(0, TILES_HARD_CEILING)
       await Promise.all(
         wanted.map(async ([x, y]) => {
           const at = `${z}/${x}/${y}`
@@ -225,6 +241,15 @@ export default function LiteMap({
       loading.current = false
     }
   }
+
+  /* A different market's archive means a different world: forget the tiles. */
+  useEffect(() => {
+    fetched.current.clear()
+    parcelPane.current?.remove()
+    parcelPane.current = null
+    void refreshParcels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parcelsUrl])
 
   /* A changed selection restyles what is already drawn. */
   useEffect(() => {

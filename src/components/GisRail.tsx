@@ -187,6 +187,15 @@ export interface LayerCard {
   label: string
   /** Why it cannot be switched on, when it cannot. One short line. */
   note?: string
+  /*
+   * Still fetching what it needs to draw.
+   *
+   * A county-sized layer takes real seconds, and for that whole stretch a
+   * card that changes nothing about itself reads as a card that did nothing
+   * — the toggle looks broken precisely when it is working hardest. Busy is
+   * its own visible state, not a line of small print.
+   */
+  busy?: boolean
   state: LayerState
   icon: JSX.Element
 }
@@ -218,10 +227,16 @@ export function LayerGrid({
             }`}
           >
             <span
-              className={`flex h-7 w-7 items-center justify-center rounded-full ${
+              className={`relative flex h-7 w-7 items-center justify-center rounded-full ${
                 card.state === 'on' ? 'bg-brand/15 text-brand' : live ? 'bg-sunken text-body' : 'bg-transparent text-faint'
               }`}
             >
+              {card.busy ? (
+                <span
+                  aria-hidden
+                  className="absolute inset-0 animate-spin rounded-full border-2 border-brand/30 border-t-brand"
+                />
+              ) : null}
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 {card.icon}
               </svg>
@@ -229,7 +244,13 @@ export function LayerGrid({
             <span className={`text-xs font-medium leading-tight ${live ? 'text-ink' : 'text-faint'}`}>
               {card.label}
             </span>
-            {card.note && <span className="text-[10px] leading-tight text-faint">{card.note}</span>}
+            {card.busy ? (
+              <span className="text-[10px] font-medium leading-tight text-brand" role="status">
+                Loading the county's data…
+              </span>
+            ) : card.note ? (
+              <span className="text-[10px] leading-tight text-faint">{card.note}</span>
+            ) : null}
           </button>
         )
       })}
