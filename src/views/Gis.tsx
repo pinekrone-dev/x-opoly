@@ -1751,20 +1751,60 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const fetchingDetails = useRef(false)
   useEffect(() => {
     const base = meta?.heavyBase
+    /*
+     * A market the server can answer for never fetches this at all.
+     *
+     * The full record now travels on the parcel row, so one keyed lookup on
+     * click returns the mailing address, the legal description, the recorder
+     * instrument and the zoning together with everything else. ParcelPanel
+     * reads `attributes` before `details`, so those fields are already
+     * present and this file has nothing left to add.
+     *
+     * It mattered: details.json is 213 MB for Orange County and 60 MB for
+     * Harris, and the map downloaded all of it the first time anyone expanded
+     * a panel — to show one parcel's mailing address. The download stays only
+     * for a market whose rows are not published yet, which is the same
+     * fallback that keeps the map working when a publish fails.
+     */
     if (!expanded || !base || !active || fetchingDetails.current) return
     fetchingDetails.current = true
-    setDetailsLoading(true)
+    /*
+     * Asked of the data, not assumed from the deploy.
+     *
+     * A market published before the full record travelled on the row has
+     * rows without those fields, and skipping the download on the strength
+     * of `ready` alone would empty its panel. So the question is whether
+     * this market's published columns actually cover what the panel promises
+     * to always show; if anything is missing, the file is still worth its
+     * weight. Markets heal as they rebuild, in any order, with no deploy to
+     * co-ordinate.
+     */
+    const promised = (meta?.panel ?? [])
+      .flatMap((group) => group.rows)
+      .filter((row) => row.always)
+      .map((row) => row.k)
+    const covered =
+      server?.ready === true &&
+      Array.isArray(server.keys) &&
+      promised.every((key) => server.keys!.includes(key))
+    const heavy = !covered
+    // Only the heavy half is skipped. codes.json is under two kilobytes and
+    // names the county's use codes, which the panel needs either way — losing
+    // it with the download would trade a slow panel for a wrong one.
+    if (heavy) setDetailsLoading(true)
     const market = active
     Promise.all([
       // Same origin as the rest of the catalogue, for the same reason.
-      fetch(`${CATALOG}/${market}/details.json`).then((r) => r.json()),
+      heavy
+        ? fetch(`${CATALOG}/${market}/details.json`).then((r) => r.json())
+        : Promise.resolve(null),
       fetch(`${CATALOG}/${market}/codes.json`).then((r) => r.json()).catch(() => ({})),
     ])
       .then(([record, table]) => {
         // The market can be switched while six megabytes are in flight; the
         // wrong county's records would silently fill the panel.
         if (market !== activeRef.current) return
-        setDetails(record)
+        if (record) setDetails(record)
         setCodes(table)
       })
       .catch(() => setError('Could not load the full record for this market.'))
@@ -1772,7 +1812,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         fetchingDetails.current = false
         setDetailsLoading(false)
       })
-  }, [expanded, meta?.heavyBase, active])
+  }, [expanded, meta?.heavyBase, active, server?.ready])
 
   /*
    * The filters, in the shape the server takes them.
