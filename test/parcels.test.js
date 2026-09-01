@@ -5,11 +5,14 @@ import { DatabaseSync } from 'node:sqlite'
 
 import {
   CLEAR_CHUNK,
+  DROP_CHUNK,
   MAX_HIGHLIGHT_IDS,
   clearMarket,
+  dropParcels,
   filtersActive,
   getParcel,
   hydrate,
+  listHashes,
   marketSummary,
   parcelRow,
   putParcels,
@@ -330,5 +333,118 @@ describe('what a publish sends', () => {
     assert.equal(rows.length, wide.length)
     // Position 0 of the JSON tuple is the parcel id — the column after market.
     assert.deepEqual(rows.map((row) => row[0]).slice(0, 3), ['900000', '900001', '900002'])
+  })
+})
+
+/*
+ * The incremental publish.
+ *
+ * A county rebuild used to empty its market and refill it, and D1 bills a
+ * delete exactly like an insert, so a county that had not changed at all
+ * still cost two million written rows. The three pieces that replace it are
+ * here: a hash stored beside each parcel, a way to read those hashes back,
+ * and a way to remove the parcels the county stopped carrying.
+ *
+ * The property worth protecting is that re-publishing unchanged data writes
+ * nothing. These test the parts of it that live in the store.
+ */
+describe('publishing what changed', () => {
+  test('the hash the publisher sent comes back, and stays out of the row', async () => {
+    await putParcels(db, 'hash-xx', [
+      { id: 1, ad: '1 First', mv: 10, ac: 1, h: 'abc123' },
+      { id: 2, ad: '2 Second', mv: 20, ac: 2, h: 'def456' },
+    ])
+    const { hashes } = await listHashes(db, 'hash-xx')
+    assert.deepEqual(hashes, [['1', 'abc123'], ['2', 'def456']])
+    // The hash is bookkeeping between the publisher and the store. It has no
+    // business in the parcel the panel reads, and `rest` is where an unknown
+    // key would otherwise land.
+    const parcel = await getParcel(db, 'hash-xx', 1)
+    assert.equal(parcel.h, undefined)
+  })
+
+  test('a parcel stored before hashes existed reads as changed', async () => {
+    await putParcels(db, 'old-xx', [{ id: 7, ad: '7 Legacy', mv: 1, ac: 1 }])
+    const { hashes } = await listHashes(db, 'old-xx')
+    // Null, not absent and not empty string: the publisher compares it to a
+    // real hash, and any of those three would differ, but only null says
+    // plainly that nothing was ever recorded.
+    assert.deepEqual(hashes, [['7', null]])
+  })
+
+  test('the list pages by pid, and the pages fit together', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      // Fixed width, because the cursor is a string comparison: '10' sorts
+      // before '9' and a publisher that paged past it would lose rows.
+      id: `p${String(i).padStart(3, '0')}`, ad: `${i} Page St`, mv: i, ac: 1, h: `h${i}`,
+    }))
+    await putParcels(db, 'page-xx', many)
+
+    const seen = []
+    let after = ''
+    for (let guard = 0; guard < 10; guard += 1) {
+      const { hashes, cursor } = await listHashes(db, 'page-xx', { after, limit: 10 })
+      seen.push(...hashes)
+      if (!cursor) break
+      after = cursor
+    }
+    assert.equal(seen.length, many.length)
+    assert.deepEqual(seen.map(([pid]) => pid), many.map((row) => String(row.id)))
+    // Three pages of ten, ten, five — and the short one ends it, so no extra
+    // request is spent discovering the market has no more rows.
+    const last = await listHashes(db, 'page-xx', { after: 'p024', limit: 10 })
+    assert.equal(last.cursor, null)
+    assert.deepEqual(last.hashes, [])
+  })
+
+  test('re-storing a parcel updates it in place rather than replacing it', async () => {
+    await putParcels(db, 'place-xx', [{ id: 5, ad: 'before', mv: 1, ac: 1, h: 'one' }])
+    const before = await db.get(
+      'SELECT rowid AS r FROM parcels WHERE market = ? AND pid = ?', ['place-xx', '5'])
+    await putParcels(db, 'place-xx', [{ id: 5, ad: 'after', mv: 2, ac: 1, h: 'two' }])
+    const after = await db.get(
+      'SELECT rowid AS r FROM parcels WHERE market = ? AND pid = ?', ['place-xx', '5'])
+
+    // INSERT OR REPLACE deletes the conflicting row and inserts a new one,
+    // which shows up as a new rowid — and is billed as two written rows per
+    // index rather than one. A stable rowid is the evidence that the upsert
+    // is an update.
+    assert.equal(after.r, before.r)
+    assert.equal((await getParcel(db, 'place-xx', 5)).ad, 'after')
+    assert.deepEqual((await listHashes(db, 'place-xx')).hashes, [['5', 'two']])
+  })
+
+  test('dropping removes the named parcels and only those', async () => {
+    await putParcels(db, 'drop-a', [
+      { id: 1, ad: 'stays', mv: 1, ac: 1 },
+      { id: 2, ad: 'goes', mv: 1, ac: 1 },
+      { id: 3, ad: 'goes too', mv: 1, ac: 1 },
+    ])
+    await putParcels(db, 'drop-b', [{ id: 2, ad: 'other market', mv: 1, ac: 1 }])
+
+    assert.equal(await dropParcels(db, 'drop-a', [2, 3]), 2)
+    assert.deepEqual((await listHashes(db, 'drop-a')).hashes.map(([p]) => p), ['1'])
+    // A parcel id is only unique within its market, so a drop that forgot the
+    // market would quietly empty the neighbouring county.
+    assert.ok(await getParcel(db, 'drop-b', 2))
+  })
+
+  test('a drop longer than D1 will bind still goes through', async () => {
+    const many = Array.from({ length: DROP_CHUNK * 2 + 7 }, (_, i) => ({
+      id: 10000 + i, ad: `${i} Gone Ln`, mv: 1, ac: 1,
+    }))
+    for (let i = 0; i < many.length; i += 500) {
+      await putParcels(db, 'bulk-drop-xx', many.slice(i, i + 500))
+    }
+    // D1 binds at most a hundred parameters to a statement. The ids travel as
+    // one JSON parameter for the same reason the rows do.
+    const removed = await dropParcels(db, 'bulk-drop-xx', many.map((row) => row.id))
+    assert.equal(removed, many.length)
+    assert.deepEqual((await listHashes(db, 'bulk-drop-xx')).hashes, [])
+  })
+
+  test('dropping nothing asks the database nothing', async () => {
+    assert.equal(await dropParcels(db, 'drop-a', []), 0)
+    assert.equal(await dropParcels(db, 'drop-a', null), 0)
   })
 })

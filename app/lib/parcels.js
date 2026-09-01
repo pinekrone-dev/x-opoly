@@ -47,6 +47,7 @@ export const PARCEL_SCHEMA = [
     n      REAL,
     hay    TEXT,
     rest   TEXT,
+    h      TEXT,
     PRIMARY KEY (market, pid)
   )`,
   // A market's own summary: the counts and breaks the panel used to derive by
@@ -74,7 +75,7 @@ export const PARCEL_COLUMNS = ['ad', 'ow', 'gid', 'at', 'sc', 'mv', 'ac', 'po', 
 
 const INSERT_COLUMNS = [
   'market', 'pid', 'ad', 'ow', 'gid', 'at', 'sc', 'mv', 'ac', 'po', 'bo',
-  'w', 's', 'e', 'n', 'hay', 'rest',
+  'w', 's', 'e', 'n', 'hay', 'rest', 'h',
 ]
 
 /*
@@ -132,9 +133,30 @@ let ensured = new WeakSet()
  * a migration the parcel database would otherwise need on its own. Remembered
  * per adapter so the common path costs nothing.
  */
+/*
+ * Columns added after the table first shipped.
+ *
+ * `h` is the content hash of the row as the publisher sent it, and it is the
+ * whole of what makes an incremental publish possible: the publisher reads
+ * these back, compares, and sends only what actually changed. A database that
+ * predates it answers NULL for every parcel, which reads as "changed" and
+ * costs one baseline pass — correct, and self-correcting after that.
+ */
+const PARCEL_ADDED_COLUMNS = [['parcels', 'h', 'TEXT']]
+
 export async function ensureParcelSchema(db) {
   if (ensured.has(db)) return
   for (const statement of PARCEL_SCHEMA) await db.run(statement)
+  for (const [table, column, type] of PARCEL_ADDED_COLUMNS) {
+    try {
+      await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
+    } catch (cause) {
+      // Already there. SQLite says so by message rather than by code, and
+      // there is nothing else this statement can fail on that a later query
+      // would not fail on more clearly.
+      if (!/duplicate column/i.test(String(cause?.message ?? cause))) throw cause
+    }
+  }
   ensured.add(db)
 }
 
@@ -162,7 +184,7 @@ export function parcelRow(market, raw) {
   if (pid == null || pid === '') return null
   const rest = {}
   for (const [key, value] of Object.entries(raw)) {
-    if (key === 'id' || key === 'bb') continue
+    if (key === 'id' || key === 'bb' || key === 'h') continue
     if (PARCEL_COLUMNS.includes(key)) continue
     rest[key] = value
   }
@@ -187,6 +209,7 @@ export function parcelRow(market, raw) {
     bb[0], bb[1], bb[2], bb[3],
     hay,
     Object.keys(rest).length ? JSON.stringify(rest) : null,
+    text(raw.h),
   ]
 }
 
@@ -237,6 +260,84 @@ export async function clearMarket(db, market, budget = CLEAR_BUDGET) {
   return { removed, done: false }
 }
 
+/*
+ * Rows of the hash list returned in one page.
+ *
+ * The list is what a publisher reads before it writes anything: a pid and a
+ * sixteen-character hash for every parcel in the market, so it can work out
+ * which rows actually changed. Orange County is nine hundred thousand of
+ * them, so it pages — twenty thousand at a time is about eight hundred
+ * kilobytes of JSON, small enough for a Worker response and few enough
+ * requests that a county reads back in under a minute.
+ *
+ * The cursor is the pid itself rather than an offset. The primary key is
+ * (market, pid), so `pid > ?` is an index seek and every page costs the same;
+ * an OFFSET would make the last page of a county scan the whole county.
+ */
+export const HASH_PAGE = 20_000
+
+/**
+ * What this market currently holds, as pid and content hash.
+ *
+ * Reads, not writes. D1 includes twenty-five billion row reads a month and
+ * fifty million row writes, so a publisher that reads a county to avoid
+ * rewriting it is trading the scarce resource for the abundant one at a
+ * ratio of five hundred to one.
+ *
+ * A row stored before the hash column existed answers null, which the
+ * publisher reads as "changed" — one baseline pass, then cheap forever.
+ */
+export async function listHashes(db, market, { after = '', limit = HASH_PAGE } = {}) {
+  await ensureParcelSchema(db)
+  const page = Math.min(Math.max(Number(limit) || HASH_PAGE, 1), HASH_PAGE)
+  const rows = await db.all(
+    'SELECT pid, h FROM parcels WHERE market = ? AND pid > ? ORDER BY pid LIMIT ?',
+    [market, String(after ?? ''), page],
+  )
+  return {
+    hashes: rows.map((row) => [row.pid, row.h ?? null]),
+    // The last pid of a full page is where the next one resumes. A short page
+    // is the end of the market, and says so by returning no cursor.
+    cursor: rows.length === page ? rows[rows.length - 1].pid : null,
+  }
+}
+
+/*
+ * Parcels removed per statement.
+ *
+ * Same reasoning as CLEAR_CHUNK, at a smaller scale: a county that has been
+ * resurveyed drops a few thousand parcels, not a million, and the publisher
+ * sends them in one call. Chunking keeps a bad day — a source that suddenly
+ * omits half its rows — from being a statement D1 cannot finish.
+ */
+export const DROP_CHUNK = 500
+
+/**
+ * Remove parcels the source no longer carries.
+ *
+ * The other half of an incremental publish: without it a parcel that a county
+ * splits or retires would sit in the market forever, since nothing sends a
+ * row to say it is gone.
+ */
+export async function dropParcels(db, market, pids) {
+  await ensureParcelSchema(db)
+  const wanted = [...new Set((pids ?? []).map((pid) => String(pid)).filter(Boolean))]
+  if (!wanted.length) return 0
+  let removed = 0
+  for (let i = 0; i < wanted.length; i += DROP_CHUNK) {
+    const chunk = wanted.slice(i, i + DROP_CHUNK)
+    // json_each again rather than a list of placeholders: D1 binds at most a
+    // hundred parameters to a statement, and a drop list is not bounded by a
+    // hundred.
+    const result = await db.run(
+      'DELETE FROM parcels WHERE market = ? AND pid IN (SELECT value FROM json_each(?))',
+      [market, JSON.stringify(chunk)],
+    )
+    removed += Number(result?.changes ?? 0)
+  }
+  return removed
+}
+
 /**
  * Store a chunk of a market's parcels.
  *
@@ -261,9 +362,30 @@ export async function putParcels(db, market, raws) {
    */
   const rest = INSERT_COLUMNS.slice(1)
   const extracts = rest.map((_, at) => `json_extract(value,'$[${at}]')`).join(',')
+  /*
+   * Upsert, not INSERT OR REPLACE.
+   *
+   * REPLACE resolves a conflict by deleting the existing row and inserting a
+   * new one, and D1 bills a delete exactly like a write — so re-storing a
+   * parcel cost twice what storing it did, across the table and all six of its
+   * indexes. ON CONFLICT DO UPDATE writes the row in place, and only touches
+   * an index whose column actually moved.
+   *
+   * `pid` is excluded from the SET list because it is half the key being
+   * conflicted on; assigning it to itself is legal but pointless.
+   *
+   * The `WHERE true` is not filler. SQLite cannot tell whether the `ON` after
+   * a SELECT opens the upsert or a join's ON clause, and documents a trailing
+   * WHERE as the way to disambiguate. Without it the parser fails on `DO`.
+   */
+  const updates = rest
+    .filter((column) => column !== 'pid')
+    .map((column) => `${column}=excluded.${column}`)
+    .join(',')
   const sql =
-    `INSERT OR REPLACE INTO parcels (${INSERT_COLUMNS.join(',')}) ` +
-    `SELECT ?1,${extracts} FROM json_each(?2)`
+    `INSERT INTO parcels (${INSERT_COLUMNS.join(',')}) ` +
+    `SELECT ?1,${extracts} FROM json_each(?2) WHERE true ` +
+    `ON CONFLICT(market,pid) DO UPDATE SET ${updates}`
 
   // Each row as its own JSON fragment, so a statement can be filled to a byte
   // budget instead of a row count.

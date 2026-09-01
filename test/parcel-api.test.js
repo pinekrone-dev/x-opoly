@@ -185,9 +185,63 @@ describe('publishing a county', () => {
   })
 
   test('an unknown action is named rather than ignored', async () => {
-    const res = await ingest('market=austin-tx&action=drop', {})
+    const res = await ingest('market=austin-tx&action=demolish', {})
     assert.equal(res.status, 400)
-    assert.match(res.body.error, /drop/)
+    assert.match(res.body.error, /demolish/)
+  })
+
+  /*
+   * The two actions an incremental publish is built from.
+   *
+   * A rebuild reads the hashes the market already holds and sends only the
+   * rows whose hash moved, because D1 bills a delete exactly like an insert
+   * and clearing a county to refill it therefore cost twice its parcel count
+   * in written rows. Reads are the abundant resource: twenty-five billion a
+   * month included against fifty million writes.
+   */
+  test('the market says what it holds, so a publish can send only what moved', async () => {
+    const res = await ingest('market=austin-tx&action=hashes', {})
+    assert.equal(res.status, 200)
+    assert.equal(res.body.market, 'austin-tx')
+    // Sealed above with three parcels, published before hashes existed as far
+    // as this endpoint is concerned — so a hash of null, which reads as
+    // changed and costs one baseline pass.
+    assert.equal(res.body.hashes.length, 3)
+    assert.deepEqual(res.body.hashes.map(([, h]) => h), [null, null, null])
+    assert.equal(res.body.cursor, null, 'a short page is the end of the market')
+  })
+
+  test('the hash a publish sends comes back beside its parcel', async () => {
+    await ingest('market=hash-zz&action=rows', [
+      { id: 1, ad: '1 First', mv: 1, ac: 1, h: 'aaaa' },
+      { id: 2, ad: '2 Second', mv: 1, ac: 1, h: 'bbbb' },
+    ])
+    const res = await ingest('market=hash-zz&action=hashes', {})
+    assert.deepEqual(res.body.hashes, [['1', 'aaaa'], ['2', 'bbbb']])
+  })
+
+  test('the hash list pages, and the cursor picks up where it left off', async () => {
+    const first = await ingest('market=hash-zz&action=hashes&limit=1', {})
+    assert.deepEqual(first.body.hashes, [['1', 'aaaa']])
+    assert.equal(first.body.cursor, '1')
+    const next = await ingest(`market=hash-zz&action=hashes&limit=1&after=${first.body.cursor}`, {})
+    assert.deepEqual(next.body.hashes, [['2', 'bbbb']])
+  })
+
+  test('parcels the county stopped carrying are dropped by id', async () => {
+    const res = await ingest('market=hash-zz&action=drop', [1])
+    assert.equal(res.status, 200)
+    assert.equal(res.body.dropped, 1)
+    const left = await ingest('market=hash-zz&action=hashes', {})
+    assert.deepEqual(left.body.hashes, [['2', 'bbbb']])
+  })
+
+  test('a drop that is not a list of ids is refused rather than guessed at', async () => {
+    const res = await ingest('market=hash-zz&action=drop', { pid: 2 })
+    assert.equal(res.status, 400)
+    // And the market is untouched by the refusal.
+    const left = await ingest('market=hash-zz&action=hashes', {})
+    assert.equal(left.body.hashes.length, 1)
   })
 })
 

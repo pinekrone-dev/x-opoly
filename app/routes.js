@@ -122,7 +122,9 @@ import {
 import { deleteView, listViews, renameView, saveView } from './lib/mapviews.js'
 import {
   clearMarket,
+  dropParcels,
   getParcel,
+  listHashes,
   marketSummary,
   putParcels,
   readyMarkets,
@@ -2013,9 +2015,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
    *
    * The same door and the same proof as the file ingest above: a GitHub
    * Actions token from one of two repositories, no credential stored on either
-   * side. A rebuild sends `clear`, then `rows` in chunks, then `seal` — and
+   * side. A rebuild reads `hashes`, sends `rows` for the parcels whose hash
+   * moved, `drop` for the ones the county no longer carries, then `seal` — and
    * only the seal makes the market answerable, so a run that dies halfway
    * leaves the app on the old path rather than on half a county.
+   *
+   * `clear` remains for the rare case that wants the market genuinely emptied.
+   * It is no longer part of a normal publish: emptying a county and refilling
+   * it bills every row twice, once for the delete and once for the insert,
+   * which is the whole of what the diff exists to avoid.
    */
   app.post('/api/gis/ingest/parcels', async (c) => {
     const throttled = limited(c, 'ingest', 3000, 10 * 60 * 1000)
@@ -2043,6 +2051,27 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         // repeats this until `done` — see clearMarket.
         const { removed, done } = await clearMarket(parcels, market)
         return c.json({ cleared: market, removed, done })
+      }
+      if (action === 'hashes') {
+        // What the market already holds, so a publisher can send only what
+        // changed. Paged by pid — see listHashes for why not by offset.
+        const asked = Number(c.req.query('limit'))
+        const { hashes, cursor } = await listHashes(parcels, market, {
+          after: String(c.req.query('after') ?? ''),
+          limit: Number.isFinite(asked) ? asked : undefined,
+        })
+        return c.json({ market, hashes, cursor })
+      }
+      if (action === 'drop') {
+        const body = await c.req.json().catch(() => null)
+        const pids = Array.isArray(body) ? body : body?.pids
+        if (!Array.isArray(pids)) {
+          return c.json({ error: 'Send the parcel ids as a JSON array.' }, 400)
+        }
+        if (pids.length > 20000) {
+          return c.json({ error: 'Send at most 20000 parcel ids per request.' }, 413)
+        }
+        return c.json({ dropped: await dropParcels(parcels, market, pids) })
       }
       if (action === 'rows') {
         const body = await c.req.json().catch(() => null)
