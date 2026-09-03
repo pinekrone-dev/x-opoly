@@ -266,6 +266,14 @@ parties) is made in the pipeline and rides in `rest` under a `court` key;
 the store is never searched by name. `probe-courts.yml` reports what each
 court hands a machine; a refusal is recorded, never worked around.
 
+Title data is in `pipeline/title_sources.py`. There is no federal title
+record: the chain of ownership is the county recorder's index, so the
+register is one entry per market with the join it allows (parcel number,
+instrument number, or name only), what images cost, and whether a bulk
+index is sold. New York's ACRIS is open data keyed by BBL and can be folded
+into `rest.title` (last deed, open mortgages, adverse documents) by the
+publish today. `probe-title.yml` reports what each recorder hands a machine.
+
 The rule that keeps the store bill flat: nothing from this register is bulk
 loaded into D1. Per-parcel values ride in the row that a search already
 reads, and everything else is a file in R2 that the edge caches. Keys the
