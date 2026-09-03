@@ -359,3 +359,17 @@
 .site-label {
   pointer-events: none;
 }
+
+/*
+ * The GIS map's own controls, kept clear of the rail.
+ *
+ * Both engines pin their zoom buttons to the map's top-left corner, which is
+ * exactly where the rail's spine and drawer sit. The view sets
+ * --map-inset-left to the rail's current width; the market picker sits at
+ * that inset on the top row, and the zoom buttons drop beneath it.
+ */
+.gis-map .maplibregl-ctrl-top-left,
+.gis-map .leaflet-top.leaflet-left {
+  left: var(--map-inset-left, 0);
+  top: 2.75rem;
+}

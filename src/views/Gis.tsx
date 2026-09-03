@@ -2768,7 +2768,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   }
 
   return (
-    <div className="relative h-full w-full">
+    // The rail sits over the map's left edge, so everything the map pins to
+    // its own top-left — zoom buttons, the market picker, the basic-map
+    // notice — is pushed past the rail's spine, and past the drawer when
+    // one is open. One variable, read by the CSS for both map engines.
+    <div
+      className="gis-map relative h-full w-full"
+      style={{ ['--map-inset-left' as string]: rail ? '24.25rem' : '4.25rem' }}
+    >
       {/*
         The map is not waiting for anything.
 
@@ -2869,7 +2876,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         its stats; this one is just always in reach.
       */}
       {markets.length > 1 && (
-        <div className="absolute left-12 top-3 z-[520]">
+        <div className="absolute top-3 z-[520]" style={{ left: 'calc(var(--map-inset-left) + 0.75rem)' }}>
           <select
             aria-label="Market"
             className="rounded-lg border border-line bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-ink shadow-lg backdrop-blur"

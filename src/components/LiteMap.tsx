@@ -291,8 +291,13 @@ export default function LiteMap({
   return (
     <div className="relative h-full w-full">
       <div ref={container} className="h-full w-full" aria-label="Property map (basic)" role="application" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-2 z-[700] flex justify-center">
-        <div className="pointer-events-auto flex items-center gap-2 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-[11px] text-body shadow-sm">
+      {/* Pinned past the rail rather than centred, so it never sits across
+          the layers drawer or the record panel. */}
+      <div
+        className="pointer-events-none absolute bottom-2 right-3 z-[700] flex justify-start"
+        style={{ left: 'calc(var(--map-inset-left, 0px) + 0.75rem)' }}
+      >
+        <div className="pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-[11px] text-body shadow-sm">
           <span>
             Basic map — runs without graphics acceleration.
             {parcelsUrl ? ' Zoom in to see parcels; some overlays are hidden.' : ''}
