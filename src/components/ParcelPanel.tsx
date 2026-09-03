@@ -68,6 +68,7 @@ export default function ParcelPanel({
   loading,
   onClose,
   children,
+  extra,
 }: {
   title: string
   subtitle: string
@@ -83,7 +84,13 @@ export default function ParcelPanel({
   note?: string
   loading?: boolean
   onClose: () => void
+  /** Leads the panel: what the broker's own records say about this parcel. */
   children?: React.ReactNode
+  /**
+   * Sections the switched-on layers contribute — ownership groups, a picked
+   * permit or zoning district — after the county's own rows.
+   */
+  extra?: React.ReactNode
 }) {
   const read = (key: string): Cell => {
     const own = attributes[key]
@@ -131,10 +138,7 @@ export default function ParcelPanel({
         {loading && <p className="text-[11px] text-muted">Loading the county's full record…</p>}
 
         {neighborhood && neighborhood.length > 0 && (
-          <section className="mb-3 border-t border-line pt-2">
-            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-              Neighborhood
-            </h3>
+          <PanelSection title="Neighborhood">
             <dl className="space-y-1 text-xs">
               {neighborhood.map((entry) => (
                 <div key={entry.label} className="flex justify-between gap-3">
@@ -143,8 +147,10 @@ export default function ParcelPanel({
                 </div>
               ))}
             </dl>
-          </section>
+          </PanelSection>
         )}
+
+        {extra}
 
         {note && (
           <p
@@ -154,5 +160,15 @@ export default function ParcelPanel({
         )}
       </div>
     </aside>
+  )
+}
+
+/** One titled block in the panel, in the same dress as the county's groups. */
+export function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-3 border-t border-line pt-2 first:border-t-0 first:pt-0">
+      <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
+      {children}
+    </section>
   )
 }

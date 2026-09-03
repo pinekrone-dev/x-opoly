@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
-import ParcelPanel, { type PanelGroup } from '../components/ParcelPanel'
+import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import GisRail, {
   CheckList,
@@ -1172,6 +1172,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       setExpanded(false)
       return
     }
+    // A click opens the full record straight away. There used to be a
+    // summary card in between, with the panel a second click behind it;
+    // every layer that is on now adds its section to the one panel instead.
+    setExpanded(true)
     let cancelled = false
     setKnown(null)
     api.crm
@@ -2845,8 +2849,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
             here.current = where
           }}
           captureRef={captureMap}
+          // A layer feature under a selected parcel joins that parcel's
+          // panel as its own section; with no parcel open it gets the panel
+          // to itself. Either way it is the panel, not a card over the map.
           onExtraPick={(pick) => {
-            setSelected(null)
             setFeaturePick(pick)
           }}
           choropleth={choropleth?.areas ?? null}
@@ -3584,215 +3590,200 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         </div>
       )}
 
-      {/* The full county record, opened from the card's arrow. Its own panel
-          rather than a taller card: the market's panel spec runs to twenty
-          rows in some counties, and a card that long stops being a card. */}
-      {expanded && selected != null && parcel && (
+      {/* A clicked layer feature — permit, zoning district, flood zone,
+          school — as a section of whichever panel is open. */}
+      {(() => {
+        if (!featurePick) return null
+        const layer = shownLayers.find((l) => l.id === featurePick.layerId)
+        const order = layer?.fields?.length ? layer.fields : Object.keys(featurePick.properties)
+        const rows = order
+          .filter((field) => featurePick.properties[field] != null && featurePick.properties[field] !== '')
+          .map((field) => <Row key={field} label={field} value={String(featurePick.properties[field])} />)
+        const label = layer?.label ?? featurePick.layerId
+        const section = (
+          <PanelSection title={label}>
+            <dl className="space-y-1 text-xs">{rows}</dl>
+            <button
+              type="button"
+              className="mt-1.5 text-[11px] text-muted hover:text-ink"
+              onClick={() => setFeaturePick(null)}
+            >
+              Clear this record
+            </button>
+          </PanelSection>
+        )
+        // With no parcel open, the record gets the panel to itself.
+        if (selected == null) {
+          return (
+            <ParcelPanel
+              title={label}
+              subtitle="Layer record"
+              groups={[]}
+              attributes={{}}
+              details={null}
+              codes={{}}
+              onClose={() => setFeaturePick(null)}
+            >
+              <dl className="space-y-1 text-xs">{rows}</dl>
+            </ParcelPanel>
+          )
+        }
+        return null
+      })()}
+
+      {/* One panel for everything a click means: the county's record, what
+          the CRM knows, and a section from each layer that is on. It opens on
+          the first click — there is no summary card in between any more. */}
+      {selected != null && (
         <ParcelPanel
-          title={String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)}
-          subtitle={`${parcel.zp ? `${parcel.zp} · ` : ''}${meta?.idLabel || 'Parcel'} ${
-            parcel.gid ?? selected
-          }`}
-          groups={meta?.panel ?? []}
-          attributes={parcel}
+          title={parcel ? String(parcel.ad || `Parcel ${parcel.gid ?? selected}`) : 'Parcel'}
+          subtitle={
+            parcel
+              ? `${parcel.zp ? `${parcel.zp} · ` : ''}${meta?.idLabel || 'Parcel'} ${parcel.gid ?? selected}`
+              : index
+                ? 'No record for that parcel.'
+                : 'Loading parcel detail…'
+          }
+          groups={parcel ? meta?.panel ?? [] : []}
+          attributes={parcel ?? {}}
           details={details?.[String(selected)] as Record<string, string | number | null> | null}
           codes={codes}
-          neighborhood={neighborhood}
-          note={meta?.note}
-          loading={detailsLoading}
-          onClose={() => setExpanded(false)}
-        />
-      )}
+          neighborhood={parcel ? neighborhood : null}
+          note={parcel ? meta?.note : undefined}
+          loading={Boolean(parcel) && detailsLoading}
+          onClose={() => {
+            setSelected(null)
+            setFeaturePick(null)
+          }}
+          extra={
+            parcel ? (
+              <>
+                {/* Who holds it, from the pipeline's resolved groups: the
+                    portfolio is one holder across spelling variants, the
+                    back office one mailing address across many entity
+                    names. Present only while the Ownership layer is on. */}
+                {(() => {
+                  const portfolio = parcel.po != null ? owners?.p?.[String(parcel.po)] : null
+                  const office = parcel.bo != null ? owners?.b?.[String(parcel.bo)] : null
+                  if (!portfolio && !office) return null
+                  return (
+                    <PanelSection title="Ownership">
+                      {portfolio ? (
+                        <div className="text-xs">
+                          <p className="font-semibold text-ink">{portfolio.n || 'Unnamed holder'}</p>
+                          <p className="text-muted">
+                            Portfolio · {portfolio.c.toLocaleString()} parcels · {money(portfolio.v)}
+                          </p>
+                          <button
+                            type="button"
+                            className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
+                            onClick={() => setOwnerPick({ kind: 'p', id: String(parcel.po) })}
+                          >
+                            Show all holdings on the map
+                          </button>
+                        </div>
+                      ) : null}
+                      {office ? (
+                        <div className={`text-xs ${portfolio ? 'mt-2' : ''}`}>
+                          <p className="font-semibold text-ink">{office.a || 'Unnamed address'}</p>
+                          <p className="text-muted">
+                            Back office · {office.c.toLocaleString()} parcels · {money(office.v)}
+                          </p>
+                          <button
+                            type="button"
+                            className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
+                            onClick={() => setOwnerPick({ kind: 'b', id: String(parcel.bo) })}
+                          >
+                            Show all holdings on the map
+                          </button>
+                        </div>
+                      ) : null}
+                    </PanelSection>
+                  )
+                })()}
 
-      {/* The card. Opens on click and never on hover: on a map this dense the
-          pointer crosses dozens of parcels on the way anywhere. Raised clear of
-          the attribution control, which the basemap licences require stay
-          readable. */}
-      {/* A clicked layer feature: permit, zoning district, flood zone, school.
-          The same card position and the same scroll — a record is a record. */}
-      {featurePick && selected == null && (
-        <div className="absolute bottom-9 right-3 z-[500] max-h-[72vh] w-80 overflow-y-auto rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
-          <button
-            type="button"
-            className="float-right text-muted hover:text-ink"
-            aria-label="Close record"
-            onClick={() => setFeaturePick(null)}
-          >
-            ×
-          </button>
-          <p className="text-sm font-semibold text-ink">
-            {shownLayers.find((l) => l.id === featurePick.layerId)?.label ?? featurePick.layerId}
-          </p>
-          <dl className="mt-2 space-y-1 text-xs">
-            {(() => {
-              const layer = shownLayers.find((l) => l.id === featurePick.layerId)
-              const order = layer?.fields?.length
-                ? layer.fields
-                : Object.keys(featurePick.properties)
-              return order
-                .filter(
-                  (field) =>
-                    featurePick.properties[field] != null && featurePick.properties[field] !== '',
-                )
-                .map((field) => (
-                  <Row key={field} label={field} value={String(featurePick.properties[field])} />
-                ))
-            })()}
-          </dl>
-        </div>
-      )}
+                {featurePick && (() => {
+                  const layer = shownLayers.find((l) => l.id === featurePick.layerId)
+                  const order = layer?.fields?.length ? layer.fields : Object.keys(featurePick.properties)
+                  return (
+                    <PanelSection title={layer?.label ?? featurePick.layerId}>
+                      <dl className="space-y-1 text-xs">
+                        {order
+                          .filter((field) => featurePick.properties[field] != null && featurePick.properties[field] !== '')
+                          .map((field) => (
+                            <Row key={field} label={field} value={String(featurePick.properties[field])} />
+                          ))}
+                      </dl>
+                      <button
+                        type="button"
+                        className="mt-1.5 text-[11px] text-muted hover:text-ink"
+                        onClick={() => setFeaturePick(null)}
+                      >
+                        Clear this record
+                      </button>
+                    </PanelSection>
+                  )
+                })()}
 
-      {selected != null && !expanded && (
-        <div className="absolute bottom-9 right-3 z-[500] max-h-[72vh] w-80 overflow-y-auto rounded-lg border border-line bg-surface/97 p-3 shadow-xl backdrop-blur">
-          <button
-            type="button"
-            className="float-right text-muted hover:text-ink"
-            aria-label="Close parcel"
-            onClick={() => setSelected(null)}
-          >
-            ×
-          </button>
-          {parcel ? (
-            <>
-              <p className="text-sm font-semibold text-ink">{String(parcel.ad || 'No situs address')}</p>
-              <p className="text-xs text-muted">
-                {String(parcel.zp || '')} · {meta?.idLabel || 'Parcel'} {String(parcel.gid ?? selected)}
-              </p>
-              <dl className="mt-2 space-y-1 text-xs">
-                <Row label={meta?.valueLabel || 'Value'} value={money(Number(parcel.mv) || 0)} />
-                <Row label="Owner of record" value={String(parcel.ow || 'Not published')} />
-                <Row label="Asset type" value={String(parcel.at || '—')} />
-                <Row
-                  label="Lot size"
-                  value={parcel.ac ? `${Number(parcel.ac).toFixed(2)} ac` : '—'}
-                />
-              </dl>
-
-              {/*
-                * What the roll alone can say is four lines, and on a bare map
-                * that is all a click ever returns. Rather than let the card
-                * read as the whole story, it names the thing that would make
-                * it longer — and opens the panel that does it, because a hint
-                * you have to go and find is barely a hint.
-                */}
-              {!published.some((layer) => layerOn[layer.id]) && (
-                <button
-                  type="button"
-                  onClick={() => setRail('layers')}
-                  className="mt-2 w-full rounded-md border border-dashed border-line px-2 py-1.5 text-left text-[11px] text-muted hover:border-brand hover:text-body"
-                >
-                  Add data layers to see more about this parcel →
-                </button>
-              )}
-
-              {/* Who holds it, from the pipeline's resolved groups: the
-                  portfolio is one holder across spelling variants, the back
-                  office one mailing address across many entity names. */}
-              {(() => {
-                const portfolio = parcel.po != null ? owners?.p?.[String(parcel.po)] : null
-                const office = parcel.bo != null ? owners?.b?.[String(parcel.bo)] : null
-                if (!portfolio && !office) return null
-                return (
-                  <div className="mt-3 border-t border-line pt-2">
-                    <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                      Ownership
-                    </p>
-                    {portfolio ? (
-                      <div className="text-xs">
-                        <p className="font-semibold text-ink">{portfolio.n || 'Unnamed holder'}</p>
-                        <p className="text-muted">
-                          Portfolio · {portfolio.c.toLocaleString()} parcels · {money(portfolio.v)}
-                        </p>
-                        <button
-                          type="button"
-                          className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
-                          onClick={() =>
-                            setOwnerPick({ kind: 'p', id: String(parcel.po) })
-                          }
-                        >
-                          Show all holdings on the map
-                        </button>
-                      </div>
-                    ) : null}
-                    {office ? (
-                      <div className={`text-xs ${portfolio ? 'mt-2' : ''}`}>
-                        <p className="font-semibold text-ink">{office.a || 'Unnamed address'}</p>
-                        <p className="text-muted">
-                          Back office · {office.c.toLocaleString()} parcels · {money(office.v)}
-                        </p>
-                        <button
-                          type="button"
-                          className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
-                          onClick={() =>
-                            setOwnerPick({ kind: 'b', id: String(parcel.bo) })
-                          }
-                        >
-                          Show all holdings on the map
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })()}
-
-              {/* What the CRM already knows. A parcel with a deal on it is the
-                  reason to have clicked, so it leads. */}
-              <div className="mt-3 border-t border-line pt-2">
-                <button
-                  type="button"
-                  className="mb-2 flex w-full items-center justify-between gap-2 rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken"
-                  onClick={() => setExpanded(true)}
-                >
-                  Full county record
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                    <path d="M9 6l6 6-6 6" />
-                  </svg>
-                </button>
-                {known === null ? (
-                  <p className="text-[11px] text-muted">Checking your records…</p>
-                ) : known.place ? (
-                  <>
-                    <button
-                      type="button"
-                      className="text-xs font-semibold text-brand hover:underline"
-                      onClick={() => navigate(`/places/${known.place?.id}`)}
-                    >
-                      In your CRM · {known.place.name || 'Place'}
-                    </button>
-                    {known.deals.length > 0 && (
-                      <ul className="mt-1 space-y-0.5">
-                        {known.deals.map((deal) => (
-                          <li key={deal.id}>
-                            <button
-                              type="button"
-                              className="text-[11px] text-body hover:underline"
-                              onClick={() => navigate(`/deals/${deal.id}`)}
-                            >
-                              {deal.name} · {deal.stage}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
-                ) : (
+                {/* The layers are where the rest of the story is; say so
+                    when none of them is on, and open the catalogue. */}
+                {!published.some((layer) => layerOn[layer.id]) && (
                   <button
                     type="button"
-                    className="rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
-                    disabled={saving}
-                    onClick={addToCrm}
+                    onClick={() => setRail('layers')}
+                    className="mb-3 w-full rounded-md border border-dashed border-line px-2 py-1.5 text-left text-[11px] text-muted hover:border-brand hover:text-body"
                   >
-                    {saving ? 'Saving…' : 'Add to CRM'}
+                    Add data layers to see more about this parcel →
                   </button>
                 )}
-              </div>
-            </>
-          ) : (
-            <p className="text-xs text-muted">
-              {index ? 'No record for that parcel.' : 'Loading parcel detail…'}
-            </p>
+              </>
+            ) : null
+          }
+        >
+          {/* What the CRM already knows. A parcel with a deal on it is the
+              reason to have clicked, so it leads. */}
+          {parcel && (
+            <PanelSection title="Your records">
+              {known === null ? (
+                <p className="text-[11px] text-muted">Checking your records…</p>
+              ) : known.place ? (
+                <>
+                  <button
+                    type="button"
+                    className="text-xs font-semibold text-brand hover:underline"
+                    onClick={() => navigate(`/places/${known.place?.id}`)}
+                  >
+                    In your CRM · {known.place.name || 'Place'}
+                  </button>
+                  {known.deals.length > 0 && (
+                    <ul className="mt-1 space-y-0.5">
+                      {known.deals.map((deal) => (
+                        <li key={deal.id}>
+                          <button
+                            type="button"
+                            className="text-[11px] text-body hover:underline"
+                            onClick={() => navigate(`/deals/${deal.id}`)}
+                          >
+                            {deal.name} · {deal.stage}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
+                  disabled={saving}
+                  onClick={addToCrm}
+                >
+                  {saving ? 'Saving…' : 'Add to CRM'}
+                </button>
+              )}
+            </PanelSection>
           )}
-        </div>
+        </ParcelPanel>
       )}
     </div>
   )
