@@ -215,3 +215,68 @@ describe('the subscription gate', () => {
     assert.equal(billing.body.status, 'exempt')
   })
 })
+
+describe('the free-code pen', () => {
+  test('belongs to the account that claimed the instance, and only that one', async () => {
+    const billing = await alice('/api/billing')
+    assert.equal(billing.body.canMintCodes, true, 'alice claimed the instance')
+  })
+
+  test('an exempt account on its own team is exempt from paying, not allowed to mint', async () => {
+    const billing = await bob('/api/billing')
+    assert.equal(billing.body.status, 'exempt', 'bob is in STRIPE_EXEMPT_EMAILS')
+    assert.equal(billing.body.canMintCodes, false)
+    const refused = await bob('/api/billing/free-code', { method: 'POST' })
+    assert.equal(refused.status, 403)
+  })
+
+  test("the owner's own teammate cannot mint either", async () => {
+    const minted = await alice('/api/invites', asJson({ email: 'erin@example.com' }))
+    const token = new URL(minted.body.url).searchParams.get('invite')
+    const erin = client()
+    await erin('/api/auth/register', asJson({
+      name: 'Erin',
+      email: 'erin@example.com',
+      password: 'a long enough password',
+      inviteToken: token,
+    }))
+
+    const billing = await erin('/api/billing')
+    assert.equal(billing.body.status, 'exempt', "erin rides on alice's exemption")
+    assert.equal(billing.body.canMintCodes, false, 'but the pen is not hers')
+    const refused = await erin('/api/billing/free-code', { method: 'POST' })
+    assert.equal(refused.status, 403)
+  })
+
+  test('FREE_CODE_MINTER moves the pen to the named account, whoever claimed first', async () => {
+    const named = await createServer({
+      DATA_DIR: temp.directory,
+      DB_FILE: `${temp.directory}/named.db`,
+      ...ENV,
+      FREE_CODE_MINTER: 'Second@Example.com',
+    })
+    const call = (cookieBox) => async (path, init = {}) => {
+      const response = await named.fetch(
+        new Request(`http://localhost${path}`, {
+          ...init,
+          headers: { 'content-type': 'application/json', ...(cookieBox.cookie ? { cookie: cookieBox.cookie } : {}) },
+        }),
+      )
+      const set = response.headers.get('set-cookie')
+      if (set) cookieBox.cookie = set.split(';')[0]
+      return { status: response.status, body: await response.json().catch(() => null) }
+    }
+    const first = call({})
+    await first('/api/auth/register', asJson({ name: 'First', email: 'first@example.com', password: 'a long enough password' }))
+    const invite = await first('/api/invites', asJson({ email: 'second@example.com' }))
+    const token = new URL(invite.body.url).searchParams.get('invite')
+    const second = call({})
+    await second('/api/auth/register', asJson({
+      name: 'Second', email: 'second@example.com', password: 'a long enough password', inviteToken: token,
+    }))
+
+    assert.equal((await first('/api/billing')).body.canMintCodes, false, 'claiming first no longer counts')
+    assert.equal((await second('/api/billing')).body.canMintCodes, true, 'the named account, case-insensitively')
+    assert.equal((await first('/api/billing/free-code', { method: 'POST' })).status, 403)
+  })
+})

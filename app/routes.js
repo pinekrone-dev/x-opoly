@@ -547,6 +547,26 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     return exemptTeams.get(teamId)
   }
 
+  /**
+   * Whether this one account may mint free signup codes. Narrower than
+   * exemption on purpose: exemption is a team's, and the operator's
+   * collaborators and the smoke account share it, but the pen that makes a
+   * signup free forever belongs to a single person — the account that
+   * claimed the instance, or, if FREE_CODE_MINTER names an email, exactly
+   * that account instead. Nobody else, whatever team they sit on.
+   */
+  let instanceOwnerId = null
+  const canMintCodes = async (user) => {
+    if (!user) return false
+    const named = String(env.FREE_CODE_MINTER ?? '').trim().toLowerCase()
+    if (named) return String(user.email ?? '').toLowerCase() === named
+    if (instanceOwnerId === null) {
+      const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
+      instanceOwnerId = first?.id ?? null
+    }
+    return instanceOwnerId !== null && user.id === instanceOwnerId
+  }
+
   app.use('/api/*', async (c, next) => {
     if (!stripeConfigured(env)) return next()
     const user = c.get('user')
@@ -1200,6 +1220,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       periodEnd: state.periodEnd ?? null,
       portalAvailable: Boolean(row?.customer_id),
       priceLabel: '$29 / month',
+      canMintCodes: stripeConfigured(env) && (await canMintCodes(user)),
     })
   })
 
@@ -1240,8 +1261,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
   })
 
   /**
-   * Mints a free-forever signup code. Operator-team only: this is the
-   * house's pen, not a customer feature.
+   * Mints a free-forever signup code. One account only — the instance
+   * owner's, see canMintCodes — because this is the house's pen, not a
+   * team feature and not a customer one.
    */
   app.post('/api/billing/free-code', async (c) => {
     const throttled = limited(c, 'free-code', 10, 60 * 60 * 1000)
@@ -1249,8 +1271,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
-    if (!(await teamIsExempt(user.teamId, user.email))) {
-      return c.json({ error: 'Only the workspace operator can mint free codes.' }, 403)
+    if (!(await canMintCodes(user))) {
+      return c.json({ error: 'Only the instance owner can mint free codes.' }, 403)
     }
     try {
       return c.json(await mintFreeCode(env))

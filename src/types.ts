@@ -101,6 +101,8 @@ export interface BillingStatus {
   periodEnd: string | null
   portalAvailable: boolean
   priceLabel: string
+  /** Whether this account, personally, may mint free signup codes. */
+  canMintCodes: boolean
 }
 
 export type Stage = 'prospect' | 'touring' | 'loi' | 'under_contract' | 'passed'
