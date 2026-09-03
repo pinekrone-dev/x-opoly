@@ -316,9 +316,12 @@ allowance of five million a day. What runs now, and what it reads:
   same haystack answers a token-prefix match (`"main"* "st"*`) from its own
   index, joined index-first so a search reads its matches and nothing else.
   A market is searched this way once it has been indexed (`fts` on its
-  summary row); the prospector repository's `reindex-search.yml` indexes a
-  published market in bounded steps, once, and every later publish keeps the
-  index in step. An unindexed market is searched by LIKE as before.
+  summary row). Indexing writes one entry per parcel, once, so it is spread
+  over days: the prospector repository's `reindex-search.yml` runs daily and
+  mirrors at most a budget of rows per run (90,000 by default, under D1's
+  free 100,000 writes a day), the store keeping each market's cursor between
+  runs. Every later publish keeps the index in step. An unindexed or
+  half-indexed market is searched by LIKE as before.
 - **One grouped pass for every number.** Count, value, acreage and the asset
   breakdown come from a single `GROUP BY` over the matches; the page is the
   slice of the highlight list it belongs to, fetched by key.
