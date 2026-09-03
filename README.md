@@ -318,8 +318,9 @@ allowance of five million a day. What runs now, and what it reads:
   A market is searched this way once it has been indexed (`fts` on its
   summary row). Indexing writes one entry per parcel, once, so it is spread
   over days: the prospector repository's `reindex-search.yml` runs daily and
-  mirrors at most a budget of rows per run (90,000 by default, under D1's
-  free 100,000 writes a day), the store keeping each market's cursor between
+  mirrors at most a budget of rows per run (80,000 by default, which fills
+  the 4.7 million published parcels in about sixty days under D1's free
+  100,000 writes a day), the store keeping each market's cursor between
   runs. Every later publish keeps the index in step. An unindexed or
   half-indexed market is searched by LIKE as before.
 - **One grouped pass for every number.** Count, value, acreage and the asset
