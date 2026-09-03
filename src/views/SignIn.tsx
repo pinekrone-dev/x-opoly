@@ -220,12 +220,21 @@ export default function SignIn({
 
         {mode === 'checkEmail' ? (
           <div className="space-y-3">
-            {unverifiedEmail || email ? (
+            {/*
+              Two different situations share this screen, and they are told
+              apart by whether the address is *known* — from a signup or a
+              sign-in that hit an unverified account — not by whether the
+              field has anything in it. It used to be the latter, so on a
+              dead link the input vanished after the first keystroke behind
+              "We sent a confirmation link to k", which read as the page
+              sending an email per letter. Typing is never a send; only the
+              button is.
+            */}
+            {unverifiedEmail ? (
               <>
                 <p className="text-sm leading-relaxed text-body">
-                  We sent a confirmation link to{' '}
-                  <strong className="text-ink">{unverifiedEmail ?? email}</strong>. Open it on this device
-                  and you will be signed straight in.
+                  We sent a confirmation link to <strong className="text-ink">{unverifiedEmail}</strong>. Open
+                  it on this device and you will be signed straight in.
                 </p>
                 <p className="text-xs leading-relaxed text-muted">
                   The link lasts 24 hours. Nothing in your spam folder either? Send a fresh one:
@@ -234,10 +243,11 @@ export default function SignIn({
             ) : (
               <>
                 <p className="text-sm leading-relaxed text-body">
-                  That link cannot be used again — links work once and last 24 hours.
+                  That link cannot be used again — links work once and last 24 hours. If you already
+                  confirmed on another device, just sign in.
                 </p>
                 <p className="text-xs leading-relaxed text-muted">
-                  Type the address you signed up with and a fresh link is on its way.
+                  Otherwise type the address you signed up with and press the button for a fresh link.
                 </p>
                 <input
                   className="field"
@@ -247,6 +257,9 @@ export default function SignIn({
                   aria-label="Email address"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' && !busy && email) void resend()
+                  }}
                 />
               </>
             )}
