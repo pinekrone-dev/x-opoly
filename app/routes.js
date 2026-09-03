@@ -1620,6 +1620,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     'sales.json': 'application/json',
     // What extra layers this market publishes, and what each one is.
     'layers.json': 'application/json',
+    // Harvested per-parcel values (violations, liens, certificates), keyed
+    // by parcel id, folded into rows by the publish under its daily budget.
+    'extras.json': 'application/json',
   }
 
   /*
