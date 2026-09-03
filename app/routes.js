@@ -131,9 +131,11 @@ import {
   marketSummary,
   putParcels,
   readyMarkets,
+  reindexMarket,
   searchParcels,
   sealMarket,
 } from './lib/parcels.js'
+import { edgeCached } from './lib/edgecache.js'
 import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
@@ -1809,18 +1811,42 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
 
     const bucket = env.PROSPECTOR_DATA
     if (bucket && typeof bucket.get === 'function') {
-      const object = await bucket.get(
-        key,
-        wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
+      /*
+       * Kept at the edge, keyed by file and byte range. The tiles under a
+       * city centre are the same few kilobytes for every visitor, and the
+       * bucket bills each read; after the first visitor they cost nothing.
+       * A day for an archive, which only changes when its county is
+       * rebuilt; an hour for the catalogue's JSON, which the layer refresh
+       * rewrites weekly.
+       */
+      const ttl = /\.(pmtiles|geojson)$/.test(key) ? 86400 : 3600
+      return edgeCached(
+        c,
+        `catalog/${key}`,
+        ttl,
+        async () => {
+          const object = await bucket.get(
+            key,
+            wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
+          )
+          if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
+          if (!wants) return new Response(object.body, { headers })
+          const served = object.range?.length ?? object.size - offset
+          const end = offset + served - 1
+          return new Response(object.body, {
+            status: 206,
+            headers: { ...headers, 'content-range': `bytes ${offset}-${end}/${object.size}` },
+          })
+        },
+        {
+          params: { range: asked || '' },
+          // Whole archives are hundreds of megabytes; the edge keeps ranges
+          // and the small files, not a county in one piece.
+          cacheable: (answer) =>
+            (answer.status === 206 || answer.status === 200) &&
+            (asked || Number(answer.headers.get('content-length') || 0) < 32 * 1024 * 1024 || !/\.pmtiles$/.test(key)),
+        },
       )
-      if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
-      if (!wants) return new Response(object.body, { headers })
-      const served = object.range?.length ?? object.size - offset
-      const end = offset + served - 1
-      return new Response(object.body, {
-        status: 206,
-        headers: { ...headers, 'content-range': `bytes ${offset}-${end}/${object.size}` },
-      })
     }
 
     // No bucket here. Fetch the public file the same way anyone would, except
@@ -2020,9 +2046,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     const market = marketSlug(c)
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
-    const summary = await marketSummary(parcels, market).catch(() => null)
-    if (!summary) return c.json({ ready: false, market })
-    return c.json({ ready: true, ...summary })
+    return edgeCached(c, `market/${market}`, 5 * 60, async () => {
+      const summary = await marketSummary(parcels, market).catch(() => null)
+      if (!summary) return c.json({ ready: false, market })
+      return c.json({ ready: true, ...summary })
+    })
   })
 
   /** Every market this server can answer for, so the app can say so up front. */
@@ -2049,15 +2077,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const summary = await marketSummary(parcels, market).catch(() => null)
     if (!summary) return c.json({ ready: false, market }, 404)
 
-    try {
-      const found = await searchParcels(parcels, market, parcelFilters(c), {
-        limit: Number(c.req.query('limit')) || undefined,
-        offset: Number(c.req.query('offset')) || 0,
-      })
-      return c.json({ ready: true, market, ...found })
-    } catch (cause) {
-      return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
-    }
+    /*
+     * The same question from anyone gets the same answer, so the answer is
+     * kept at the edge for a few minutes. Opening a market is the same
+     * request from every visitor — and it is the request that used to read
+     * the whole county — so after the first visitor it costs the store
+     * nothing. Keyed on the market and the filters, never on who asked.
+     */
+    return edgeCached(c, `parcels/${market}`, 10 * 60, async () => {
+      try {
+        const found = await searchParcels(parcels, market, parcelFilters(c), {
+          limit: Number(c.req.query('limit')) || undefined,
+          offset: Number(c.req.query('offset')) || 0,
+          summary,
+        })
+        return c.json({ ready: true, market, ...found })
+      } catch (cause) {
+        return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
+      }
+    })
   })
 
   /** One parcel, for the card. Everything the county published about it. */
@@ -2154,6 +2192,16 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
           builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
         })
         return c.json({ sealed: market, ...sealed })
+      }
+      if (action === 'reindex') {
+        // Mirror the market into the text index, a bounded step at a time.
+        // The caller repeats with the cursor until `done` — see
+        // reindexMarket for why a county cannot be indexed in one request.
+        const after = Number(c.req.query('after'))
+        const step = await reindexMarket(parcels, market, {
+          after: Number.isFinite(after) ? after : 0,
+        })
+        return c.json({ market, ...step })
       }
     } catch (cause) {
       return c.json({ error: `Ingest failed: ${cause.message}.` }, 500)

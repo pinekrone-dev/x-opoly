@@ -68,6 +68,31 @@ export const PARCEL_SCHEMA = [
   'CREATE INDEX IF NOT EXISTS idx_parcels_market_at ON parcels(market, at)',
   'CREATE INDEX IF NOT EXISTS idx_parcels_market_po ON parcels(market, po)',
   'CREATE INDEX IF NOT EXISTS idx_parcels_market_bo ON parcels(market, bo)',
+  /*
+   * The text index.
+   *
+   * `hay LIKE '%q%'` can never use an index, so every keystroke in the search
+   * box read the whole county — four times over, since the page, the totals,
+   * the breakdown and the highlight list each ran the predicate. On Phoenix
+   * that is seven million rows read to answer "main st", against a free
+   * allowance of five million a day.
+   *
+   * An FTS5 table over the same haystack answers a token-prefix match from
+   * its own index, so a search reads its matches rather than the county. It
+   * is an external-content table: it stores no text of its own and reads the
+   * row back from `parcels` by rowid, so it costs the index and nothing else.
+   *
+   * Maintained by hand rather than by triggers, on purpose. A market that
+   * predates the index has rows the index knows nothing about, and a trigger
+   * would start indexing new rows beside them with no way to tell the two
+   * apart; the backfill would then double-index and a later delete would
+   * corrupt the index. So a market is either indexed (`fts` set on its
+   * summary row, every write mirrored here) or not (searched by LIKE as
+   * before, nothing mirrored), and `reindexMarket` is the one door between
+   * the two states.
+   */
+  `CREATE VIRTUAL TABLE IF NOT EXISTS parcels_fts USING fts5(
+     hay, content='parcels', content_rowid='rowid', tokenize='unicode61')`,
 ]
 
 /** The columns held in their own field rather than folded into `rest`. */
@@ -142,7 +167,27 @@ let ensured = new WeakSet()
  * predates it answers NULL for every parcel, which reads as "changed" and
  * costs one baseline pass — correct, and self-correcting after that.
  */
-const PARCEL_ADDED_COLUMNS = [['parcels', 'h', 'TEXT']]
+const PARCEL_ADDED_COLUMNS = [
+  ['parcels', 'h', 'TEXT'],
+  // Whether this market's rows are mirrored into the text index. See the
+  // schema note on parcels_fts for why this is a per-market state.
+  ['parcel_markets', 'fts', 'INTEGER NOT NULL DEFAULT 0'],
+]
+
+/*
+ * The summary row, remembered per isolate.
+ *
+ * Every search and every card open read the market's summary row first — one
+ * row, but one row on every request, which on a busy day is the largest
+ * single line in the read bill after the searches themselves. A seal or a
+ * clear replaces it; nothing else does, so five minutes of memory is safe.
+ */
+const SUMMARY_TTL = 5 * 60 * 1000
+const summaries = new Map()
+
+function forgetSummary(market) {
+  summaries.delete(market)
+}
 
 export async function ensureParcelSchema(db) {
   if (ensured.has(db)) return
@@ -163,6 +208,113 @@ export async function ensureParcelSchema(db) {
 /** Only for tests, which build and discard databases within one process. */
 export function forgetParcelSchema() {
   ensured = new WeakSet()
+  summaries.clear()
+}
+
+/** Whether a market's rows are mirrored into the text index. */
+async function indexed(db, market) {
+  // A recorder standing in for the database in tests has no reads at all;
+  // that is a market nothing has indexed.
+  if (typeof db.get !== 'function') return false
+  const row = await db.get('SELECT fts FROM parcel_markets WHERE market = ?', [market])
+  return Number(row?.fts ?? 0) === 1
+}
+
+/**
+ * Take a set of this market's rows out of the text index.
+ *
+ * An external-content FTS5 table is told what to forget by being handed the
+ * exact text it indexed, so this reads the rows first. `selection` is a
+ * subquery naming rowids; the caller runs the same selection for its own
+ * delete or update so the two cannot disagree about which rows moved.
+ */
+async function unindex(db, selection, params) {
+  await db.run(
+    `INSERT INTO parcels_fts(parcels_fts, rowid, hay)
+       SELECT 'delete', rowid, hay FROM parcels WHERE rowid IN (${selection})`,
+    params,
+  )
+}
+
+/** Rows mirrored into the text index per reindex statement, and per request. */
+export const REINDEX_CHUNK = 5000
+export const REINDEX_BUDGET = 50_000
+
+/**
+ * Mirror a market's rows into the text index, a bounded step at a time.
+ *
+ * Resumable by rowid cursor like listHashes, for the same reason: a county is
+ * more rows than one request may touch. Starting over (no cursor) first takes
+ * the market out of the index, so a market indexed twice reads once. The flag
+ * flips only on the pass that reaches the end, so a market half-indexed by an
+ * interrupted run is still searched by LIKE — slower, never wrong.
+ */
+export async function reindexMarket(db, market, { after = 0, budget = REINDEX_BUDGET } = {}) {
+  await ensureParcelSchema(db)
+  let cursor = Number(after) || 0
+  let indexedRows = 0
+  if (!cursor && (await indexed(db, market))) {
+    // Already indexed: forget it whole before starting again. Bounded like
+    // the rest, so the caller keeps asking until the flag has dropped.
+    await db.run('UPDATE parcel_markets SET fts = 0 WHERE market = ?', [market])
+    forgetSummary(market)
+    let cleared = 0
+    while (cleared < budget) {
+      const rows = await db.all(
+        'SELECT rowid AS r FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+        [market, cursor, REINDEX_CHUNK],
+      )
+      if (!rows.length) break
+      const lo = rows[0].r
+      const hi = rows[rows.length - 1].r
+      await unindex(db, 'SELECT rowid FROM parcels WHERE market = ? AND rowid BETWEEN ? AND ?', [market, lo, hi])
+      cleared += rows.length
+      cursor = hi
+    }
+    // Come back with no cursor once the old index is gone; the next call
+    // starts the fill from the top.
+    return { indexed: 0, cursor: 0, done: false, cleared }
+  }
+  while (indexedRows < budget) {
+    const rows = await db.all(
+      'SELECT rowid AS r FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+      [market, cursor, REINDEX_CHUNK],
+    )
+    if (!rows.length) {
+      await db.run('UPDATE parcel_markets SET fts = 1 WHERE market = ?', [market])
+      forgetSummary(market)
+      return { indexed: indexedRows, cursor: null, done: true }
+    }
+    const lo = rows[0].r
+    const hi = rows[rows.length - 1].r
+    await db.run(
+      `INSERT INTO parcels_fts(rowid, hay)
+         SELECT rowid, hay FROM parcels WHERE market = ? AND rowid BETWEEN ? AND ?`,
+      [market, lo, hi],
+    )
+    indexedRows += rows.length
+    cursor = hi
+  }
+  return { indexed: indexedRows, cursor, done: false }
+}
+
+/**
+ * The search box's text as an FTS5 query: every word a quoted prefix.
+ *
+ * "1600 main" becomes `"1600"* "main"*`, which matches a row carrying both a
+ * token starting 1600 and one starting main — the address, the owner, either
+ * parcel number. Quoted so that punctuation in a name cannot be read as
+ * FTS5 syntax; split on anything that is not a letter or digit, which is
+ * exactly where the tokenizer splits the haystack. Text with no such
+ * characters in it — a lone % — has nothing to match and says so with an
+ * empty string, which the caller turns into a query that matches nothing.
+ */
+export function ftsQuery(text) {
+  const tokens = String(text ?? '')
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+  return tokens.map((token) => `"${token}"*`).join(' ')
 }
 
 const text = (v) => (v == null ? null : String(v))
@@ -241,19 +393,21 @@ export const CLEAR_BUDGET = 50_000
  */
 export async function clearMarket(db, market, budget = CLEAR_BUDGET) {
   await ensureParcelSchema(db)
+  const mirrored = await indexed(db, market)
   let removed = 0
   while (removed < budget) {
-    const result = await db.run(
-      'DELETE FROM parcels WHERE rowid IN ' +
-        '(SELECT rowid FROM parcels WHERE market = ? LIMIT ?)',
-      [market, CLEAR_CHUNK],
-    )
+    // The same bounded selection, first forgotten by the text index and
+    // then deleted, so the index never keeps a row the table has lost.
+    const selection = 'SELECT rowid FROM parcels WHERE market = ? ORDER BY rowid LIMIT ?'
+    if (mirrored) await unindex(db, selection, [market, CLEAR_CHUNK])
+    const result = await db.run(`DELETE FROM parcels WHERE rowid IN (${selection})`, [market, CLEAR_CHUNK])
     const gone = Number(result?.changes ?? 0)
     removed += gone
     // A short pass means the market held fewer rows than the chunk asked
     // for, which is how the end is recognised without a second count query.
     if (gone < CLEAR_CHUNK) {
       await db.run('DELETE FROM parcel_markets WHERE market = ?', [market])
+      forgetSummary(market)
       return { removed, done: true }
     }
   }
@@ -323,15 +477,20 @@ export async function dropParcels(db, market, pids) {
   await ensureParcelSchema(db)
   const wanted = [...new Set((pids ?? []).map((pid) => String(pid)).filter(Boolean))]
   if (!wanted.length) return 0
+  const mirrored = await indexed(db, market)
   let removed = 0
   for (let i = 0; i < wanted.length; i += DROP_CHUNK) {
     const chunk = wanted.slice(i, i + DROP_CHUNK)
     // json_each again rather than a list of placeholders: D1 binds at most a
     // hundred parameters to a statement, and a drop list is not bounded by a
     // hundred.
+    const params = [market, JSON.stringify(chunk)]
+    if (mirrored) {
+      await unindex(db, 'SELECT rowid FROM parcels WHERE market = ? AND pid IN (SELECT value FROM json_each(?))', params)
+    }
     const result = await db.run(
       'DELETE FROM parcels WHERE market = ? AND pid IN (SELECT value FROM json_each(?))',
-      [market, JSON.stringify(chunk)],
+      params,
     )
     removed += Number(result?.changes ?? 0)
   }
@@ -391,6 +550,21 @@ export async function putParcels(db, market, raws) {
   // budget instead of a row count.
   const parts = rows.map((row) => JSON.stringify(row.slice(1)))
 
+  /*
+   * An indexed market mirrors every write into the text index: the rows
+   * about to change are forgotten by the index before the upsert and
+   * re-indexed after it, inside the same batch as the upsert so the three
+   * land together or not at all. The pid list rides as JSON like the rows.
+   */
+  const mirrored = await indexed(db, market)
+  const forget =
+    'INSERT INTO parcels_fts(parcels_fts, rowid, hay) ' +
+    "SELECT 'delete', rowid, hay FROM parcels WHERE market = ?1 " +
+    'AND pid IN (SELECT value FROM json_each(?2))'
+  const remember =
+    'INSERT INTO parcels_fts(rowid, hay) SELECT rowid, hay FROM parcels WHERE market = ?1 ' +
+    'AND pid IN (SELECT value FROM json_each(?2))'
+
   const statements = []
   for (let i = 0; i < parts.length; ) {
     let bytes = 2                                   // the enclosing brackets
@@ -401,7 +575,10 @@ export async function putParcels(db, market, raws) {
       bytes += next
       end += 1
     }
+    const pids = JSON.stringify(rows.slice(i, end).map((row) => row[1]))
+    if (mirrored) statements.push({ bytes: pids.length, call: [forget, [market, pids]] })
     statements.push({ bytes, call: [sql, [market, `[${parts.slice(i, end).join(',')}]`]] })
+    if (mirrored) statements.push({ bytes: pids.length, call: [remember, [market, pids]] })
     i = end
   }
 
@@ -477,9 +654,13 @@ export async function sealMarket(db, market, { keys = [], builtAt = null } = {})
     }
   }
 
+  // An upsert rather than a replace, so the text-index flag a reindex set
+  // survives the seal that follows every publish.
   await db.run(
-    `INSERT OR REPLACE INTO parcel_markets (market, n, total, acreage, keys, assets, breaks, built_at)
-     VALUES (?,?,?,?,?,?,?,?)`,
+    `INSERT INTO parcel_markets (market, n, total, acreage, keys, assets, breaks, built_at)
+     VALUES (?,?,?,?,?,?,?,?)
+     ON CONFLICT(market) DO UPDATE SET n=excluded.n, total=excluded.total, acreage=excluded.acreage,
+       keys=excluded.keys, assets=excluded.assets, breaks=excluded.breaks, built_at=excluded.built_at`,
     [
       market,
       n,
@@ -491,6 +672,7 @@ export async function sealMarket(db, market, { keys = [], builtAt = null } = {})
       builtAt || new Date().toISOString(),
     ],
   )
+  forgetSummary(market)
   return { n, total: Number(totals?.total ?? 0), acreage: Number(totals?.acreage ?? 0) }
 }
 
@@ -502,8 +684,9 @@ export async function sealMarket(db, market, { keys = [], builtAt = null } = {})
  */
 export async function marketSummary(db, market) {
   await ensureParcelSchema(db)
+  const held = summaries.get(market)
+  if (held && held.until > Date.now() && held.db === db) return held.summary
   const row = await db.get('SELECT * FROM parcel_markets WHERE market = ?', [market])
-  if (!row || Number(row.n) === 0) return null
   const parse = (value, fallback) => {
     try {
       return JSON.parse(value) ?? fallback
@@ -511,16 +694,24 @@ export async function marketSummary(db, market) {
       return fallback
     }
   }
-  return {
-    market,
-    count: Number(row.n),
-    total: Number(row.total),
-    acreage: Number(row.acreage),
-    keys: parse(row.keys, []),
-    assets: parse(row.assets, []),
-    breaks: parse(row.breaks, []),
-    builtAt: row.built_at || null,
-  }
+  const summary =
+    !row || Number(row.n) === 0
+      ? null
+      : {
+          market,
+          count: Number(row.n),
+          total: Number(row.total),
+          acreage: Number(row.acreage),
+          keys: parse(row.keys, []),
+          assets: parse(row.assets, []),
+          breaks: parse(row.breaks, []),
+          builtAt: row.built_at || null,
+          fts: Number(row.fts ?? 0) === 1,
+        }
+  // A missing market is remembered too: the app asks about every market it
+  // lists, and the ones not published here would otherwise cost a read each.
+  summaries.set(market, { summary, until: Date.now() + SUMMARY_TTL, db })
+  return summary
 }
 
 /** Turn a stored row back into the flat parcel the panel reads. */
@@ -548,9 +739,19 @@ export function hydrate(row) {
  * report — so they are three readings of this one predicate rather than three
  * queries that happen to look alike.
  */
-function where(market, filters = {}) {
+function where(market, filters = {}, { fts = false } = {}) {
   const clauses = ['market = ?']
   const params = [market]
+  /*
+   * What the predicate reads from. Plain `parcels` unless a text query can
+   * use the index, in which case the index leads: the query walks the
+   * matching rowids out of parcels_fts and looks each one up in parcels by
+   * key, so a search reads its matches and nothing else. Written as
+   * `rowid IN (subquery)` instead, SQLite chose to walk the whole market
+   * through a covering index and test each row against the list — every
+   * row of the county read, which is the bill this index exists to stop.
+   */
+  let from = 'parcels'
 
   const assets = (filters.assets || []).filter((a) => a !== '')
   if (assets.length) {
@@ -575,13 +776,28 @@ function where(market, filters = {}) {
     params.push(String(filters.owner.id))
   }
   const q = (filters.query || '').trim().toLowerCase()
-  if (q) {
+  if (q && fts) {
+    const match = ftsQuery(q)
+    if (match) {
+      // CROSS JOIN, which SQLite treats as an order: the index's match
+      // list is the outer loop and each hit is one key lookup in parcels.
+      // As a plain join the planner ran it the other way round — every row
+      // of the market, with a full-text query per row to test it.
+      from = 'parcels_fts f CROSS JOIN parcels'
+      clauses.unshift('parcels.rowid = f.rowid')
+      clauses.unshift('f.parcels_fts MATCH ?')
+      params.unshift(match)
+    } else {
+      // Nothing in the text can match a token, so nothing matches.
+      clauses.push('0')
+    }
+  } else if (q) {
     // Escaped so a broker searching for a literal % or _ finds that, rather
     // than matching the whole county.
     clauses.push("hay LIKE ? ESCAPE '\\'")
     params.push(`%${q.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`)
   }
-  return { sql: clauses.join(' AND '), params }
+  return { sql: clauses.join(' AND '), params, from }
 }
 
 /** Whether any filter is actually set, as opposed to an empty form. */
@@ -601,50 +817,108 @@ export function filtersActive(filters = {}) {
  * and what the whole matching set adds up to — the three things the panel
  * needs, from one predicate, in one round trip from the browser's side.
  */
-export async function searchParcels(db, market, filters = {}, { limit = PAGE_SIZE, offset = 0 } = {}) {
+const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest'
+
+export async function searchParcels(
+  db,
+  market,
+  filters = {},
+  { limit = PAGE_SIZE, offset = 0, summary: given = undefined } = {},
+) {
   await ensureParcelSchema(db)
-  const { sql, params } = where(market, filters)
+  const summary = given === undefined ? await marketSummary(db, market) : given
+  const { sql, params, from: source } = where(market, filters, { fts: Boolean(summary?.fts) })
   const page = Math.min(Math.max(Number(limit) || PAGE_SIZE, 1), 1000)
   const from = Math.max(Number(offset) || 0, 0)
 
-  const totals = await db.get(
-    `SELECT COUNT(*) AS n, COALESCE(SUM(mv),0) AS total, COALESCE(SUM(${ACRES_PER_LOT}),0) AS acreage
-       FROM parcels WHERE ${sql}`,
+  /*
+   * An empty form is the market itself, and the market already knows its
+   * own totals: the seal wrote them. Opening a county used to cost two
+   * full passes over it to learn numbers that were sitting in one row, and
+   * every visitor paid that on arrival.
+   */
+  if (!filtersActive(filters) && summary) {
+    const named = (summary.assets || []).map((row) => [row.value, Number(row.count)])
+    const counted = named.reduce((sum, [, count]) => sum + count, 0)
+    const blank = summary.count - counted
+    const byAsset = blank > 0 ? [...named, ['Unclassified', blank]] : named
+    byAsset.sort((a, b) => b[1] - a[1])
+    const rows = await db.all(
+      `SELECT ${ROW_COLUMNS} FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ? OFFSET ?`,
+      [...params, page, from],
+    )
+    return {
+      count: summary.count,
+      total: summary.total,
+      acreage: summary.acreage,
+      byAsset,
+      rows: rows.map(hydrate),
+      ids: null,
+      truncated: false,
+      offset: from,
+      limit: page,
+    }
+  }
+
+  /*
+   * One pass for every number: the count, the value, the acreage and the
+   * breakdown by asset type come out of a single grouped read of the
+   * matching rows, where they used to be two reads of the whole set.
+   */
+  const grouped = await db.all(
+    `SELECT COALESCE(NULLIF(TRIM(at),''), 'Unclassified') AS value, COUNT(*) AS count,
+            COALESCE(SUM(mv),0) AS total, COALESCE(SUM(${ACRES_PER_LOT}),0) AS acreage
+       FROM ${source} WHERE ${sql} GROUP BY value ORDER BY count DESC`,
     params,
   )
-  const count = Number(totals?.n ?? 0)
-
-  const byAsset = await db.all(
-    `SELECT COALESCE(NULLIF(TRIM(at),''), 'Unclassified') AS value, COUNT(*) AS count
-       FROM parcels WHERE ${sql} GROUP BY value ORDER BY count DESC`,
-    params,
-  )
-
-  const rows = await db.all(
-    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest
-       FROM parcels WHERE ${sql} ORDER BY mv DESC LIMIT ? OFFSET ?`,
-    [...params, page, from],
-  )
+  const count = grouped.reduce((sum, row) => sum + Number(row.count), 0)
+  const total = grouped.reduce((sum, row) => sum + Number(row.total), 0)
+  const acreage = grouped.reduce((sum, row) => sum + Number(row.acreage), 0)
+  const byAsset = grouped.map((row) => [row.value, Number(row.count)])
 
   // The highlight list is only fetched when a filter is actually set. With no
   // filter the map draws every parcel anyway, and shipping a county's worth of
   // ids to say "all of them" would rebuild the problem this replaced.
   let ids = null
   let truncated = false
+  let rows
   if (filtersActive(filters)) {
     const held = await db.all(
-      `SELECT pid FROM parcels WHERE ${sql} ORDER BY mv DESC LIMIT ?`,
+      `SELECT pid FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ?`,
       [...params, MAX_HIGHLIGHT_IDS + 1],
     )
     truncated = held.length > MAX_HIGHLIGHT_IDS
     ids = held.slice(0, MAX_HIGHLIGHT_IDS).map((row) => row.pid)
+    /*
+     * The page is a slice of the list just read, so it is fetched by key —
+     * two hundred index seeks — rather than by running the predicate a
+     * third time. Only a page past the highlight cap, which is an export
+     * walking a very large match, still pays the scan.
+     */
+    if (from + page <= held.length || held.length <= MAX_HIGHLIGHT_IDS) {
+      const wanted = held.slice(from, from + page).map((row) => row.pid)
+      const fetched = wanted.length
+        ? await db.all(
+            `SELECT ${ROW_COLUMNS} FROM parcels WHERE market = ? AND pid IN (SELECT value FROM json_each(?))`,
+            [market, JSON.stringify(wanted)],
+          )
+        : []
+      const byPid = new Map(fetched.map((row) => [row.pid, row]))
+      rows = wanted.map((pid) => byPid.get(pid)).filter(Boolean)
+    }
+  }
+  if (!rows) {
+    rows = await db.all(
+      `SELECT ${ROW_COLUMNS} FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ? OFFSET ?`,
+      [...params, page, from],
+    )
   }
 
   return {
     count,
-    total: Number(totals?.total ?? 0),
-    acreage: Number(totals?.acreage ?? 0),
-    byAsset: byAsset.map((row) => [row.value, Number(row.count)]),
+    total,
+    acreage,
+    byAsset,
     rows: rows.map(hydrate),
     ids,
     truncated,

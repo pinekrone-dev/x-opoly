@@ -10,6 +10,8 @@ import {
   clearMarket,
   dropParcels,
   filtersActive,
+  forgetParcelSchema,
+  ftsQuery,
   getParcel,
   hydrate,
   listHashes,
@@ -17,6 +19,7 @@ import {
   parcelRow,
   putParcels,
   readyMarkets,
+  reindexMarket,
   searchParcels,
   sealMarket,
 } from '../app/lib/parcels.js'
@@ -446,5 +449,94 @@ describe('publishing what changed', () => {
   test('dropping nothing asks the database nothing', async () => {
     assert.equal(await dropParcels(db, 'drop-a', []), 0)
     assert.equal(await dropParcels(db, 'drop-a', null), 0)
+  })
+})
+
+describe('the text index', () => {
+  let fts
+  before(async () => {
+    fts = nodeAdapter(new DatabaseSync(':memory:'))
+    await fts.migrate()
+    await putParcels(fts, 'austin-tx', PARCELS)
+    await sealMarket(fts, 'austin-tx', { keys: [] })
+  })
+
+  test('a market starts unindexed and is searched by LIKE until reindexed', async () => {
+    assert.equal((await marketSummary(fts, 'austin-tx')).fts, false)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'main st' })).count, 2)
+  })
+
+  test('reindexing walks the market in bounded steps and flips the flag at the end', async () => {
+    let step = await reindexMarket(fts, 'austin-tx', { budget: 2 })
+    assert.equal(step.done, false)
+    assert.ok(step.cursor > 0)
+    step = await reindexMarket(fts, 'austin-tx', { after: step.cursor, budget: 2 })
+    assert.equal(step.done, true)
+    forgetParcelSchema()
+    assert.equal((await marketSummary(fts, 'austin-tx')).fts, true)
+  })
+
+  test('the indexed search answers the same questions as the scan did', async () => {
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'main st' })).count, 2)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'vance' })).count, 1)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'L-22' })).count, 1)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: '103' })).count, 1)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'Reyes hold' })).count, 2, 'a prefix of a word matches')
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'nothing here' })).count, 0)
+  })
+
+  test('a query with no letters or digits matches nothing rather than everything', async () => {
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: '%' })).count, 0)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: '"' })).count, 0, 'quotes are not FTS syntax here')
+  })
+
+  test('the query language cannot be reached from the search box', () => {
+    assert.equal(ftsQuery('main OR st'), '"main"* "or"* "st"*')
+    assert.equal(ftsQuery('a-b c_d'), '"a"* "b"* "c"* "d"*')
+    assert.equal(ftsQuery('   '), '')
+  })
+
+  test('writes to an indexed market keep the index in step', async () => {
+    await putParcels(fts, 'austin-tx', [{ id: 105, ad: '5 Harbor Way', ow: 'Nakamura Marine', mv: 10, ac: 1 }])
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'nakamura' })).count, 1, 'a new row is found')
+    await putParcels(fts, 'austin-tx', [{ id: 105, ad: '5 Harbor Way', ow: 'Ortiz Marine', mv: 10, ac: 1 }])
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'nakamura' })).count, 0, 'the old owner is forgotten')
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'ortiz' })).count, 1, 'the new owner is found')
+    await dropParcels(fts, 'austin-tx', [105])
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'ortiz' })).count, 0, 'a dropped row is gone')
+  })
+
+  test('reindexing again does not double the index', async () => {
+    let step = await reindexMarket(fts, 'austin-tx')
+    while (!step.done) step = await reindexMarket(fts, 'austin-tx', { after: step.cursor ?? 0 })
+    const res = await searchParcels(fts, 'austin-tx', { query: 'main' })
+    assert.equal(res.count, 2)
+    assert.equal(res.ids.length, 2)
+  })
+
+  test('clearing an indexed market empties the index with it', async () => {
+    await putParcels(fts, 'gone-yy', [{ id: 1, ad: 'Unique Zebra Lane', mv: 1, ac: 1 }])
+    await sealMarket(fts, 'gone-yy', {})
+    let step = await reindexMarket(fts, 'gone-yy')
+    while (!step.done) step = await reindexMarket(fts, 'gone-yy', { after: step.cursor ?? 0 })
+    await clearMarket(fts, 'gone-yy')
+    const orphans = await fts.all("SELECT rowid FROM parcels_fts WHERE parcels_fts MATCH '\"zebra\"*'")
+    assert.equal(orphans.length, 0)
+  })
+})
+
+describe('what a search reads', () => {
+  test('an empty form answers from the summary row, not from the county', async () => {
+    const res = await searchParcels(db, 'austin-tx', {}, { summary: { count: 99, total: 5, acreage: 7, assets: [{ value: 'Retail', count: 98 }], fts: false } })
+    assert.equal(res.count, 99, 'the count is the summary\'s')
+    assert.deepEqual(res.byAsset, [['Retail', 98], ['Unclassified', 1]])
+    assert.equal(res.rows.length, 4, 'the page is still real rows')
+  })
+
+  test('a filtered page is the slice of the highlight list, in the same order', async () => {
+    const res = await searchParcels(db, 'austin-tx', { assets: ['Retail'] }, { limit: 1, offset: 1 })
+    assert.equal(res.ids.length, 2)
+    assert.equal(res.rows.length, 1)
+    assert.equal(String(res.rows[0].id), res.ids[1])
   })
 })

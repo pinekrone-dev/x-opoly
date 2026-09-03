@@ -17,6 +17,7 @@ import { createApp } from '../app/routes.js'
 import { nodeAdapter } from '../app/lib/sql.js'
 import { diskStorage } from '../app/lib/storage.js'
 import { forgetKeyedTeams } from '../app/lib/crm.js'
+import { forgetSessions } from '../app/lib/auth.js'
 import { createLookupCache, coordinateKey } from '../app/lib/lookupcache.js'
 
 /** The adapter, with every statement it sends written down. */
@@ -71,11 +72,15 @@ describe('database round trips per action', () => {
     assert.equal(db.writes(), 0)
   })
 
-  test('an authenticated list costs one auth query plus the list', async () => {
+  test('an authenticated list costs one auth query plus the list, and the auth query only once a minute', async () => {
     await call('GET', '/api/surveys') // warms the has-users check
+    forgetSessions()
+    const cold = await call('GET', '/api/surveys')
+    assert.equal(cold.status, 200)
+    assert.equal(cold.trips, 2, 'a forgotten session is one read plus the list')
     const { status, trips } = await call('GET', '/api/surveys')
     assert.equal(status, 200)
-    assert.equal(trips, 2)
+    assert.equal(trips, 1, 'a remembered session is the list alone')
   })
 
   test('creating a site with custom fields is one batch and no re-read', async () => {
@@ -126,7 +131,7 @@ describe('database round trips per action', () => {
     const created = await call('POST', `/api/surveys/${survey.body.survey.id}/properties`, { name: 'Gone' })
     const removed = await call('DELETE', `/api/properties/${created.body.property.id}`)
     assert.equal(removed.status, 204)
-    assert.equal(removed.trips, 3)
+    assert.equal(removed.trips, 2)
     assert.equal((await call('DELETE', `/api/properties/${created.body.property.id}`)).status, 404)
   })
 
@@ -167,7 +172,7 @@ describe('database round trips per action', () => {
   test('lists are searched in SQL and bounded', async () => {
     for (let i = 0; i < 5; i++) await call('POST', '/api/crm/places', { name: `Warehouse ${i}`, city: i % 2 ? 'Waco' : 'Tyler' })
     const found = await call('GET', '/api/crm/places?q=waco')
-    assert.equal(found.trips, 3)
+    assert.equal(found.trips, 2)
     assert.ok(found.body.records.every((record) => record.city === 'Waco'))
     assert.equal(found.body.truncated, false)
     const page = await call('GET', '/api/crm/places?limit=2')
@@ -179,7 +184,7 @@ describe('database round trips per action', () => {
 
   test('the navigation counts are one query', async () => {
     const { body, trips } = await call('GET', '/api/crm/counts')
-    assert.equal(trips, 2)
+    assert.equal(trips, 1)
     assert.ok(body.counts.places >= 5)
     assert.equal(typeof body.surveys, 'number')
   })

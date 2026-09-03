@@ -73,7 +73,7 @@ describe('basemap selection', () => {
       assert.ok(preset.url.includes('{z}'), `${name} has no zoom placeholder`)
       assert.ok(preset.url.includes('{x}') && preset.url.includes('{y}'), `${name} has no tile placeholders`)
       assert.ok(preset.attribution.length > 0, `${name} has no attribution`)
-      assert.ok(preset.maxZoom >= 18, `${name} has an unusable max zoom`)
+      assert.ok(preset.maxZoom >= 16, `${name} has an unusable max zoom`)
     }
   })
 })
@@ -134,5 +134,31 @@ describe('the basemap switcher', () => {
   test('the placeholder grid is only offered when it was asked for', () => {
     const options = availableBasemaps({ TILE_PROVIDER: 'offline' })
     assert.ok(options.some((option) => option.provider === 'offline'))
+  })
+})
+
+describe('the keyless basemaps', () => {
+  const offered = availableBasemaps({})
+  const ids = offered.map((entry) => entry.provider)
+
+  test('every keyless, reliable preset is in the switcher', () => {
+    for (const id of ['osm', 'osm-hot', 'opentopomap', 'satellite', 'esri-streets', 'esri-topo',
+      'esri-gray', 'esri-dark', 'esri-natgeo', 'usgs-imagery', 'usgs-topo', 'usgs-hybrid']) {
+      assert.ok(ids.includes(id), `${id} should be offered without a key`)
+    }
+    assert.ok(!ids.includes('mapbox'), 'a keyed provider stays out until it has a key')
+    assert.ok(!ids.includes('carto-voyager'), 'a throttled host stays out unless configured')
+  })
+
+  test('ArcGIS services take row before column, and every basemap credits its source', () => {
+    for (const entry of offered) {
+      assert.ok(entry.attribution.length > 8, `${entry.provider} needs attribution`)
+      if (/arcgis|nationalmap/.test(entry.url)) {
+        assert.ok(entry.url.endsWith('/{z}/{y}/{x}'), `${entry.provider} must address tiles as z/y/x`)
+      } else {
+        assert.ok(entry.url.includes('{z}/{x}/{y}'), `${entry.provider} must address tiles as z/x/y`)
+      }
+      assert.ok(entry.maxZoom >= 16 && entry.maxZoom <= 22, `${entry.provider} zoom limit`)
+    }
   })
 })

@@ -179,9 +179,20 @@ On Cloudflare these come from bindings and secrets rather than the environment â
 | Value | Basemap | Key needed |
 | --- | --- | --- |
 | `osm` *(default)* | Standard OpenStreetMap street map | no |
-| `carto-voyager` | Street map, cleaner rendering of the same data | no |
-| `carto-light` | Muted, for when the pins should dominate | no |
-| `carto-dark` | Dark | no |
+| `osm-hot` | OpenStreetMap, Humanitarian style (OSM France) | no |
+| `opentopomap` | Terrain with contours (OpenTopoMap, CC-BY-SA) | no |
+| `satellite` | Esri World Imagery | no |
+| `esri-streets` | Esri World Street Map | no |
+| `esri-topo` | Esri World Topographic | no |
+| `esri-gray` | Esri Light Gray Canvas, a near-blank ground for parcels and layers | no |
+| `esri-dark` | Esri Dark Gray Canvas | no |
+| `esri-natgeo` | National Geographic world map | no |
+| `usgs-imagery` | USGS orthoimagery, public domain, US only | no |
+| `usgs-topo` | USGS topographic, public domain, US only | no |
+| `usgs-hybrid` | USGS imagery with roads and names | no |
+| `carto-voyager` | Street map, cleaner rendering of the same data | no, but throttled anonymously |
+| `carto-light` | Muted, for when the pins should dominate | no, but throttled anonymously |
+| `carto-dark` | Dark | no, but throttled anonymously |
 | `mapbox` | Mapbox styles (`TILE_STYLE`, default `dark-v11`) | yes |
 | `here` | HERE explore.night | yes |
 | `maptiler` | MapTiler (`TILE_STYLE`) | yes |
@@ -190,7 +201,10 @@ On Cloudflare these come from bindings and secrets rather than the environment â
 
 A keyed provider with no `TILE_KEY` falls back to the keyless default and says so, rather
 than rendering a map of broken tiles. Whichever basemaps a deployment can actually load
-are offered in a switcher on the map itself, and the viewer's choice is remembered.
+are offered in a switcher on the map itself, and the viewer's choice is remembered. Every
+keyless basemap above is in the switcher; the Esri and USGS ones are ArcGIS tile services
+(row before column in the URL) and carry the attribution their terms ask for. The USGS
+layers stop at zoom 16, which is block scale; the map holds at the basemap's own limit.
 
 The default is an ordinary street map, and the keyed providers default to their standard
 street styles too. The map surface, zoom controls and attribution follow the basemap, so
@@ -276,6 +290,53 @@ budget rests on:
 - **Places match by an indexed key.** `places.address_key` is the address
   flattened for comparison, kept in step on every write. Rows from before the
   column existed are keyed the first time a team's lookup misses.
+- **A session is remembered for a minute.** The cookie-to-user read is skipped
+  for a minute per isolate; sign-out and password change clear the memory.
+
+### What a parcel search reads
+
+The parcel store is the only table with a million rows in it, so it is where
+reads scale with use. D1 bills rows read, and a `LIKE '%text%'` can never use
+an index, so the search box used to read the whole county four times per
+keystroke â€” on Phoenix, seven million rows to answer "main st", against a free
+allowance of five million a day. What runs now, and what it reads:
+
+| Request | Before | Now |
+| --- | --- | --- |
+| Open a market (empty form) | 2 full passes + 1 page | 1 summary row + 200 index rows |
+| Text search, indexed market | 4 full passes | 2 walks of the matches + 200 key lookups |
+| Text search, unindexed market | 4 full passes | 2 full passes + 200 key lookups |
+| Value or acreage range | 4 index-range passes | 2 index-range passes + 200 key lookups |
+| The same question again, anywhere in the region | all of the above | nothing: served from the edge cache |
+
+- **The summary row answers the empty form.** The seal wrote the count, the
+  value, the acreage and the asset breakdown; opening a market reads them
+  rather than recomputing them.
+- **Text goes through FTS5.** An external-content full-text index over the
+  same haystack answers a token-prefix match (`"main"* "st"*`) from its own
+  index, joined index-first so a search reads its matches and nothing else.
+  A market is searched this way once it has been indexed (`fts` on its
+  summary row); the prospector repository's `reindex-search.yml` indexes a
+  published market in bounded steps, once, and every later publish keeps the
+  index in step. An unindexed market is searched by LIKE as before.
+- **One grouped pass for every number.** Count, value, acreage and the asset
+  breakdown come from a single `GROUP BY` over the matches; the page is the
+  slice of the highlight list it belongs to, fetched by key.
+- **Answers are kept at the edge.** `GET /api/gis/parcels`, `/api/gis/market`
+  and the catalogue proxy (`/catalog/*`, byte ranges included) are cached
+  with the Cache API, keyed on the question and never on who asked: ten
+  minutes for a search, five for a market, a day for a tile archive. The
+  sign-in check still runs first. `x-edge-cache: hit|miss` says which.
+
+Measured on a synthetic 200,000-parcel county in `node:sqlite`: the text
+search "main st" (25,000 matches) went from 331 ms of four full scans to 56 ms
+of index-driven reads; opening the market from 19 ms of two full scans to 1 ms.
+On D1 the same change moves the read count from four times the county per
+search to roughly twice the match count.
+
+Writes are unchanged in kind: a publish still writes only rows whose hash
+moved. An indexed market writes each changed row to the text index as well,
+which is one more row per parcel per change.
 
 ## Outside lookups: cache and rate limits
 

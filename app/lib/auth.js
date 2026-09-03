@@ -227,9 +227,35 @@ export async function createSession(db, userId) {
  * row are read together rather than as two round trips. The session's expiry
  * rides along under its own name so it cannot collide with a user column.
  */
+/*
+ * Who a token belongs to, remembered briefly per isolate.
+ *
+ * Every API request resolves its cookie to a user, and that was one row read
+ * per request — the single largest line in the read bill once the searches
+ * stopped scanning counties, because a map session makes hundreds of small
+ * requests. A minute of memory removes almost all of it. A minute is short
+ * enough that a sign-out or a password change lands before anyone notices,
+ * and both clear this table directly for the token they know about.
+ */
+const SESSION_TTL = 60 * 1000
+const SESSION_MEMORY = 500
+const sessions = new Map()
+
+function rememberSession(hash, user) {
+  if (sessions.size >= SESSION_MEMORY) sessions.delete(sessions.keys().next().value)
+  sessions.set(hash, { user, until: Date.now() + SESSION_TTL })
+}
+
+/** Only for tests, which sign in and out within one process. */
+export function forgetSessions() {
+  sessions.clear()
+}
+
 export async function sessionUser(db, token) {
   if (!token) return null
   const hash = await hashToken(token)
+  const held = sessions.get(hash)
+  if (held && held.until > Date.now()) return held.user
   const row = await db.get(
     `SELECT u.*, s.expires_at AS session_expires_at
        FROM sessions s JOIN users u ON u.id = s.user_id
@@ -242,16 +268,21 @@ export async function sessionUser(db, token) {
     await db.run('DELETE FROM sessions WHERE token_hash = ?', [hash])
     return null
   }
-  return mapUser(row)
+  const user = mapUser(row)
+  rememberSession(hash, user)
+  return user
 }
 
 export async function destroySession(db, token) {
   if (!token) return
-  await db.run('DELETE FROM sessions WHERE token_hash = ?', [await hashToken(token)])
+  const hash = await hashToken(token)
+  sessions.delete(hash)
+  await db.run('DELETE FROM sessions WHERE token_hash = ?', [hash])
 }
 
 /** Used when a password changes: every other device should be signed out. */
 export async function destroyAllSessions(db, userId) {
+  for (const [hash, held] of sessions) if (held.user?.id === userId) sessions.delete(hash)
   await db.run('DELETE FROM sessions WHERE user_id = ?', [userId])
 }
 

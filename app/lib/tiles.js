@@ -49,6 +49,94 @@ export const TILE_PRESETS = {
     keyRequired: false,
     darkNative: true,
   },
+  /*
+   * The rest of Esri's keyless basemaps, same host and same tile order.
+   * Free to use with the attribution shown, which the map keeps visible.
+   */
+  'esri-streets': {
+    label: 'Streets (Esri)',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: Esri, HERE, Garmin, USGS, NGA, OpenStreetMap contributors',
+    maxZoom: 19,
+    keyRequired: false,
+  },
+  'esri-topo': {
+    label: 'Topographic',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: Esri, HERE, Garmin, USGS, NGA, OpenStreetMap contributors',
+    maxZoom: 19,
+    keyRequired: false,
+  },
+  'esri-gray': {
+    // A near-blank canvas: the basemap parcels and layers read best on,
+    // since nothing underneath competes with their colour.
+    label: 'Light canvas',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: Esri, HERE, Garmin, OpenStreetMap contributors',
+    maxZoom: 16,
+    keyRequired: false,
+  },
+  'esri-dark': {
+    label: 'Dark canvas',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: Esri, HERE, Garmin, OpenStreetMap contributors',
+    maxZoom: 16,
+    keyRequired: false,
+    darkNative: true,
+  },
+  'esri-natgeo': {
+    label: 'National Geographic',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',
+    attribution: '© Esri — Source: National Geographic, Esri, Garmin, HERE, UNEP-WCMC, USGS, NASA, ESA, METI, NRCAN, GEBCO, NOAA',
+    maxZoom: 16,
+    keyRequired: false,
+  },
+  /*
+   * The US Geological Survey's own tiles, public domain and keyless. US
+   * only, which is where every market is, and the imagery is often newer
+   * over a county than the world layers above.
+   */
+  'usgs-imagery': {
+    label: 'Satellite (USGS)',
+    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: Orthoimagery',
+    maxZoom: 16,
+    keyRequired: false,
+    darkNative: true,
+  },
+  'usgs-topo': {
+    label: 'Topographic (USGS)',
+    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: National Boundaries, Transportation, Hydrography, Names',
+    maxZoom: 16,
+    keyRequired: false,
+  },
+  'usgs-hybrid': {
+    label: 'Satellite with roads (USGS)',
+    url: 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryTopo/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'USGS The National Map: Orthoimagery and Topo',
+    maxZoom: 16,
+    keyRequired: false,
+    darkNative: true,
+  },
+  /*
+   * Two more OpenStreetMap renderings from projects that ask for
+   * attribution and nothing else.
+   */
+  'osm-hot': {
+    label: 'Street map (humanitarian)',
+    url: 'https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors, tiles style by Humanitarian OpenStreetMap Team, hosted by OpenStreetMap France',
+    maxZoom: 19,
+    keyRequired: false,
+  },
+  opentopomap: {
+    label: 'Terrain (OpenTopoMap)',
+    url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+    attribution: '© OpenStreetMap contributors, SRTM · map style © OpenTopoMap (CC-BY-SA)',
+    maxZoom: 17,
+    keyRequired: false,
+  },
   'carto-light': {
     label: 'Muted',
     unreliable: true,
