@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -1703,7 +1703,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
-    if (meta?.colorBy !== 'value') return null
+    // Whatever the parcels are actually coloured by, not what the county
+    // declares: this used to ask meta.colorBy, so choosing "Market value" in
+    // the picker on a market that defaults to land use computed no breaks
+    // and the map silently stayed coloured by land use.
+    if (effectiveColorBy !== 'value') return null
     // Computed once when the county was published, rather than by sorting
     // every assessed value in the browser on every market open.
     if (server?.ready && server.breaks?.length) return server.breaks
@@ -1716,7 +1720,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     const breaks: number[] = []
     for (let i = 1; i < 7; i += 1) breaks.push(values[Math.floor((i * values.length) / 7)])
     return breaks
-  }, [index, meta?.colorBy, server])
+  }, [index, effectiveColorBy, server])
 
   const parcel = useMemo(() => {
     if (selected == null) return null
@@ -2243,22 +2247,44 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     }
   }
 
-  /** The centre of the selected parcel, from its bounding box in the index. */
-  const centre = useMemo(() => {
+  /** The selected parcel's bounding box, west-south-east-north, from the index. */
+  const selectedBox = useMemo<[number, number, number, number] | null>(() => {
     if (selected == null) return null
     if (server?.ready) {
       const box = serverParcel?.bb
       if (!Array.isArray(box) || box.length !== 4) return null
       const [bw, bs, be, bn] = box as number[]
-      return { lat: (bs + bn) / 2, lng: (bw + be) / 2 }
+      return [bw, bs, be, bn]
     }
     if (!index?.bb) return null
     const row = rowOf.get(selected)
     if (row == null) return null
     const [w, s, e, n] = index.bb.slice(row * 4, row * 4 + 4)
     if (![w, s, e, n].every(Number.isFinite)) return null
-    return { lat: (s + n) / 2, lng: (w + e) / 2 }
+    return [w, s, e, n]
   }, [selected, index, rowOf, server, serverParcel])
+
+  /** The centre of the selected parcel. */
+  const centre = useMemo(() => {
+    if (!selectedBox) return null
+    const [w, s, e, n] = selectedBox
+    return { lat: (s + n) / 2, lng: (w + e) / 2 }
+  }, [selectedBox])
+
+  /*
+   * What each switched-on layer holds at the selected parcel.
+   *
+   * Switching a layer on used to draw it and stop there: the panel only
+   * learned about a permit or a zoning district when someone found it on the
+   * map and clicked it. Now the map is asked, for the parcel that is open,
+   * what every live layer has on it, and each layer gets its own section
+   * without another click. Filled by the map itself, on idle, because a layer
+   * just switched on has tiles still arriving.
+   */
+  const [nearby, setNearby] = useState<Record<string, Record<string, unknown>[]> | null>(null)
+  const onExtrasNear = useCallback((found: Record<string, Record<string, unknown>[]> | null) => {
+    setNearby(found)
+  }, [])
 
   /*
    * The scout writes into the same filter state a person would, so the map,
@@ -2862,6 +2888,8 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           onExtraPick={(pick) => {
             setFeaturePick(pick)
           }}
+          nearBox={selectedBox}
+          onExtrasNear={onExtrasNear}
           choropleth={choropleth?.areas ?? null}
           choroplethOpacity={censusOpacity}
           extras={extras}
@@ -3731,6 +3759,47 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
                     </PanelSection>
                   )
                 })()}
+
+                {/* Every layer that is on, and what it has on this parcel:
+                    the permits pulled here, the zoning district it sits in,
+                    the flood zone it is under. A card switched on in the
+                    rail is a section here, with no further click. */}
+                {nearby &&
+                  shownLayers
+                    .filter((layer) => layerOn[layer.id])
+                    .map((layer) => {
+                      const hits = nearby[layer.id] ?? []
+                      const order = layer.fields?.length ? layer.fields : null
+                      return (
+                        <PanelSection
+                          key={layer.id}
+                          title={`${layer.label} · ${hits.length ? `${hits.length.toLocaleString()} here` : 'none here'}`}
+                        >
+                          {hits.length ? (
+                            hits.slice(0, 5).map((props, i) => (
+                              <dl
+                                key={i}
+                                className={`space-y-1 text-xs${i ? ' mt-2 border-t border-line pt-2' : ''}`}
+                              >
+                                {(order ?? Object.keys(props))
+                                  .filter((field) => props[field] != null && props[field] !== '')
+                                  .slice(0, 8)
+                                  .map((field) => (
+                                    <Row key={field} label={field} value={String(props[field])} />
+                                  ))}
+                              </dl>
+                            ))
+                          ) : (
+                            <p className="text-xs text-muted">Nothing from this layer on the parcel.</p>
+                          )}
+                          {hits.length > 5 && (
+                            <p className="mt-1.5 text-[11px] text-muted">
+                              and {(hits.length - 5).toLocaleString()} more · click one on the map for its full record
+                            </p>
+                          )}
+                        </PanelSection>
+                      )
+                    })}
 
                 {/* The layers are where the rest of the story is; say so
                     when none of them is on, and open the catalogue. */}

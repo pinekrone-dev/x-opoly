@@ -59,9 +59,21 @@ const PARCEL_SOURCE = 'parcels'
  * a driver denylist — or a person (or a previous failure) chose the basic
  * map and the choice was kept. The probe is cheap and runs once per page.
  */
+/*
+ * The remembered value is the reason the basic map was chosen, not a flag.
+ * Older builds wrote '1' for any reason, including a start that merely hung
+ * twice, and that pinned browsers to the basic map for good — the parcels
+ * came one server-decoded tile at a time and every later fix to the full map
+ * was invisible to them. A bare '1' is treated as that stale memory and
+ * forgotten; only a reason this build would remember is honoured.
+ */
+const REMEMBERED_REASONS = new Set(['no-webgl', 'context-lost-repeatedly'])
+
 function liteWanted(): boolean {
   try {
-    if (window.localStorage.getItem('lq-lite') === '1') return true
+    const remembered = window.localStorage.getItem('lq-lite')
+    if (remembered && REMEMBERED_REASONS.has(remembered)) return true
+    if (remembered) window.localStorage.removeItem('lq-lite')
   } catch {
     /* storage denied says nothing about the GPU */
   }
@@ -359,6 +371,14 @@ interface Props {
    */
   captureRef?: MutableRefObject<(() => Promise<HTMLCanvasElement | null>) | null>
   /**
+   * The selected parcel's bounding box, west-south-east-north. While one is
+   * set, the map reports what every extra layer holds inside it through
+   * onExtrasNear — on idle, so tiles still arriving are counted once they
+   * land — and reports null once there is nothing to look at.
+   */
+  nearBox?: [number, number, number, number] | null
+  onExtrasNear?: (found: Record<string, Record<string, unknown>[]> | null) => void
+  /**
    * A clicked extra-layer feature, handed to the view instead of a popup.
    *
    * The popup was the first draft and it reads like a tooltip: cramped,
@@ -542,6 +562,8 @@ export default function MapCanvas({
   onViewChange,
   captureRef,
   onExtraPick,
+  nearBox = null,
+  onExtrasNear,
   stages,
   anchors = null,
   zones = null,
@@ -616,12 +638,11 @@ export default function MapCanvas({
    * experience, with the cure a small link nobody noticed. The session still
    * drops to the basic map; the next visit tries the full one again.
    */
-  const REMEMBERED_REASONS = new Set(['no-webgl', 'context-lost-repeatedly'])
   const enterLite = (why: string) => {
     tattle('lite-mode-entered', { why })
     if (REMEMBERED_REASONS.has(why)) {
       try {
-        window.localStorage.setItem('lq-lite', '1')
+        window.localStorage.setItem('lq-lite', why)
       } catch {
         /* the session still gets the basic map; only the memory of it is lost */
       }
@@ -1427,6 +1448,67 @@ export default function MapCanvas({
       }
     }
   }, [loaded, extras])
+
+  /*
+   * What the extra layers hold at the selected parcel.
+   *
+   * Asked of the rendered tiles inside the parcel's box, so a polygon layer
+   * answers with the district the parcel sits in and a point layer with the
+   * permits pulled on it. Re-asked on every idle while a parcel is open,
+   * because a layer switched on a moment ago is still fetching, and only
+   * reported when the answer changes so the panel is not re-rendered on
+   * every pan.
+   */
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !onExtrasNear) return undefined
+    const wanted = extras ?? []
+    if (!nearBox || !wanted.length) {
+      onExtrasNear(null)
+      return undefined
+    }
+    let last = ''
+    const ask = () => {
+      const [w, s, e, n] = nearBox
+      const a = instance.project([w, s])
+      const b = instance.project([e, n])
+      const layers: string[] = []
+      for (const layer of wanted) {
+        for (const suffix of ['fill', 'point', 'line']) {
+          const id = `x-${layer.id}-${suffix}`
+          if (instance.getLayer(id)) layers.push(id)
+        }
+      }
+      if (!layers.length) return
+      const found: Record<string, Record<string, unknown>[]> = {}
+      const seen = new Set<string>()
+      const hits = instance.queryRenderedFeatures(
+        [
+          [Math.min(a.x, b.x), Math.min(a.y, b.y)],
+          [Math.max(a.x, b.x), Math.max(a.y, b.y)],
+        ],
+        { layers },
+      )
+      for (const feature of hits) {
+        const id = String(feature.layer.id).replace(/^x-/, '').replace(/-(fill|line|point)$/, '')
+        // A polygon crossing a tile boundary comes back once per tile.
+        const key = `${id}:${feature.id ?? JSON.stringify(feature.properties)}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        ;(found[id] ??= []).push((feature.properties ?? {}) as Record<string, unknown>)
+      }
+      for (const layer of wanted) found[layer.id] ??= []
+      const now = JSON.stringify(found)
+      if (now === last) return
+      last = now
+      onExtrasNear(found)
+    }
+    ask()
+    instance.on('idle', ask)
+    return () => {
+      instance.off('idle', ask)
+    }
+  }, [loaded, extras, nearBox, onExtrasNear])
 
   /*
    * What a published feature says when it is clicked.
