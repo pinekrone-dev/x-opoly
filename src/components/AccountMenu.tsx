@@ -114,7 +114,11 @@ export default function AccountMenu({
     .join('')
 
   return (
-    <div className="relative">
+    // Its own stacking context, above the map. The menu drops down over
+    // whatever page it is on, and on the GIS and survey pages that is the map
+    // with its rail at z-500 and its record panel at z-600: without a level of
+    // its own the menu opened underneath them and looked like it never opened.
+    <div className="relative z-[700]">
       <button
         type="button"
         className="flex items-center gap-2 rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm hover:bg-sunken"
