@@ -107,6 +107,35 @@ Live markets in the prospector pipeline, from its `make_markets.py`:
 | houston-tx | Harris County, TX | Yes | Yes | Whole county except single-family |
 | las-vegas-nv | Clark County, NV | Yes | Yes | Whole county except detached single-family |
 | phoenix-az | Maricopa County, AZ | Yes | Yes | Whole county |
+| new-york-ny | New York City (Bronx, Kings, New York, Queens, Richmond) | Yes (deed name on MapPLUTO) | **No, the roll carries none** | All five boroughs |
+
+### Permit and licence layers (who is behind the parcel)
+
+The assessment roll names the owner of record. Permits and licences name the
+people who act for that owner: the applicant who signed, the contractor who
+pulled the permit, the business trading at the address, sometimes a phone
+number. Every source below is a public feed the prospector pipeline fetches
+into a map layer (`pipeline/layer_sources.py`), read off the service by a
+probe before it was written down. Public record is not consent to be called;
+see the outreach notes further down.
+
+| Market | Layer | Source | Access | People it names | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| new-york-ny | Development pipeline | DOB NOW approved permits, `data.cityofnewyork.us/resource/rbx6-tga4.json` | Socrata, no key needed | Owner (person and business), applicant of record, licence type | **Keep.** The live feed since 2021. |
+| new-york-ny | Permits, legacy jobs | DOB permit issuance (BIS), `data.cityofnewyork.us/resource/ipu4-2q9a.json` | Socrata | Owner name, business and phone; permittee business and phone | **Keep.** The one city dataset with phone numbers. |
+| orange-county-ca | Anaheim permits | Anaheim `Accela_Building_Permits`, ArcGIS org `hPs600I3X0RTaaaq` | ArcGIS REST | Contractor name and phone, job valuation | **Keep.** 9,032 issued since last year at probe time. |
+| orange-county-ca | Anaheim code cases | Anaheim `CodeEnforcementCasesPublic` | ArcGIS REST | **Owner name by APN**, the county's only bulk owner-name source | **Keep.** 142,130 cases held; bounded to opened since last year. |
+| orange-county-ca | Anaheim entitlements | Anaheim `Open_Data_Land_Use_Permits` | ArcGIS REST | Primary contact and phone | **Keep.** |
+| orange-county-ca | Anaheim businesses | Anaheim `ActiveBusinessLicenses` | ArcGIS REST | Business owner name, entity name, NAICS | **Keep.** 8,812 active. |
+| washington-dc | Development pipeline | DC GIS `FEEDS/DCRA/FeatureServer/18` (this year's permits; the sublayer id rolls each January) | ArcGIS REST | **Owner name and permit applicant** on every row, keyed by SSL | **Keep.** 30,634 permits at probe time. |
+| washington-dc | Certificates of occupancy | DC GIS `Business_Licensing_and_Grants_WebMercator/46` | ArcGIS REST | **Property owner and owner address**, party granted, trading-as name | **Keep.** 81,613 held; bounded to issued since last year. |
+| phoenix-az | Mesa permits | Mesa `citydata.mesaaz.gov/resource/m2kk-w2hz.json` | Socrata | Contractor name and address | **Keep.** 8,704 issued since last year. |
+| phoenix-az | Development pipeline | City of Phoenix planning permits (already live) | ArcGIS REST | Permit lead, professional name | Kept as before. |
+| austin-tx | Development pipeline, entitlements | City of Austin permits and plan review (already live) | ArcGIS REST | No contact fields on the service | Kept as before. |
+| houston-tx | Houses and multifamily permitted, 2023 | City of Houston one-off 2023 extract (already live) | ArcGIS REST | No contact fields; no live permit feed found in the catalog | Kept as a snapshot. |
+| las-vegas-nv | Development pipeline | City of Las Vegas GIS `Bldg_Permits/FeatureServer/379` | ArcGIS REST | Applicant, name on application, parcel id, valuation | **Keep.** 1.88 M permits held; bounded by issue year. |
+| las-vegas-nv | Building permits, open-data table | City of Las Vegas `OpenData_Building_Permits_` | ArcGIS REST, **table with no geometry** | Applicant, **legal owner with mailing address**, contact, licence | **Later.** Needs a parcel-id join for a point before it can be a layer. |
+| nashville-tn | Development pipeline | NashvilleOpenData `Building_Permits_Issued_2/FeatureServer/0` (the Socrata address now answers HTML) | ArcGIS REST | Contact who pulled the permit, parcel, construction cost | **Keep.** 29,396 held. |
 
 Missing for a healthcare-lead build, and why it matters:
 
