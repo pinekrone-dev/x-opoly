@@ -151,6 +151,19 @@ export async function createEmailVerification(db, userId) {
 }
 
 /**
+ * Records how the send of a verification link went, so a signup stuck on
+ * "check your email" can be told apart from one whose link the provider
+ * refused. `error` is the provider's message, or null when it accepted.
+ */
+export async function recordVerificationSend(db, userId, error = null) {
+  await db.run('UPDATE users SET verify_sent_at = ?, verify_error = ? WHERE id = ?', [
+    new Date().toISOString(),
+    error ? String(error).slice(0, 300) : null,
+    userId,
+  ])
+}
+
+/**
  * Redeems a verification link. One use: the digest is cleared on success, and
  * an expired or unknown token says so without revealing whose it was.
  */

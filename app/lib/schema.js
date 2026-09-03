@@ -87,6 +87,8 @@ export const SCHEMA_STATEMENTS = [
     verified       INTEGER NOT NULL DEFAULT 1,
     verify_digest  TEXT,
     verify_expires TEXT,
+    verify_sent_at TEXT,
+    verify_error   TEXT,
     failed_logins  INTEGER NOT NULL DEFAULT 0,
     locked_until   TEXT,
     created_at     TEXT NOT NULL,
@@ -422,6 +424,12 @@ export const COLUMN_ADDITIONS = [
   ['users', 'verified', 'INTEGER NOT NULL DEFAULT 1'],
   ['users', 'verify_digest', 'TEXT'],
   ['users', 'verify_expires', 'TEXT'],
+  // What happened the last time a verification link was sent: when, and
+  // the provider's refusal if there was one. A signup stuck on "check your
+  // email" is otherwise indistinguishable from one whose link was never
+  // accepted, and the operator can read this off the row.
+  ['users', 'verify_sent_at', 'TEXT'],
+  ['users', 'verify_error', 'TEXT'],
 
   /*
    * Where a place sits on the county roll.

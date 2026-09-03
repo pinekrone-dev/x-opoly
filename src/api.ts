@@ -67,6 +67,12 @@ export const api = {
   verifyEmail: (token: string) => request<{ user: Account }>('/api/auth/verify-email', json({ token })),
   resendVerification: (email: string) =>
     request<{ ok: true; message: string }>('/api/auth/resend-verification', json({ email })),
+  /** Operator only: sends a test email to the operator and reports the provider's verdict. */
+  emailCheck: () =>
+    request<{ ok: boolean; provider: string; id?: string | null; to?: string; sentAt?: string; error?: string }>(
+      '/api/auth/email-check',
+      { method: 'POST' },
+    ),
 
   // --- billing --------------------------------------------------------------
   billingStatus: () => request<BillingStatus>('/api/billing'),

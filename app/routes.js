@@ -66,6 +66,7 @@ import {
   destroyAllSessions,
   destroySession,
   createEmailVerification,
+  recordVerificationSend,
   findByEmail,
   getUser,
   markLogin,
@@ -705,6 +706,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         if (error instanceof EmailError) {
           // The account exists but the link never left. Say so honestly:
           // resend is the recovery, not a mystery inbox wait.
+          await recordVerificationSend(db, result.user.id, error.message)
+          console.error(`verification email refused for ${result.user.email}: ${error.message}`)
           return c.json(
             { user: result.user, requiresVerification: true, emailFailed: true, error: error.message },
             201,
@@ -712,6 +715,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         }
         throw error
       }
+      await recordVerificationSend(db, result.user.id)
       // No session yet: the cookie is what verification earns.
       return c.json({ user: result.user, requiresVerification: true }, 201)
     }
@@ -759,13 +763,49 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
           to: row.email,
           ...verificationEmail({ name: row.name, url: `${origin}/?verify=${verifyToken}` }),
         })
+        await recordVerificationSend(db, row.id)
       } catch (error) {
         if (!(error instanceof EmailError)) throw error
         // The generic answer stands: a sending hiccup is not the caller's
-        // signal to learn which addresses exist.
+        // signal to learn which addresses exist. The row and the log carry
+        // the refusal instead, so it is not silent to the operator.
+        await recordVerificationSend(db, row.id, error.message)
+        console.error(`verification email refused for ${row.email}: ${error.message}`)
       }
     }
     return c.json(answer)
+  })
+
+  /**
+   * Proves the email path end to end, for the operator only: sends a test
+   * message to their own address and answers with the provider's verdict.
+   * A provider that accepts and then drops still passes this — the inbox is
+   * the last word — but a refused sender, a dead key or an unreachable
+   * service shows up here rather than on a stranger's signup.
+   */
+  app.post('/api/auth/email-check', async (c) => {
+    const throttled = limited(c, 'email-check', 5, 60 * 60 * 1000)
+    if (throttled) return throttled
+    // Under /api/auth the session middleware does not run, so the session
+    // is read here, as /api/auth/me does.
+    const user = c.get('user') ?? (await sessionUser(db, tokenFrom(c)))
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!(await canMintCodes(user))) return c.json({ error: 'Only the instance owner can run this check.' }, 403)
+    const provider = env.SENDGRID_API_KEY ? 'sendgrid' : env.RESEND_API_KEY ? 'resend' : 'none'
+    if (provider === 'none') return c.json({ ok: false, provider, error: 'Email sending is not configured on this server.' }, 400)
+    const sentAt = new Date().toISOString()
+    try {
+      const id = await sendEmail(env, {
+        to: user.email,
+        subject: 'Land Quotient email check',
+        text: `This is the email check you asked for, sent ${sentAt}. If you are reading it, verification emails can reach an inbox.`,
+        html: `<p>This is the email check you asked for, sent ${sentAt}.</p><p>If you are reading it, verification emails can reach an inbox.</p>`,
+      })
+      return c.json({ ok: true, provider, id: id ?? null, to: user.email, sentAt })
+    } catch (error) {
+      if (!(error instanceof EmailError)) throw error
+      return c.json({ ok: false, provider, to: user.email, error: error.message }, 502)
+    }
   })
 
   /**
