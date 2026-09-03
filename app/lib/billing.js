@@ -196,10 +196,25 @@ export async function mintFreeCode(env, { fetchImpl = fetch } = {}) {
     params: { percent_off: 100, duration: 'forever', name: 'Free forever (operator invite)' },
     fetchImpl,
   })
-  const promo = await stripe(env, '/promotion_codes', {
-    params: { coupon: coupon.id, max_redemptions: 1 },
-    fetchImpl,
-  })
+  // Stripe moved the coupon under a `promotion` object in its recent API
+  // versions and rejects the bare `coupon` field there; older pinned
+  // versions know only the bare field. The request carries no version
+  // header, so it lands on whatever the account defaults to — try the
+  // current shape, and fall back to the old one only if Stripe says it
+  // does not know the parameter.
+  let promo
+  try {
+    promo = await stripe(env, '/promotion_codes', {
+      params: { promotion: { type: 'coupon', coupon: coupon.id }, max_redemptions: 1 },
+      fetchImpl,
+    })
+  } catch (error) {
+    if (!(error instanceof BillingError && /promotion/i.test(error.message))) throw error
+    promo = await stripe(env, '/promotion_codes', {
+      params: { coupon: coupon.id, max_redemptions: 1 },
+      fetchImpl,
+    })
+  }
   return { code: promo.code }
 }
 
