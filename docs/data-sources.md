@@ -274,6 +274,13 @@ index is sold. New York's ACRIS is open data keyed by BBL and can be folded
 into `rest.title` (last deed, open mortgages, adverse documents) by the
 publish today. `probe-title.yml` reports what each recorder hands a machine.
 
+Staging keeps the free tier whole. Layers are built and held in R2 under a
+`staged.json` index the app never reads, so they cost storage alone until
+promoted with one registry line. Per-parcel values go through the publish
+under `--budget N` changed rows a run, the seal withheld until nothing is
+deferred. `pipeline/budget.py` in the prospector repo prints what is staged
+and what promotion costs in D1 writes, R2 bytes and days.
+
 The rule that keeps the store bill flat: nothing from this register is bulk
 loaded into D1. Per-parcel values ride in the row that a search already
 reads, and everything else is a file in R2 that the edge caches. Keys the
