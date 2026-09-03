@@ -233,9 +233,41 @@ optional variable the app and the scripts read, all empty. The one new
 placeholder is `SAM_GOV_API_KEY`, used only if the optional SAM.gov extract step
 is approved; unset means the step is skipped.
 
+## Government sources staged for the map
+
+The prospector repository's `pipeline/federal_sources.py` is the register of
+federal and state datasets queued behind the map: HUD (fair market rents,
+income limits, the USPS ZIP crosswalk, LIHTC, public housing, assisted and
+insured multifamily, qualified tracts, vouchers by tract), USPTO (patent
+applications, assignments), Census LEHD/LODES jobs by block, county business
+patterns and the building permits survey, HMDA mortgage originations, FEMA
+declarations, EPA facilities, Superfund and brownfields, FDIC branches, SBA
+504/7(a) loans, IRS nonprofits and income by ZIP, BLS wages, SEC EDGAR, the
+national register of historic places, wetlands and transit stops. Its
+`probe-federal.yml` workflow reports which of them answer from a runner.
+
+How each kind attaches, and what it costs the store, is fixed by the two
+contracts the app already has:
+
+| Attach | Lands in | Store cost | App change |
+| --- | --- | --- | --- |
+| `layer` | `layer-<id>.geojson` (+ tiles) in R2, one line in `layers.json` | none: layers never touch D1 | none: the card draws from `layers.json` |
+| `parcel` | a key in the parcel row's `rest` JSON, written by the publish | one hash change per parcel the first time, then only on change; no migration, no index | none unless the value must be filterable, then a column and an index |
+| `tract` | a column in `census.json` / `tracts.geojson` | none | the tract panel reads what is there |
+| `market` | `markets.json` / `meta.json` | none | the market card reads what is there |
+| `lookup` | asked live for one property through the outside-lookup cache | none | one call in `app/lib/`, rate-limited like the Census lookups |
+
+The rule that keeps the store bill flat: nothing from this register is bulk
+loaded into D1. Per-parcel values ride in the row that a search already
+reads, and everything else is a file in R2 that the edge caches. Keys the
+register names (`HUD_USER_TOKEN`, `USPTO_API_KEY`) are repository secrets in
+prospector for the pipeline and `wrangler secret put` here for any lookup;
+neither is written to source.
+
 ## Open decisions
 
 1. Target states and counties for the first build.
 2. Whether to rebuild Austin, DC and Nashville to full-county coverage first.
 3. Which NUCC classifications define "healthcare practice" for the layer.
 4. Whether the SAM.gov step is wanted at all.
+5. Which staged government sources to adopt first, once the probe says they answer.
