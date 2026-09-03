@@ -216,6 +216,48 @@ describe('the subscription gate', () => {
   })
 })
 
+describe('settings and the team', () => {
+  test('the team lists everyone in the workspace, owner first, and nobody outside it', async () => {
+    const minted = await alice('/api/invites', asJson({ email: 'frank@example.com' }))
+    const token = new URL(minted.body.url).searchParams.get('invite')
+    await client()('/api/auth/register', asJson({
+      name: 'Frank', email: 'frank@example.com', password: 'a long enough password', inviteToken: token,
+    }))
+
+    const mine = await alice('/api/account/team')
+    assert.equal(mine.status, 200)
+    const emails = mine.body.members.map((m) => m.email)
+    assert.equal(emails[0], 'alice@example.com', 'the owner leads')
+    assert.ok(mine.body.members[0].owner)
+    assert.ok(emails.includes('frank@example.com'), "alice's invitee is on her team")
+    assert.ok(!mine.body.members.find((m) => m.email === 'frank@example.com').owner)
+    assert.ok(!emails.includes('bob@example.com') && !emails.includes('carol@example.com'), "bob's team is not")
+
+    const theirs = await bob('/api/account/team')
+    assert.deepEqual(theirs.body.members.map((m) => m.email), ['bob@example.com', 'carol@example.com'])
+  })
+
+  test('a default market is saved, echoed by /me, and refused when it is not a slug', async () => {
+    const saved = await alice('/api/account/settings', asJson({ defaultMarket: 'Phoenix-AZ' }, 'PATCH'))
+    assert.equal(saved.status, 200)
+    assert.equal(saved.body.user.defaultMarket, 'phoenix-az', 'stored as the catalogue spells it')
+
+    const me = await alice('/api/auth/me')
+    assert.equal(me.body.user.defaultMarket, 'phoenix-az', 'the session sees it at once, not after the cache expires')
+
+    const bad = await alice('/api/account/settings', asJson({ defaultMarket: 'not a market!' }, 'PATCH'))
+    assert.equal(bad.status, 400)
+
+    const cleared = await alice('/api/account/settings', asJson({ defaultMarket: null }, 'PATCH'))
+    assert.equal(cleared.body.user.defaultMarket, null)
+  })
+
+  test('settings need a session', async () => {
+    assert.equal((await client()('/api/account/team')).status, 401)
+    assert.equal((await client()('/api/account/settings', asJson({ defaultMarket: 'x-y' }, 'PATCH'))).status, 401)
+  })
+})
+
 describe('the free-code pen', () => {
   test('belongs to the account that claimed the instance, and only that one', async () => {
     const billing = await alice('/api/billing')

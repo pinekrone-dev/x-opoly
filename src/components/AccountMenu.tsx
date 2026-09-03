@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import InviteCollaborators from './InviteCollaborators'
+import { navigate } from '../lib/router'
 import type { Account, BillingStatus } from '../types'
 
 /**
@@ -158,6 +159,19 @@ export default function AccountMenu({
         <div className="panel scrollbar-thin absolute right-0 z-20 mt-2 max-h-[min(80vh,42rem)] w-80 overflow-y-auto p-4 text-left">
           <p className="truncate text-sm font-semibold text-ink">{account.name || 'Signed in'}</p>
           <p className="truncate text-xs text-muted">{account.email}</p>
+
+          {/* The page for the choices that outlive a session: which market
+              the map opens on, who is on the team. */}
+          <button
+            type="button"
+            className="btn-secondary mt-3 w-full text-xs"
+            onClick={() => {
+              setOpen(false)
+              navigate('/settings')
+            }}
+          >
+            Settings
+          </button>
 
           <div className="mt-4 border-t border-line pt-3">
             <p className="label mb-2">Collaborators</p>

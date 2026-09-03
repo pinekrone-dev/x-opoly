@@ -83,6 +83,19 @@ export interface Account {
   secondFactor: 'sms' | 'totp' | null
   createdAt: string
   lastLoginAt: string | null
+  /** The market the parcel map opens on for this person; null means the first live one. */
+  defaultMarket?: string | null
+}
+
+/** One person on the team, from /api/account/team. */
+export interface TeamMember {
+  id: string
+  email: string
+  name: string | null
+  /** Whether this is the team's owner, whose workspace everyone else joined. */
+  owner: boolean
+  createdAt: string
+  lastLoginAt: string | null
 }
 
 /** What /api/auth/me says about billing, before anyone signs in. */

@@ -82,6 +82,7 @@ function mapUser(row) {
     secondFactor: row.totp_enabled ? 'totp' : row.sms_2fa && row.phone ? 'sms' : null,
     createdAt: row.created_at,
     lastLoginAt: row.last_login_at,
+    defaultMarket: row.default_market ?? null,
   }
 }
 
@@ -297,6 +298,55 @@ export async function destroySession(db, token) {
 export async function destroyAllSessions(db, userId) {
   for (const [hash, held] of sessions) if (held.user?.id === userId) sessions.delete(hash)
   await db.run('DELETE FROM sessions WHERE user_id = ?', [userId])
+}
+
+/*
+ * A market slug as the catalogue spells them: lower case, digits, hyphens.
+ * Anything else is not a market and is refused rather than stored.
+ */
+const MARKET_SLUG = /^[a-z0-9-]{2,40}$/
+
+/**
+ * The account's own preferences. Only what the settings page offers is
+ * accepted; an unknown key is ignored rather than written.
+ *
+ * The session cache holds a copy of the user, and a preference that changed
+ * in the database but not in the cache would look unsaved until the cache
+ * expired. Every cached copy of this user is refreshed in the same step.
+ */
+export async function updateSettings(db, userId, patch = {}) {
+  if ('defaultMarket' in patch) {
+    const slug = patch.defaultMarket == null || patch.defaultMarket === '' ? null : String(patch.defaultMarket).trim().toLowerCase()
+    if (slug !== null && !MARKET_SLUG.test(slug)) return { error: 'That is not a market.' }
+    await db.run('UPDATE users SET default_market = ? WHERE id = ?', [slug, userId])
+  }
+  const user = await getUser(db, userId)
+  for (const [hash, held] of sessions) {
+    if (held.user?.id === userId) sessions.set(hash, { ...held, user })
+  }
+  return { user }
+}
+
+/**
+ * Everyone on a team, the owner first, then by when they joined. The owner
+ * is the account whose id is the team id: everyone else redeemed an invite
+ * into their workspace.
+ */
+export async function listTeamMembers(db, teamId) {
+  const rows = await db.all(
+    'SELECT id, email, name, created_at, last_login_at FROM users WHERE COALESCE(team_id, id) = ? ORDER BY created_at, id',
+    [teamId],
+  )
+  return rows
+    .map((row) => ({
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      owner: row.id === teamId,
+      createdAt: row.created_at,
+      lastLoginAt: row.last_login_at,
+    }))
+    .sort((a, b) => Number(b.owner) - Number(a.owner))
 }
 
 /* -------------------------------------------------------------------------- */

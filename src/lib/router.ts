@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings'
   id?: string
   token?: string
   /** Which CRM object a `record` route is showing. */
@@ -46,6 +46,9 @@ export function matchRoute(path: string): Route {
   // The parcel map, optionally opening straight on a market.
   const gis = path.match(/^\/gis(?:\/([\w-]+))?\/?$/)
   if (gis) return { view: 'gis', slug: gis[1] }
+
+  // The account's own settings: default market, the team.
+  if (/^\/settings\/?$/.test(path)) return { view: 'settings' }
 
   // Matched before the workspace, whose pattern would otherwise not reach it.
   const book = path.match(/^\/survey\/([\w-]+)\/book\/?$/)

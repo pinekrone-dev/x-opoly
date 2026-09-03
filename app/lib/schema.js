@@ -89,6 +89,7 @@ export const SCHEMA_STATEMENTS = [
     verify_expires TEXT,
     verify_sent_at TEXT,
     verify_error   TEXT,
+    default_market TEXT,
     failed_logins  INTEGER NOT NULL DEFAULT 0,
     locked_until   TEXT,
     created_at     TEXT NOT NULL,
@@ -430,6 +431,9 @@ export const COLUMN_ADDITIONS = [
   // accepted, and the operator can read this off the row.
   ['users', 'verify_sent_at', 'TEXT'],
   ['users', 'verify_error', 'TEXT'],
+  // The market the parcel map opens on for this person, chosen on the
+  // settings page. NULL means the first live market, as before.
+  ['users', 'default_market', 'TEXT'],
 
   /*
    * Where a place sits on the county roll.

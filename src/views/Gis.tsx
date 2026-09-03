@@ -896,7 +896,18 @@ const money = (n: number) => {
   return `$${Math.round(n).toLocaleString()}`
 }
 
-export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; basemaps?: TileConfig[]; slug?: string }) {
+export default function Gis({
+  tiles,
+  basemaps,
+  slug,
+  defaultMarket,
+}: {
+  tiles: TileConfig
+  basemaps?: TileConfig[]
+  slug?: string
+  /** The account's chosen opening market, from settings; the URL's slug outranks it. */
+  defaultMarket?: string | null
+}) {
   const [markets, setMarkets] = useState<Market[]>([])
   const [active, setActive] = useState<string | null>(slug ?? null)
   const [meta, setMeta] = useState<MarketMeta | null>(null)
@@ -1073,7 +1084,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       .then((d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
-        setActive((current) => current || live[0]?.slug || null)
+        // The URL's market first, then the one chosen in settings if it is
+        // still live, then the first in the catalogue.
+        const preferred = live.find((m) => m.slug === defaultMarket)?.slug
+        setActive((current) => current || preferred || live[0]?.slug || null)
       })
       .catch(() => {
         bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not reach the parcel catalogue.')))

@@ -7,6 +7,7 @@ import type { BookStyle,
   BillingConfig,
   BillingStatus,
   Invite,
+  TeamMember,
   Zone,
   AppFeatures,
   DealStage,
@@ -108,6 +109,15 @@ export const api = {
   checkInvite: (token: string) =>
     request<{ email: string }>(`/api/auth/invite/${encodeURIComponent(token)}`),
   listInvites: () => request<{ invites: Invite[] }>('/api/invites'),
+
+  // --- the account's own settings ------------------------------------------
+  account: {
+    /** Everyone on this team, the owner first. */
+    team: () => request<{ members: TeamMember[] }>('/api/account/team'),
+    /** Persists a preference; the answer is the account as it now stands. */
+    updateSettings: (patch: { defaultMarket?: string | null }) =>
+      request<{ user: Account }>('/api/account/settings', { ...json(patch), method: 'PATCH' }),
+  },
   createZone: (surveyId: string, zone: { label: string; lat: number; lng: number; radiusMiles: number; color?: string }) =>
     request<{ zone: Zone }>(`/api/surveys/${surveyId}/zones`, json(zone)),
   updateZone: (id: string, patch: { label?: string; color?: string }) =>

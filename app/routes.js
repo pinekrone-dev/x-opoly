@@ -67,6 +67,8 @@ import {
   destroySession,
   createEmailVerification,
   recordVerificationSend,
+  updateSettings,
+  listTeamMembers,
   findByEmail,
   getUser,
   markLogin,
@@ -1536,6 +1538,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const removed = await revokeInvite(db, c.req.param('id'))
     if (!removed) return notFound(c, 'That invitation is gone already.')
     return c.body(null, 204)
+  })
+
+  // --- the account's own settings ------------------------------------------
+
+  /** Everyone on the caller's team. Scoped by the session's team, never by a parameter. */
+  app.get('/api/account/team', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    return c.json({ members: await listTeamMembers(db, user.teamId) })
+  })
+
+  /** A preference of the caller's own: today, which market the map opens on. */
+  app.patch('/api/account/settings', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await updateSettings(db, user.id, { ...(body && 'defaultMarket' in body ? { defaultMarket: body.defaultMarket } : {}) })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ user: result.user })
   })
 
   app.get('/api/share/:token', async (c) => {

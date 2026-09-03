@@ -11,6 +11,7 @@ import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
 import Gis from './views/Gis'
+import Settings from './views/Settings'
 import WorkspaceNav from './components/WorkspaceNav'
 import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
@@ -252,9 +253,30 @@ export default function App() {
           }}
         />
         <div className="min-h-0 flex-1">
-          <Gis tiles={features.tiles} basemaps={features.basemaps} slug={route.slug} />
+          <Gis
+            tiles={features.tiles}
+            basemaps={features.basemaps}
+            slug={route.slug}
+            defaultMarket={session.user.defaultMarket ?? null}
+          />
         </div>
       </div>
+    )
+  }
+
+  /* The account's own settings: the market the map opens on, the team. */
+  if (route.view === 'settings') {
+    return (
+      <Settings
+        account={session.user}
+        smsConfigured={session.smsConfigured}
+        billing={billing}
+        onAccountChange={(user) => setSession({ ...session, user })}
+        onSignedOut={() => {
+          setSession({ ...session, user: null, setupRequired: false })
+          setDoor('landing')
+        }}
+      />
     )
   }
 
