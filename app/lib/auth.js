@@ -220,16 +220,29 @@ export async function createSession(db, userId) {
   return token
 }
 
+/**
+ * The user behind a session token, in one query.
+ *
+ * This runs on every authenticated request, so the session row and the user
+ * row are read together rather than as two round trips. The session's expiry
+ * rides along under its own name so it cannot collide with a user column.
+ */
 export async function sessionUser(db, token) {
   if (!token) return null
-  const row = await db.get('SELECT * FROM sessions WHERE token_hash = ?', [await hashToken(token)])
+  const hash = await hashToken(token)
+  const row = await db.get(
+    `SELECT u.*, s.expires_at AS session_expires_at
+       FROM sessions s JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?`,
+    [hash],
+  )
   if (!row) return null
 
-  if (isPast(row.expires_at)) {
-    await db.run('DELETE FROM sessions WHERE token_hash = ?', [row.token_hash])
+  if (isPast(row.session_expires_at)) {
+    await db.run('DELETE FROM sessions WHERE token_hash = ?', [hash])
     return null
   }
-  return getUser(db, row.user_id)
+  return mapUser(row)
 }
 
 export async function destroySession(db, token) {

@@ -12,6 +12,46 @@
 
 import { COLUMN_ADDITIONS, DATA_FIXES, SCHEMA_STATEMENTS } from './schema.js'
 
+/**
+ * A fingerprint of the schema as code describes it.
+ *
+ * Stored in the database after a successful sweep so the next boot — on
+ * Cloudflare, the next isolate cold start, which happens many times a day —
+ * can read one row and know the sweep has nothing to do. Before this, every
+ * cold start replayed all sixty-odd CREATE, PRAGMA and repair statements
+ * against D1, each one a network round trip, before the first request ran.
+ *
+ * Any change to the schema lists changes the fingerprint, which makes the
+ * next boot run the full sweep again. Deleting the `schema_meta` row (or the
+ * table) has the same effect, so the marker is reversible by hand.
+ */
+export const SCHEMA_VERSION = fingerprint(
+  [...SCHEMA_STATEMENTS, ...COLUMN_ADDITIONS.map((entry) => entry.join(' ')), ...DATA_FIXES].join('\n'),
+)
+
+function fingerprint(text) {
+  // FNV-1a, 32-bit. Not cryptographic and does not need to be: it only has
+  // to change when the schema text changes.
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `v1-${hash.toString(16).padStart(8, '0')}`
+}
+
+const META_TABLE = 'CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)'
+
+/** Whether the stored fingerprint matches this code. One read, no writes. */
+async function schemaIsCurrent(adapter) {
+  try {
+    const row = await adapter.get("SELECT value FROM schema_meta WHERE key = 'version'")
+    return row?.value === SCHEMA_VERSION
+  } catch {
+    // No schema_meta table yet: a database from before the marker existed.
+    return false
+  }
+}
 
 /**
  * Apply the schema to whichever database is behind `adapter`.
@@ -20,8 +60,12 @@ import { COLUMN_ADDITIONS, DATA_FIXES, SCHEMA_STATEMENTS } from './schema.js'
  * already exists is not — SQLite has no `ADD COLUMN IF NOT EXISTS` — so each
  * table is inspected first and only the genuinely missing columns are added.
  * That makes this safe to run on every boot against a database with live rows.
+ *
+ * The sweep is skipped entirely when the stored fingerprint already matches.
  */
-async function applySchema(adapter) {
+async function applySchema(adapter, { force = false } = {}) {
+  if (!force && (await schemaIsCurrent(adapter))) return { skipped: true }
+
   for (const statement of SCHEMA_STATEMENTS) {
     await adapter.run(statement)
   }
@@ -42,6 +86,12 @@ async function applySchema(adapter) {
   for (const statement of DATA_FIXES) {
     await adapter.run(statement)
   }
+
+  // Recorded only after everything above succeeded, so a sweep that failed
+  // halfway is retried in full next time rather than remembered as done.
+  await adapter.run(META_TABLE)
+  await adapter.run("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)", [SCHEMA_VERSION])
+  return { skipped: false }
 }
 
 /**
@@ -78,8 +128,8 @@ export function nodeAdapter(database) {
       }
     },
 
-    async migrate() {
-      await applySchema(this)
+    async migrate(options) {
+      return applySchema(this, options)
     },
   }
 }
@@ -115,8 +165,8 @@ export function d1Adapter(d1) {
       await d1.batch(statements.map(([sql, params = []]) => d1.prepare(sql).bind(...params)))
     },
 
-    async migrate() {
-      await applySchema(this)
+    async migrate(options) {
+      return applySchema(this, options)
     },
   }
 }

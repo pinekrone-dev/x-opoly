@@ -7,7 +7,14 @@
  */
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
-import { fieldsBySurvey, listPropertyFields, listStages, seedStages } from './stages.js'
+import {
+  cleanPropertyFields,
+  fieldsBySurvey,
+  listPropertyFields,
+  listStages,
+  propertyFieldStatements,
+  seedStages,
+} from './stages.js'
 import { listZones } from './zones.js'
 import { imagesBySurvey, listImages } from './images.js'
 
@@ -94,7 +101,7 @@ function integer(value, min, max) {
 }
 
 /** snake_case row → camelCase JSON, with the shape the UI expects. */
-function mapProperty(row) {
+export function mapProperty(row) {
   if (!row) return null
   return {
     id: row.id,
@@ -176,14 +183,28 @@ function mapSurvey(row) {
 function buildPatch(input, allowed) {
   const columns = []
   const values = []
+  const names = []
   for (const [column, coerce] of Object.entries(allowed)) {
     const camel = column.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())
     if (!(column in input) && !(camel in input)) continue
     const raw = column in input ? input[column] : input[camel]
     columns.push(`${column} = ?`)
     values.push(coerce(raw))
+    names.push(column)
   }
-  return { columns, values }
+  return { columns, values, names }
+}
+
+/**
+ * Whether a stored value and an incoming coerced value are the same thing.
+ *
+ * Null and undefined are one value; numbers compare as numbers even when the
+ * driver hands back an integer for a REAL column.
+ */
+function same(stored, incoming) {
+  if (stored == null && incoming == null) return true
+  if (typeof stored === 'number' || typeof incoming === 'number') return Number(stored) === Number(incoming)
+  return stored === incoming
 }
 
 export async function listSurveys(db, teamId = null) {
@@ -231,11 +252,22 @@ export async function getSurvey(db, id) {
 }
 
 export async function updateSurvey(db, id, input) {
-  const { columns, values } = buildPatch(input, SURVEY_FIELDS)
-  if (columns.length > 0) {
-    await db.run(`UPDATE surveys SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`, [...values, nowIso(), id])
-  }
-  return getSurvey(db, id)
+  const row = await db.get('SELECT * FROM surveys WHERE id = ?', [id])
+  if (!row) return null
+  const { columns, values, names } = buildPatch(input, SURVEY_FIELDS)
+  // Only what actually differs is written. A tour panel that re-saves its
+  // defaults on every blur must not rewrite the row, and its timestamp, when
+  // nothing moved.
+  const changed = names.map((name, index) => index).filter((index) => !same(row[names[index]], values[index]))
+  if (changed.length === 0) return mapSurvey(row)
+  const timestamp = nowIso()
+  await db.run(
+    `UPDATE surveys SET ${changed.map((index) => columns[index]).join(', ')}, updated_at = ? WHERE id = ?`,
+    [...changed.map((index) => values[index]), timestamp, id],
+  )
+  const next = { ...row, updated_at: timestamp }
+  for (const index of changed) next[names[index]] = values[index]
+  return mapSurvey(next)
 }
 
 export async function deleteSurvey(db, id) {
@@ -272,6 +304,32 @@ export async function getProperty(db, id) {
   return { ...property, fields, images }
 }
 
+/**
+ * The raw property row with its survey's owner, in one query.
+ *
+ * What a route needs to authorise a request: does the row exist, and does
+ * its survey belong to this team. The full record — custom fields, images —
+ * is two more queries and most routes never read them, so they are not
+ * fetched here.
+ */
+export async function getPropertyRow(db, id) {
+  return db.get(
+    `SELECT p.*, s.owner_id AS survey_owner_id
+       FROM properties p JOIN surveys s ON s.id = p.survey_id
+      WHERE p.id = ?`,
+    [id],
+  )
+}
+
+/**
+ * Creates a site. Custom fields may ride along as `input.fields`.
+ *
+ * One batch: the row, the survey's timestamp, and the fields land together or
+ * not at all. The record handed back is built from what was just written
+ * rather than read again — the write is the source of truth for its own
+ * values, and the round trip it saves is paid on every flyer, paste and
+ * "send to survey".
+ */
 export async function createProperty(db, surveyId, input = {}) {
   const id = newId()
   const timestamp = nowIso()
@@ -281,32 +339,80 @@ export async function createProperty(db, surveyId, input = {}) {
     const raw = column in input ? input[column] : input[camel]
     return PROPERTY_FIELDS[column](raw)
   })
+  const fields = Array.isArray(input.fields) ? cleanPropertyFields(input.fields) : []
 
-  await db.run(
-    `INSERT INTO properties (id, survey_id, ${columns.join(', ')}, created_at, updated_at)
-     VALUES (?, ?, ${columns.map(() => '?').join(', ')}, ?, ?)`,
-    [id, surveyId, ...values, timestamp, timestamp],
-  )
+  await db.batch([
+    [
+      `INSERT INTO properties (id, survey_id, ${columns.join(', ')}, created_at, updated_at)
+       VALUES (?, ?, ${columns.map(() => '?').join(', ')}, ?, ?)`,
+      [id, surveyId, ...values, timestamp, timestamp],
+    ],
+    ['UPDATE surveys SET updated_at = ? WHERE id = ?', [timestamp, surveyId]],
+    ...(fields.length > 0 ? propertyFieldStatements(id, fields) : []),
+  ])
 
-  await touchSurvey(db, surveyId)
-  return getProperty(db, id)
+  const row = { id, survey_id: surveyId, created_at: timestamp, updated_at: timestamp }
+  columns.forEach((column, index) => {
+    row[column] = values[index]
+  })
+  return { ...mapProperty(row), fields, images: [] }
 }
 
-export async function updateProperty(db, id, input) {
-  const { columns, values } = buildPatch(input, PROPERTY_FIELDS)
-  if (columns.length > 0) {
-    await db.run(`UPDATE properties SET ${columns.join(', ')}, updated_at = ? WHERE id = ?`, [...values, nowIso(), id])
+/**
+ * Applies a patch to a site, writing only what changed.
+ *
+ * A pin dragged back to where it was, a note re-saved with the same text, a
+ * panel that saves on blur: none of those should cost a write, and none
+ * should bump the survey's "last activity" time. When something did change,
+ * the row, the survey timestamp and any custom fields go in one batch.
+ *
+ * `row` lets a route that already authorised against the raw row hand it in,
+ * so the record is not read twice in one request.
+ */
+export async function updateProperty(db, id, input, { row = null } = {}) {
+  const current = row ?? (await db.get('SELECT * FROM properties WHERE id = ?', [id]))
+  if (!current) return null
+
+  const { columns, values, names } = buildPatch(input, PROPERTY_FIELDS)
+  const changed = names.map((_, index) => index).filter((index) => !same(current[names[index]], values[index]))
+  const fields = Array.isArray(input.fields) ? cleanPropertyFields(input.fields) : null
+
+  const timestamp = nowIso()
+  const statements = []
+  if (changed.length > 0) {
+    statements.push([
+      `UPDATE properties SET ${changed.map((index) => columns[index]).join(', ')}, updated_at = ? WHERE id = ?`,
+      [...changed.map((index) => values[index]), timestamp, id],
+    ])
   }
-  const property = await getProperty(db, id)
-  if (property) await touchSurvey(db, property.surveyId)
-  return property
+  if (fields) statements.push(...propertyFieldStatements(id, fields))
+  if (statements.length > 0) {
+    statements.push(['UPDATE surveys SET updated_at = ? WHERE id = ?', [timestamp, current.survey_id]])
+    await db.batch(statements)
+  }
+
+  const next = { ...current }
+  for (const index of changed) next[names[index]] = values[index]
+  if (changed.length > 0) next.updated_at = timestamp
+
+  const [storedFields, images] = await Promise.all([
+    fields ?? listPropertyFields(db, id),
+    listImages(db, id),
+  ])
+  return { ...mapProperty(next), fields: storedFields, images }
 }
 
-export async function deleteProperty(db, id) {
-  const property = await getProperty(db, id)
-  const { changes } = await db.run('DELETE FROM properties WHERE id = ?', [id])
-  if (changes > 0 && property) await touchSurvey(db, property.surveyId)
-  return changes > 0
+/**
+ * Removes a site. `surveyId` skips the lookup when the caller already has it.
+ */
+export async function deleteProperty(db, id, { surveyId = null } = {}) {
+  const owner = surveyId ?? (await db.get('SELECT survey_id FROM properties WHERE id = ?', [id]))?.survey_id
+  if (!owner) return false
+  await db.batch([
+    ['DELETE FROM properties WHERE id = ?', [id]],
+    ['UPDATE surveys SET updated_at = ? WHERE id = ?', [nowIso(), owner]],
+  ])
+  return true
 }
 
 /** Writes the tour order atomically so a partial reorder cannot stick. */

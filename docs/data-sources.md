@@ -24,12 +24,32 @@ done against the parcel's land-use code, not guessed from the address string.
 ## Procurement status
 
 Run `node scripts/procure-data.mjs` from a machine that can reach
-`download.cms.gov` and `nucc.org`. This session's egress policy blocks both
-hosts (and `data.cms.gov`), so **no file has been downloaded yet** and nothing
-has been purchased. The script resolves the dated file names from the official
-pages at run time, streams each file into `data/sources/<source>/`, and records
-URL, size, SHA-256, version and licence note in `data/sources/manifest.json`.
-`data/` is gitignored.
+`download.cms.gov` and `nucc.org`. The sandbox this was built in blocks both
+hosts (and `data.cms.gov` and `geocoding.geo.census.gov`), so **no real file
+has been downloaded yet** and nothing has been purchased. The script resolves
+the dated file names from the official pages at run time, streams each file
+into `data/sources/<source>/`, and records URL, size, SHA-256, version and
+licence note in `data/sources/manifest.json`. `data/` is gitignored.
+
+## Loading what was procured
+
+`scripts/load-providers.mjs` mirrors the files into `data/providers.db`, a
+SQLite file separate from the app's database, and builds the per-market layer:
+
+| Step | Command | What it does |
+| --- | --- | --- |
+| Taxonomy | `load-providers.mjs nucc` | `nucc_taxonomy` lookup with version and licence note |
+| Mirror | `load-providers.mjs nppes [--states TX,FL]` | Monthly file replaces the provider tables; each weekly in date order is an upsert; a row carrying only a deactivation date deactivates. Individual mailing addresses are dropped at load |
+| Geocode | `load-providers.mjs geocode [--states] [--zips] [--limit]` | Census batch geocoder, one call per 5,000 distinct practice addresses, cached in `geocode_cache`, misses and ties kept |
+| Join | `load-providers.mjs join --market <slug> --parcels parcels.geojson --meta meta.json` | Point in polygon against the market's parcels; `provider_parcels` rows carry the roll's owner, mailing, value and use, or `unmatched` |
+| Export | `load-providers.mjs export --market <slug>` | `layer-healthcare.geojson` plus `healthcare-layer.json`, the entry to merge into the market's `layers.json` and publish through the ingest door |
+| Refresh | `procure-data.mjs --only nppes-weekly` then `load-providers.mjs nppes` | Files already in `load_log` are skipped, so this is the whole weekly routine |
+
+The loader streams the CSV straight out of the ZIP with `unzip -p`, so the
+nine-gigabyte monthly file is never extracted to disk. `test/provider-data.test.js`
+exercises every step on fixture files laid out exactly like the real releases.
+Federal property layers (IOLP, FRPP) are not loaded by this script and are not
+merged into `provider_parcels`; when adopted they become their own layer file.
 
 | Source | Current release (from CMS and NUCC pages, via search on 3 Sep 2026) | Size |
 | --- | --- | --- |

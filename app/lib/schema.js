@@ -299,6 +299,10 @@ export const DATA_FIXES = [
   // "is this parcel already in the CRM" a lookup rather than a scan has to be
   // created after them.
   'CREATE INDEX IF NOT EXISTS idx_places_parcel ON places(team_id, market, parcel_id)',
+  // "Does the team already have this address" used to scan every place the
+  // team owns on each site added. The key column is filled by the code that
+  // writes places, and lazily for rows from before it existed.
+  'CREATE INDEX IF NOT EXISTS idx_places_address_key ON places(team_id, address_key)',
 ]
 
 export const COLUMN_ADDITIONS = [
@@ -351,6 +355,11 @@ export const COLUMN_ADDITIONS = [
    */
   ['places', 'market', 'TEXT'],
   ['places', 'parcel_id', 'TEXT'],
+  // The address flattened for matching: lower case, punctuation and spacing
+  // dropped. Derived, never shown, and NULL on rows written before it
+  // existed until the first lookup keys them. Reversible: dropping it costs
+  // nothing but the lookup speed.
+  ['places', 'address_key', 'TEXT'],
 
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],

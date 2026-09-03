@@ -4,7 +4,7 @@ import { api } from '../api'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
 import { OBJECTS, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
-import type { Account, BillingStatus, CrmRecord, Survey } from '../types'
+import type { Account, BillingStatus, CrmRecord } from '../types'
 
 /**
  * The workspace home.
@@ -31,7 +31,7 @@ export default function Home({
 }) {
   const spec = objectForSegment(tab)
   const [records, setRecords] = useState<CrmRecord[]>([])
-  const [surveys, setSurveys] = useState<Survey[]>([])
+  const [surveyCount, setSurveyCount] = useState(0)
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -41,24 +41,16 @@ export default function Home({
   const [busy, setBusy] = useState(false)
 
   // Counts on the tabs, so an empty workspace still says what lives where.
+  // One request: this used to download all four lists, and every survey,
+  // on every tab change just to count them.
   useEffect(() => {
     let cancelled = false
-    Promise.all(
-      OBJECTS.map((object) =>
-        api.crm
-          .list(object.segment)
-          .then(({ records: list }) => [object.segment, list.length] as const)
-          .catch(() => [object.segment, 0] as const),
-      ),
-    )
-      .then((pairs) => {
-        if (!cancelled) setCounts(Object.fromEntries(pairs))
-      })
-      .catch(() => undefined)
-    api
-      .listSurveys()
-      .then(({ surveys: list }) => {
-        if (!cancelled) setSurveys(list)
+    api.crm
+      .counts()
+      .then(({ counts: found, surveys }) => {
+        if (cancelled) return
+        setCounts(Object.fromEntries(OBJECTS.map((object) => [object.segment, found[object.segment] ?? 0])))
+        setSurveyCount(surveys)
       })
       .catch(() => undefined)
     return () => {
@@ -120,7 +112,7 @@ export default function Home({
       <WorkspaceNav
         current={navSection(tab)}
         counts={counts}
-        surveyCount={surveys.length}
+        surveyCount={surveyCount}
         account={account}
         smsConfigured={smsConfigured}
         billing={billing}

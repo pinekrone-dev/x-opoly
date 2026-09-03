@@ -13,7 +13,7 @@ npm run dev      # API on :8080, UI on :5173 with /api proxied
 
 ```bash
 npm run build && npm start   # one process serving the API and the built UI on $PORT
-npm test                     # 83 tests, no network required
+npm test                     # node tests, no network required
 ```
 
 Locally, data lives in `./data` — a SQLite file plus the uploaded flyers and photos.
@@ -221,21 +221,102 @@ honest gap.
 ## Layout
 
 ```
-server/
-  index.js              Express app: surveys, properties, tour, sharing, uploads
-  lib/db.js             SQLite schema and connection (node:sqlite, no dependency)
-  lib/surveys.js        survey/property records, stages, share tokens
+app/
+  routes.js             the Hono API — one definition, both runtimes
+  lib/sql.js            node:sqlite adapter | D1 adapter, schema sweep with a version marker
+  lib/schema.js         tables, indexes, additive column list, idempotent repairs
+  lib/surveys.js        survey/property records, share tokens
+  lib/crm.js            people, companies, places, deals; custom fields; parcel links
+  lib/stages.js         deal stages and per-site custom fields
   lib/tour.js           route optimisation — haversine, multi-start NN, 2-opt
-  lib/flyer.js          flyer → structured fields via Claude
+  lib/flyer.js          flyer → structured fields via an AI provider
   lib/geocode.js        address lookup provider
   lib/places.js         nearby-business search for competition scoping
-  lib/tiles.js          basemap provider presets and placeholder tiles
   lib/demographics.js   census trade-area lookup
+  lib/lookupcache.js    time-bounded cache for the three lookups above
+  lib/tiles.js          basemap provider presets and placeholder tiles
+server/index.js         Node entry point
+worker/index.js         Cloudflare entry point
+scripts/
+  procure-data.mjs      fetches the official NPPES and NUCC bulk files into data/
+  load-providers.mjs    mirrors them into data/providers.db, geocodes, joins to parcels
 src/
-  views/                survey list, broker workspace, client share view
+  views/                survey list, broker workspace, GIS view, CRM records, client share view
   components/           map canvas, property panel, table, tour planner, share settings
-test/                   83 tests, including the Worker exercised over D1 and R2 shims
+test/                   node tests, including the Worker exercised over D1 and R2 shims
 ```
+
+## Database round trips
+
+D1 charges per statement and each one crosses the network, so the API is
+written to a round-trip budget and `test/io.test.js` holds it there. What the
+budget rests on:
+
+- **Schema sweep once per version.** The schema is applied lazily on a
+  Worker's first request. The result is recorded in `schema_meta`, so a later
+  cold start reads one row and skips the sixty-odd CREATE, PRAGMA and repair
+  statements. Change the schema lists and the fingerprint changes with them;
+  delete the row and the sweep runs again.
+- **One auth query per request.** The session and its user are read in one
+  JOIN. The "does any account exist yet" check that gates setup mode is
+  answered once per app instance, since the answer only ever moves from no to
+  yes.
+- **Writes go in batches.** A site, its survey's timestamp and its custom
+  fields land in one `db.batch`; so do a CRM record and its fields, a delete
+  and its dependents, and a deal party and the deal's timestamp. On D1 a batch
+  is atomic; on Node it is a transaction.
+- **Unchanged values are not written.** A PATCH is compared against the row
+  it targets and only the columns that differ are sent. A pin dragged back to
+  where it was, or a panel that re-saves the same text, costs no write and
+  does not bump the survey's "last activity" time.
+- **Lists are bounded and searched in SQL.** CRM lists take `?q=`, `?limit=`
+  and `?offset=`, cap at 1,000 rows and report `truncated`. The navigation's
+  counts come from `GET /api/crm/counts`, one query, rather than from
+  downloading every list.
+- **Places match by an indexed key.** `places.address_key` is the address
+  flattened for comparison, kept in step on every write. Rows from before the
+  column existed are keyed the first time a team's lookup misses.
+
+## Outside lookups: cache and rate limits
+
+Census demographics, nearby businesses and geocoder answers are remembered in
+memory per app instance (per isolate on Cloudflare): demographics and geocode
+for a day, businesses for an hour, keyed by the coordinate rounded to about
+eleven metres and by the query. Only successful answers are kept, so an
+outage is reported every time rather than remembered. `/api/demographics` is
+public — the shared client map uses it — and is rate-limited per address like
+the geocoder.
+
+## Client write behaviour
+
+Nothing writes on a timer. The two inputs that used to write per keystroke
+now coalesce: a CRM record's custom fields save 500 ms after typing pauses and
+flush at once on blur, on window blur, on add or remove, and when the view
+unmounts; the tour planner's start time and minutes-per-stop re-plan 350 ms
+after the last change. Every other save is explicit or on blur, and the server
+ignores a save that changes nothing.
+
+## Provider data (healthcare practice leads)
+
+`docs/data-sources.md` holds the source register, the joins and the legal
+notes. The short version:
+
+```bash
+NODE_USE_ENV_PROXY=1 node scripts/procure-data.mjs            # NPPES monthly + weeklies + NUCC into data/sources
+node scripts/load-providers.mjs nucc                          # taxonomy lookup
+node scripts/load-providers.mjs nppes [--states TX,FL]        # monthly replace, then each weekly, idempotent
+node scripts/load-providers.mjs geocode --states TX           # Census batch geocoder, cached per address
+node scripts/load-providers.mjs join --market austin-tx --parcels parcels.geojson --meta meta.json
+node scripts/load-providers.mjs export --market austin-tx     # layer-healthcare.geojson + catalog entry
+node scripts/load-providers.mjs status
+```
+
+Weekly refresh is `procure-data.mjs --only nppes-weekly` followed by
+`load-providers.mjs nppes`; files already in the load log are skipped.
+Everything lands in the gitignored `data/` directory, in a SQLite file
+separate from the app's database. The mailing address of an individual NPI
+is never stored, ownership comes only from the county roll under a geocoded
+practice point, and an unmatched practice stays unmatched.
 
 ## Notes on the API
 

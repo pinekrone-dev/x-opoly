@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from '../components/BrandMark'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
@@ -35,8 +35,26 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spec.segment, id])
 
-  const saveFields = async (next: RecordField[]) => {
-    setFields(next)
+  /*
+   * Custom fields save on a short delay rather than per keystroke.
+   *
+   * Typing a twenty-character value used to send twenty requests, each
+   * rewriting every field on the record. Now the latest list is held and
+   * sent once typing pauses — and flushed at once when the input loses
+   * focus, the window loses focus, a field is added or removed, or the view
+   * unmounts, so nothing typed is ever lost to the delay.
+   */
+  const pending = useRef<RecordField[] | null>(null)
+  const timer = useRef<number | null>(null)
+
+  const flush = useCallback(async () => {
+    if (timer.current != null) {
+      window.clearTimeout(timer.current)
+      timer.current = null
+    }
+    const next = pending.current
+    if (!next) return
+    pending.current = null
     setSaving(true)
     try {
       const { record: updated } = await api.crm.update(spec.segment, id, {
@@ -48,7 +66,28 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
     } finally {
       setSaving(false)
     }
+  }, [spec.segment, id])
+
+  const saveFields = (next: RecordField[], { immediate = false } = {}) => {
+    setFields(next)
+    pending.current = next
+    if (timer.current != null) window.clearTimeout(timer.current)
+    if (immediate) {
+      void flush()
+      return
+    }
+    timer.current = window.setTimeout(() => void flush(), 500)
   }
+
+  useEffect(() => {
+    const onBlur = () => void flush()
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('blur', onBlur)
+      // Leaving the page with an edit still pending sends it now.
+      void flush()
+    }
+  }, [flush])
 
   /** One typed column, saved when the input loses focus. */
   const saveColumn = async (key: string, value: string, type?: string) => {
@@ -134,7 +173,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
 
         <section className="panel mt-4 p-4">
           <p className="label mb-2">Custom fields</p>
-          <CustomFields fields={fields} onChange={saveFields} />
+          <CustomFields fields={fields} onChange={saveFields} onSettle={() => void flush()} />
         </section>
       </main>
     </div>
@@ -203,16 +242,20 @@ function Details({
 function CustomFields({
   fields,
   onChange,
+  onSettle,
 }: {
   fields: RecordField[]
-  onChange: (next: RecordField[]) => void
+  /** Every edit, as typed. `immediate` marks a discrete action to save now. */
+  onChange: (next: RecordField[], options?: { immediate?: boolean }) => void
+  /** The broker moved on from a field; whatever is pending should be sent. */
+  onSettle?: () => void
 }) {
   const [label, setLabel] = useState('')
   const [value, setValue] = useState('')
 
   const add = () => {
     if (!label.trim()) return
-    onChange([...fields, { label: label.trim(), value: value.trim() || null }])
+    onChange([...fields, { label: label.trim(), value: value.trim() || null }], { immediate: true })
     setLabel('')
     setValue('')
   }
@@ -234,13 +277,14 @@ function CustomFields({
                     next[index] = { ...field, value: event.target.value }
                     onChange(next)
                   }}
+                  onBlur={() => onSettle?.()}
                 />
               </dd>
               <button
                 type="button"
                 className="btn-ghost px-1.5 py-1 text-faint hover:text-rose-600"
                 aria-label={`Remove ${field.label}`}
-                onClick={() => onChange(fields.filter((_, at) => at !== index))}
+                onClick={() => onChange(fields.filter((_, at) => at !== index), { immediate: true })}
               >
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
                   <path d="M18 6 6 18M6 6l12 12" />

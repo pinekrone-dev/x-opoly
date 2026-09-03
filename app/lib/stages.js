@@ -141,7 +141,14 @@ export async function reorderStages(db, surveyId, orderedIds) {
  */
 export async function setPropertyFields(db, propertyId, fields) {
   if (!Array.isArray(fields)) return listPropertyFields(db, propertyId)
+  const cleaned = cleanPropertyFields(fields)
+  await db.batch(propertyFieldStatements(propertyId, cleaned))
+  // What was just written is what is stored; no need to read it back.
+  return cleaned
+}
 
+/** Trims, caps and drops blank rows, in the order they were sent. */
+export function cleanPropertyFields(fields) {
   const cleaned = []
   for (const field of fields) {
     const label = String(field?.label ?? '').trim().slice(0, 60)
@@ -150,16 +157,21 @@ export async function setPropertyFields(db, propertyId, fields) {
     cleaned.push({ label, value })
     if (cleaned.length >= MAX_CUSTOM_FIELDS) break
   }
+  return cleaned
+}
 
-  await db.batch([
+/**
+ * The statements that replace a site's fields, for callers folding them into
+ * a larger batch — a create or an update that lands row and fields together.
+ */
+export function propertyFieldStatements(propertyId, cleaned) {
+  return [
     ['DELETE FROM property_fields WHERE property_id = ?', [propertyId]],
     ...cleaned.map((field, index) => [
       'INSERT INTO property_fields (id, property_id, label, value, position) VALUES (?, ?, ?, ?, ?)',
       [newId(), propertyId, field.label, field.value, index],
     ]),
-  ])
-
-  return listPropertyFields(db, propertyId)
+  ]
 }
 
 export async function listPropertyFields(db, propertyId) {

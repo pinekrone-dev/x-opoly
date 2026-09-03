@@ -20,9 +20,11 @@ import {
   deleteProperty,
   deleteSurvey,
   getProperty,
+  getPropertyRow,
   getSurvey,
   listProperties,
   listSurveys,
+  mapProperty,
   resolveShare,
   setTourOrder,
   updateProperty,
@@ -71,6 +73,7 @@ import { EmailError, emailConfigured, sendEmail, verificationEmail } from './lib
 import {
   addParty,
   camel as camelRow,
+  countRecords,
   createRecord,
   dealWithParties,
   deleteRecord,
@@ -116,6 +119,7 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
+import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
@@ -215,6 +219,21 @@ export function createApp({ db, storage, env = {} }) {
 
   const notFound = (c, message) => c.json({ error: message }, 404)
 
+  /*
+   * Answers from outside services, remembered for a while.
+   *
+   * Demographics change once a year and businesses over months; a geocode of
+   * the same address is the same point. Each is keyed by what the caller
+   * asked, and only successful answers are kept, so an outage is never
+   * remembered as a result.
+   */
+  const lookups = {
+    demographics: createLookupCache({ ttlMs: DAY, max: 500 }),
+    places: createLookupCache({ ttlMs: HOUR, max: 500 }),
+    geocode: createLookupCache({ ttlMs: DAY, max: 2000 }),
+  }
+  app.lookups = lookups
+
   /** Loads a survey or ends the request. */
   /**
    * The survey, only if it belongs to the caller's team.
@@ -239,19 +258,22 @@ export function createApp({ db, storage, env = {} }) {
     return { survey }
   }
 
-  /** A property, only if its survey belongs to the caller's team. */
+  /**
+   * A property, only if its survey belongs to the caller's team.
+   *
+   * One query: the row joined to its survey's owner. `property` is the mapped
+   * record without custom fields or images; a route that needs those reads
+   * the full record with `getProperty`.
+   */
   async function requireProperty(c, id = c.req.param('id')) {
-    const property = await getProperty(db, id)
-    if (!property) return { error: notFound(c, 'That property does not exist.') }
+    const row = await getPropertyRow(db, id)
+    if (!row) return { error: notFound(c, 'That property does not exist.') }
 
     const user = c.get('user')
-    if (user) {
-      const survey = await getSurvey(db, property.surveyId)
-      if (survey?.ownerId && survey.ownerId !== user.teamId) {
-        return { error: notFound(c, 'That property does not exist.') }
-      }
+    if (user && row.survey_owner_id && row.survey_owner_id !== user.teamId) {
+      return { error: notFound(c, 'That property does not exist.') }
     }
-    return { property }
+    return { row, property: mapProperty(row) }
   }
 
   // --- health --------------------------------------------------------------
@@ -411,11 +433,25 @@ export function createApp({ db, storage, env = {} }) {
    * create an account would make the instance unusable and unrecoverable
    * through the browser, which is the only tool the operator has here.
    */
+  /**
+   * Whether any account exists yet.
+   *
+   * Asked on every authenticated request to detect the setup window, which
+   * made it a full-table COUNT per API call. The answer only ever moves from
+   * "no" to "yes" — accounts are never deleted — so once it is yes it is
+   * remembered for the life of this app instance and costs nothing further.
+   */
+  let anyUsers = false
+  const hasUsers = async () => {
+    if (!anyUsers) anyUsers = (await countUsers(db)) > 0
+    return anyUsers
+  }
+
   app.use('/api/*', async (c, next) => {
     const path = new URL(c.req.url).pathname
     if (PUBLIC_PATHS.some((pattern) => pattern.test(path))) return next()
 
-    if ((await countUsers(db)) === 0) {
+    if (!(await hasUsers())) {
       c.set('setupMode', true)
       return next()
     }
@@ -487,7 +523,7 @@ export function createApp({ db, storage, env = {} }) {
     const user = await sessionUser(db, tokenFrom(c))
     return c.json({
       user,
-      setupRequired: (await countUsers(db)) === 0,
+      setupRequired: !(await hasUsers()),
       smsConfigured: smsConfigured(env),
       billing: {
         configured: stripeConfigured(env),
@@ -842,30 +878,30 @@ export function createApp({ db, storage, env = {} }) {
     const { survey, error } = await requireSurvey(c)
     if (error) return error
     const body = await c.req.json().catch(() => ({}))
+    // Row, survey timestamp and custom fields land in one batch.
     const property = await createProperty(db, survey.id, body)
-    if (Array.isArray(body?.fields)) await setPropertyFields(db, property.id, body.fields)
     // A building worked on a survey is filed back into the team's places, so
     // what the broker learns here is not lost when the survey is archived.
-    await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
-    return c.json({ property: await getProperty(db, property.id) }, 201)
+    await rememberPlace(db, c.get('user')?.teamId ?? null, property)
+    return c.json({ property }, 201)
   })
 
   app.patch('/api/properties/:id', async (c) => {
     const id = c.req.param('id')
-    {
-      const { error } = await requireProperty(c, id)
-      if (error) return error
-    }
+    const { row, error } = await requireProperty(c, id)
+    if (error) return error
     const body = await c.req.json().catch(() => ({}))
-    await updateProperty(db, id, body)
-    if (Array.isArray(body?.fields)) await setPropertyFields(db, id, body.fields)
-    return c.json({ property: await getProperty(db, id) })
+    // The row just read authorises the request and supplies the current
+    // values, so only genuine changes are written and nothing is read twice.
+    return c.json({ property: await updateProperty(db, id, body, { row }) })
   })
 
   app.delete('/api/properties/:id', async (c) => {
-    const { error } = await requireProperty(c)
+    const { row, error } = await requireProperty(c)
     if (error) return error
-    if (!(await deleteProperty(db, c.req.param('id')))) return notFound(c, 'That property does not exist.')
+    if (!(await deleteProperty(db, c.req.param('id'), { surveyId: row.survey_id }))) {
+      return notFound(c, 'That property does not exist.')
+    }
     return c.body(null, 204)
   })
 
@@ -1199,13 +1235,27 @@ export function createApp({ db, storage, env = {} }) {
   })
 
 
+  /*
+   * How many of each the team holds. The navigation shows these on every
+   * route; before this it fetched all four lists in full to count them.
+   */
+  app.get('/api/crm/counts', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const { surveys, ...counts } = await countRecords(db, user.teamId)
+    return c.json({ counts, surveys })
+  })
+
   for (const [segment, recordType] of Object.entries(RECORD_ROUTES)) {
     app.get(`/api/crm/${segment}`, async (c) => {
       const user = c.get('user')
       if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-      return c.json({
-        records: await listRecords(db, recordType, user.teamId, { search: c.req.query('q') ?? '' }),
+      const { records, truncated } = await listRecords(db, recordType, user.teamId, {
+        search: c.req.query('q') ?? '',
+        limit: c.req.query('limit'),
+        offset: c.req.query('offset'),
       })
+      return c.json({ records, truncated })
     })
 
     app.post(`/api/crm/${segment}`, async (c) => {
@@ -1292,17 +1342,17 @@ export function createApp({ db, storage, env = {} }) {
       return notFound(c, 'That survey does not exist.')
     }
 
-    const { fields, ...columns } = propertyFromPlace(place)
     // Onto the tour as well as the map. Sending a building to a survey is
     // saying "we are looking at this one", and there is no second intent
     // worth asking about. Appended rather than inserted: the broker's
     // existing order is theirs, and the planner can re-optimise on request.
-    const onTour = (await listProperties(db, surveyId)).filter((row) => row.tourOrder != null).length
-    const property = await createProperty(db, surveyId, { ...columns, tourOrder: onTour })
+    const onTour = Number(
+      (await db.get('SELECT COUNT(*) AS n FROM properties WHERE survey_id = ? AND tour_order IS NOT NULL', [surveyId]))?.n ?? 0,
+    )
     // The custom profile travels too: what the team recorded about a building
     // is most of why it was worth keeping a record of it.
-    await setPropertyFields(db, property.id, fields)
-    return c.json({ property: await getProperty(db, property.id) }, 201)
+    const property = await createProperty(db, surveyId, { ...propertyFromPlace(place), tourOrder: onTour })
+    return c.json({ property }, 201)
   })
 
   // --- collaborators -------------------------------------------------------
@@ -1368,7 +1418,10 @@ export function createApp({ db, storage, env = {} }) {
     const throttled = limited(c, 'geocode', 60, 60 * 1000)
     if (throttled) return throttled
     try {
-      return c.json({ results: await geocode(c.req.query('q'), { env }) })
+      const query = String(c.req.query('q') ?? '')
+      const key = query.trim().toLowerCase().replace(/\s+/g, ' ')
+      const results = await lookups.geocode.remember(key, () => geocode(query, { env }))
+      return c.json({ results })
     } catch (error) {
       if (error instanceof GeocodeError) {
         return c.json({ error: error.message, retryable: error.retryable }, error.retryable ? 503 : 400)
@@ -1378,8 +1431,17 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.get('/api/demographics', async (c) => {
+    // Public, because the shared client map shades without a session — which
+    // is exactly why it needs a limit: each miss is several Census calls.
+    const throttled = limited(c, 'demographics', 60, 60 * 1000)
+    if (throttled) return throttled
+    const lat = Number(c.req.query('lat'))
+    const lng = Number(c.req.query('lng'))
     try {
-      return c.json(await demographicsFor(Number(c.req.query('lat')), Number(c.req.query('lng')), { env }))
+      const result = Number.isFinite(lat) && Number.isFinite(lng)
+        ? await lookups.demographics.remember(coordinateKey(lat, lng), () => demographicsFor(lat, lng, { env }))
+        : await demographicsFor(lat, lng, { env })
+      return c.json(result)
     } catch (error) {
       if (error instanceof DemographicsUnavailable) return c.json({ error: error.message }, 503)
       throw error
@@ -1394,17 +1456,18 @@ export function createApp({ db, storage, env = {} }) {
   )
 
   app.get('/api/places/nearby', async (c) => {
+    const query = {
+      lat: Number(c.req.query('lat')),
+      lng: Number(c.req.query('lng')),
+      category: c.req.query('category') || null,
+      keyword: c.req.query('keyword') || null,
+      radiusMiles: Number(c.req.query('radius')) || 5,
+    }
     try {
-      return c.json(
-        await nearbyBusinesses({
-          lat: Number(c.req.query('lat')),
-          lng: Number(c.req.query('lng')),
-          category: c.req.query('category') || null,
-          keyword: c.req.query('keyword') || null,
-          radiusMiles: Number(c.req.query('radius')) || 5,
-          env,
-        }),
-      )
+      const search = () => nearbyBusinesses({ ...query, env })
+      const cacheable = Number.isFinite(query.lat) && Number.isFinite(query.lng)
+      const key = `${coordinateKey(query.lat, query.lng)}|${query.category ?? ''}|${(query.keyword ?? '').trim().toLowerCase()}|${query.radiusMiles}`
+      return c.json(cacheable ? await lookups.places.remember(key, search) : await search())
     } catch (error) {
       if (error instanceof PlacesUnavailable) return c.json({ error: error.message }, 503)
       throw error
@@ -1615,14 +1678,13 @@ export function createApp({ db, storage, env = {} }) {
         ...toPropertyInput(fields),
         lat: located.lat,
         lng: located.lng,
+        fields: mergeExtraction({ fields: [] }, fields).fields,
       })
-      const rows = mergeExtraction({ fields: [] }, fields).fields
-      if (rows.length > 0) await setPropertyFields(db, property.id, rows)
-      await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
+      await rememberPlace(db, c.get('user')?.teamId ?? null, property)
 
       return c.json(
         {
-          property: await getProperty(db, property.id),
+          property,
           extraction: {
             source,
             model,
@@ -1667,14 +1729,13 @@ export function createApp({ db, storage, env = {} }) {
         lng: located.lng,
         flyer_path: stored,
         flyer_name: filename,
+        fields: mergeExtraction({ fields: [] }, fields).fields,
       })
-      const rows = mergeExtraction({ fields: [] }, fields).fields
-      if (rows.length > 0) await setPropertyFields(db, property.id, rows)
-      await rememberPlace(db, c.get('user')?.teamId ?? null, await getProperty(db, property.id))
+      await rememberPlace(db, c.get('user')?.teamId ?? null, property)
 
       return c.json(
         {
-          property: await getProperty(db, property.id),
+          property,
           extraction: {
             model,
             confidence: fields.confidence,
@@ -1809,8 +1870,14 @@ export function createApp({ db, storage, env = {} }) {
     const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
     if (throttled) return throttled
     const id = c.req.param('id')
-    const { property, error } = await requireProperty(c, id)
-    if (error) return error
+    {
+      const { error } = await requireProperty(c, id)
+      if (error) return error
+    }
+    // The merge below needs the custom fields, so this route reads the
+    // full record. It is rare and bound by an AI call, so the extra reads
+    // do not matter here the way they do on a pin drag.
+    const property = await getProperty(db, id)
     if (!property.flyerUrl) {
       return c.json({ error: 'There is no flyer on this site to read. Attach one first.' }, 400)
     }
@@ -1843,11 +1910,11 @@ export function createApp({ db, storage, env = {} }) {
         }
       }
 
-      if (Object.keys(patch).length > 0) await updateProperty(db, id, patch)
-      if (rows.length > 0) await setPropertyFields(db, id, rows)
+      const changes = rows.length > 0 ? { ...patch, fields: rows } : patch
+      const updated = Object.keys(changes).length > 0 ? await updateProperty(db, id, changes) : property
 
       return c.json({
-        property: await getProperty(db, id),
+        property: updated,
         extraction: {
           model,
           confidence: fields.confidence,
@@ -1867,10 +1934,8 @@ export function createApp({ db, storage, env = {} }) {
   /** Attaches a flyer to a property that already exists. */
   app.post('/api/properties/:id/flyer', async (c) => {
     const id = c.req.param('id')
-    {
-      const { error } = await requireProperty(c, id)
-      if (error) return error
-    }
+    const { row, error } = await requireProperty(c, id)
+    if (error) return error
 
     const upload = await readUpload(c)
     if (upload.error) return upload.error
@@ -1880,15 +1945,13 @@ export function createApp({ db, storage, env = {} }) {
     await storage.put(stored, upload.bytes, upload.mimeType || 'application/octet-stream')
 
     return c.json({
-      property: await updateProperty(db, id, { flyer_path: stored, flyer_name: filename }),
+      property: await updateProperty(db, id, { flyer_path: stored, flyer_name: filename }, { row }),
     })
   })
 
   app.post('/api/properties/:id/photo', async (c) => {
-    {
-      const { error } = await requireProperty(c)
-      if (error) return error
-    }
+    const { row, error } = await requireProperty(c)
+    if (error) return error
 
     const upload = await readUpload(c)
     if (upload.error) return upload.error
@@ -1896,7 +1959,7 @@ export function createApp({ db, storage, env = {} }) {
 
     const stored = `${crypto.randomUUID()}${EXTENSIONS[upload.mimeType] || ''}`
     await storage.put(stored, upload.bytes, upload.mimeType)
-    return c.json({ property: await updateProperty(db, c.req.param('id'), { photo_path: stored }) })
+    return c.json({ property: await updateProperty(db, c.req.param('id'), { photo_path: stored }, { row }) })
   })
 
   app.get('/api/files/:name', async (c) => {

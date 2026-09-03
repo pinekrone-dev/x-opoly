@@ -103,15 +103,22 @@ export default function TourPlanner({
   )
 
   // Re-time whenever a setting changes, keeping the broker's chosen order.
+  //
+  // On a short delay: the start time and minutes-per-stop are typed, and
+  // each keystroke used to send a whole plan request. Changes that arrive
+  // inside the delay cancel the pending one, so a typed "10:30" plans once.
   useEffect(() => {
-    // Keep the arranged order for sites already in it — but a newly ticked
-    // site is in `chosen` and not yet in `order`, and filtering alone
-    // silently dropped it: the box checked, the route never changed. New
-    // picks join at the end of the existing order.
-    const kept = order.filter((id) => chosen.includes(id))
-    const added = chosen.filter((id) => !order.includes(id))
-    const ids = order.length > 0 ? [...kept, ...added] : chosen
-    void schedule(ids, false)
+    const timer = window.setTimeout(() => {
+      // Keep the arranged order for sites already in it — but a newly ticked
+      // site is in `chosen` and not yet in `order`, and filtering alone
+      // silently dropped it: the box checked, the route never changed. New
+      // picks join at the end of the existing order.
+      const kept = order.filter((id) => chosen.includes(id))
+      const added = chosen.filter((id) => !order.includes(id))
+      const ids = order.length > 0 ? [...kept, ...added] : chosen
+      void schedule(ids, false)
+    }, 350)
+    return () => window.clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startTime, stopMinutes, start, end, chosen])
 

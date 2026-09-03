@@ -112,8 +112,20 @@ export const api = {
   // --- CRM ------------------------------------------------------------------
   /** The four object types share one shape, so they share one set of calls. */
   crm: {
-    list: <T = CrmRecord>(segment: string, search = '') =>
-      request<{ records: T[] }>(`/api/crm/${segment}${search ? `?q=${encodeURIComponent(search)}` : ''}`),
+    /**
+     * A bounded list, newest first. `truncated` says more exist past the
+     * server's limit; `limit` and `offset` page through them.
+     */
+    list: <T = CrmRecord>(segment: string, search = '', page?: { limit?: number; offset?: number }) => {
+      const params = new URLSearchParams()
+      if (search) params.set('q', search)
+      if (page?.limit != null) params.set('limit', String(page.limit))
+      if (page?.offset != null) params.set('offset', String(page.offset))
+      const query = params.toString()
+      return request<{ records: T[]; truncated: boolean }>(`/api/crm/${segment}${query ? `?${query}` : ''}`)
+    },
+    /** How many of each record type the team holds, and how many surveys. One request. */
+    counts: () => request<{ counts: Record<string, number>; surveys: number }>('/api/crm/counts'),
     get: <T = CrmRecord>(segment: string, id: string) => request<{ record: T }>(`/api/crm/${segment}/${id}`),
     create: <T = CrmRecord>(segment: string, input: Record<string, unknown>) =>
       request<{ record: T }>(`/api/crm/${segment}`, json(input)),

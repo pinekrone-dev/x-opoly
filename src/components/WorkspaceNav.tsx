@@ -51,20 +51,14 @@ export default function WorkspaceNav({
   useEffect(() => {
     if (!needsOwn || !account) return undefined
     let cancelled = false
-    Promise.all(
-      segments.map((segment) =>
-        api.crm
-          .list(segment)
-          .then(({ records }) => [segment, records.length] as const)
-          .catch(() => [segment, 0] as const),
-      ),
-    ).then((pairs) => {
-      if (!cancelled) setOwn(Object.fromEntries(pairs))
-    })
-    api
-      .listSurveys()
-      .then(({ surveys }) => {
-        if (!cancelled) setOwnSurveys(surveys.length)
+    // One request for all the numbers. This used to download every record of
+    // every type just to measure the lists' lengths.
+    api.crm
+      .counts()
+      .then(({ counts: found, surveys }) => {
+        if (cancelled) return
+        setOwn(Object.fromEntries(segments.map((segment) => [segment, found[segment] ?? 0])))
+        setOwnSurveys(surveys)
       })
       .catch(() => undefined)
     return () => {
