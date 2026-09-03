@@ -346,6 +346,12 @@ interface Props {
   tiles: TileConfig
   /** Basemaps the viewer may switch between. Omit to hide the switcher. */
   basemaps?: TileConfig[]
+  /**
+   * Which corner the basemap switcher sits in. Top-right by default; the
+   * parcel map puts it top-left, beside its rail, in the spot a floating
+   * market picker used to take.
+   */
+  basemapPicker?: 'top-right' | 'top-left'
   properties: Property[]
   selectedId?: string | null
   onSelect?: (id: string) => void
@@ -555,6 +561,7 @@ function emptySource(): maplibregl.GeoJSONSourceSpecification {
 export default function MapCanvas({
   tiles,
   basemaps,
+  basemapPicker = 'top-right',
   properties,
   selectedId,
   onSelect,
@@ -2215,7 +2222,13 @@ export default function MapCanvas({
       ) : null}
 
       {options && (
-        <div className="absolute right-3 top-3 z-[500]">
+        <div
+          className={`absolute top-3 z-[520] ${basemapPicker === 'top-left' ? '' : 'right-3'}`}
+          // Left of the map proper: the parcel map's rail sets the inset it
+          // covers, and a map without a rail sets nothing, so the fallback
+          // keeps the picker off the edge.
+          style={basemapPicker === 'top-left' ? { left: 'calc(var(--map-inset-left, 0px) + 0.75rem)' } : undefined}
+        >
           <button
             type="button"
             className="flex items-center gap-1.5 rounded-lg border border-line bg-surface/90 px-2.5 py-1.5 text-xs font-medium text-ink shadow-lg backdrop-blur hover:border-muted"

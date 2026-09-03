@@ -1885,7 +1885,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
        * rebuilt; an hour for the catalogue's JSON, which the layer refresh
        * rewrites weekly.
        */
-      const ttl = /\.(pmtiles|geojson)$/.test(key) ? 86400 : 3600
+      // The market list is the one file a new market has to reach quickly:
+      // a county published an hour ago that the picker still does not show
+      // reads as "not added". Five minutes, at one bucket read per colo.
+      const ttl = key === 'markets.json' ? 300 : /\.(pmtiles|geojson)$/.test(key) ? 86400 : 3600
       return edgeCached(
         c,
         `catalog/${key}`,

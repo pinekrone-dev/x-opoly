@@ -2830,6 +2830,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
       <MapCanvas
           tiles={tiles}
           basemaps={basemaps}
+          basemapPicker="top-left"
           properties={[]}
           parcels={
             meta?.tiles && meta.heavyBase
@@ -2906,29 +2907,11 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         />
 
       {/*
-        The market, reachable without opening anything.
-
-        Choosing a county is the first decision this screen has, and it lived
-        three clicks deep in the Layers drawer — switching markets meant
-        knowing where the switch was hidden. It stays in the drawer too, with
-        its stats; this one is just always in reach.
+        Nothing about the market floats over the map any more. The corner
+        beside the rail belongs to the basemap picker (MapCanvas draws it
+        there), and the market is chosen in the Layers drawer, where its
+        stats are.
       */}
-      {markets.length > 1 && (
-        <div className="absolute top-3 z-[520]" style={{ left: 'calc(var(--map-inset-left) + 0.75rem)' }}>
-          <select
-            aria-label="Market"
-            className="rounded-lg border border-line bg-surface/95 px-2.5 py-1.5 text-xs font-medium text-ink shadow-lg backdrop-blur"
-            value={active ?? ''}
-            onChange={(event) => setActive(event.target.value)}
-          >
-            {markets.map((entry) => (
-              <option key={entry.slug} value={entry.slug}>
-                {entry.name}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
 
       {/* Said over the map rather than instead of it. An out-of-date tab and
           an unreachable catalogue are both worth telling someone about, and
