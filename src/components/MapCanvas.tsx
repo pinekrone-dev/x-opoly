@@ -1444,13 +1444,16 @@ export default function MapCanvas({
       }
       if (instance.getLayer(point)) {
         instance.setPaintProperty(point, 'circle-color', paintColor as string)
-        instance.setPaintProperty(point, 'circle-opacity', layer.opacity)
+        // A point layer is a set of places, and a place that cannot be seen
+        // from county zoom reads as a layer that did nothing when switched
+        // on. Solid enough to find, with a white rim so it reads over any
+        // parcel colour; still small enough at street zoom to click past.
+        instance.setPaintProperty(point, 'circle-opacity', Math.min(1, layer.opacity + 0.25))
         instance.setPaintProperty(point, 'circle-stroke-color', '#ffffff')
-        instance.setPaintProperty(point, 'circle-stroke-width', 0.6)
-        // Small when a county is in view, readable once someone is working a
-        // block: a permit dot has to be clickable without hiding the parcel.
+        instance.setPaintProperty(point, 'circle-stroke-width', 1.2)
+        instance.setPaintProperty(point, 'circle-stroke-opacity', 0.9)
         instance.setPaintProperty(point, 'circle-radius', [
-          'interpolate', ['linear'], ['zoom'], 10, 2.2, 14, 4.5, 17, 8,
+          'interpolate', ['linear'], ['zoom'], 8, 3, 11, 4.5, 14, 6.5, 17, 9,
         ])
       }
     }

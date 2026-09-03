@@ -67,6 +67,7 @@ export default function ParcelPanel({
   note,
   loading,
   onClose,
+  embedded = false,
   children,
   extra,
 }: {
@@ -84,6 +85,11 @@ export default function ParcelPanel({
   note?: string
   loading?: boolean
   onClose: () => void
+  /**
+   * Inside a host panel rather than floating over the map on its own: the
+   * GIS view's right panel supplies the frame, this supplies the record.
+   */
+  embedded?: boolean
   /** Leads the panel: what the broker's own records say about this parcel. */
   children?: React.ReactNode
   /**
@@ -99,7 +105,13 @@ export default function ParcelPanel({
   }
 
   return (
-    <aside className="absolute right-0 top-0 z-[600] flex h-full w-96 flex-col border-l border-line bg-surface shadow-2xl">
+    <aside
+      className={
+        embedded
+          ? 'flex h-full flex-col'
+          : 'absolute right-0 top-0 z-[600] flex h-full w-96 flex-col border-l border-line bg-surface shadow-2xl'
+      }
+    >
       <header className="flex items-start gap-2 border-b border-line px-4 py-3">
         <div className="min-w-0 flex-1">
           <h2 className="truncate text-sm font-semibold text-ink">{title}</h2>

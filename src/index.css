@@ -373,3 +373,12 @@
   left: var(--map-inset-left, 0);
   top: 2.75rem;
 }
+
+/* The side panel sits over the map's right edge the same way, so the
+   attribution and anything else pinned to the right is pushed clear of it. */
+.gis-map .maplibregl-ctrl-top-right,
+.gis-map .maplibregl-ctrl-bottom-right,
+.gis-map .leaflet-top.leaflet-right,
+.gis-map .leaflet-bottom.leaflet-right {
+  right: var(--map-inset-right, 0);
+}
