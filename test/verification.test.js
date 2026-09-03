@@ -156,6 +156,42 @@ describe('self-serve signup with verification', () => {
   })
 })
 
+describe("the operator's email check", () => {
+  const signedIn = async (email) => {
+    const who = client()
+    await who('/api/auth/login', asJson({ email, password: 'a long enough password' }))
+    return who
+  }
+
+  test('sends the operator a test message and reports the provider that took it', async () => {
+    const owner = await signedIn('owner@example.com')
+    const before = sentEmails.length
+    const answer = await owner('/api/auth/email-check', { method: 'POST' })
+    assert.equal(answer.status, 200)
+    assert.equal(answer.body.ok, true)
+    assert.equal(answer.body.provider, 'resend')
+    assert.equal(answer.body.to, 'owner@example.com')
+    assert.equal(sentEmails.length, before + 1)
+    assert.equal(sentEmails[sentEmails.length - 1].to[0], 'owner@example.com')
+  })
+
+  test("a refusal comes back as the provider's own words, not a silent 200", async () => {
+    const owner = await signedIn('owner@example.com')
+    failSending = true
+    const answer = await owner('/api/auth/email-check', { method: 'POST' })
+    failSending = false
+    assert.equal(answer.status, 502)
+    assert.equal(answer.body.ok, false)
+    assert.match(answer.body.error, /Sending is down/)
+  })
+
+  test('anyone but the operator is refused', async () => {
+    const newcomer = await signedIn('newcomer@example.com')
+    assert.equal((await newcomer('/api/auth/email-check', { method: 'POST' })).status, 403)
+    assert.equal((await client()('/api/auth/email-check', { method: 'POST' })).status, 401)
+  })
+})
+
 describe('the signup door', () => {
   test('billing without email keeps registration closed', async () => {
     const half = await createServer({

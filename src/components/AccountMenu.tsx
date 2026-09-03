@@ -34,6 +34,26 @@ export default function AccountMenu({
   const [totpCode, setTotpCode] = useState('')
   const [freeCode, setFreeCode] = useState<string | null>(null)
   const [freeCodeCopied, setFreeCodeCopied] = useState(false)
+  const [emailCheck, setEmailCheck] = useState<string | null>(null)
+
+  /**
+   * The operator's proof that verification emails can leave: one test
+   * message to their own inbox, with the provider's answer shown here.
+   */
+  const runEmailCheck = async () => {
+    setBusy(true)
+    setError(null)
+    setEmailCheck(null)
+    try {
+      const result = await api.emailCheck()
+      setEmailCheck(`${result.provider} accepted it (${result.id ?? 'no id'}). Check ${result.to} for it now.`)
+    } catch (cause) {
+      setEmailCheck(null)
+      setError(cause instanceof Error ? cause.message : 'The test email could not be sent.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   /**
    * The house's pen: a single-use code that makes one signup free forever.
@@ -338,6 +358,15 @@ export default function AccountMenu({
                   >
                     {busy ? 'Minting…' : 'Mint a free signup code'}
                   </button>
+                  <button
+                    type="button"
+                    className="btn-secondary mt-2 w-full text-xs"
+                    disabled={busy}
+                    onClick={() => void runEmailCheck()}
+                  >
+                    {busy ? 'Working…' : 'Send me a test email'}
+                  </button>
+                  {emailCheck ? <p className="mt-2 text-xs text-brand-deep">{emailCheck}</p> : null}
                   {freeCode ? (
                     <div className="mt-2 rounded-lg border border-brand/30 bg-brand-tint p-2">
                       <p className="text-xs text-body">
