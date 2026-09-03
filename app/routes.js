@@ -2057,8 +2057,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
   app.get('/api/gis/markets', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    const ready = await readyMarkets(parcels).catch(() => [])
-    return c.json({ ready })
+    return edgeCached(c, 'markets', 5 * 60, async () => {
+      const ready = await readyMarkets(parcels).catch(() => [])
+      return c.json({ ready })
+    })
   })
 
   /*
