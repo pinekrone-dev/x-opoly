@@ -257,6 +257,15 @@ contracts the app already has:
 | `market` | `markets.json` / `meta.json` | none | the market card reads what is there |
 | `lookup` | asked live for one property through the outside-lookup cache | none | one call in `app/lib/`, rate-limited like the Census lookups |
 
+Court records sit beside it in `pipeline/court_sources.py`: PACER's case
+locator (metered, needs an account), CourtListener's free RECAP mirror and
+bulk data, USAspending, the Federal Register, OFAC, and each market's state
+trial courts with their access kind and terms. A docket is keyed to a name,
+so the match to a parcel (owner name or property address against the
+parties) is made in the pipeline and rides in `rest` under a `court` key;
+the store is never searched by name. `probe-courts.yml` reports what each
+court hands a machine; a refusal is recorded, never worked around.
+
 The rule that keeps the store bill flat: nothing from this register is bulk
 loaded into D1. Per-parcel values ride in the row that a search already
 reads, and everything else is a file in R2 that the edge caches. Keys the
