@@ -37,6 +37,18 @@ on:
       - claude/sitemapcre-tool-clone-qyq7jy
   workflow_dispatch: # adds a "Run workflow" button in the Actions tab
 
+# One deploy at a time per branch, queued rather than cancelled.
+#
+# Two pushes two minutes apart used to run side by side against the one
+# staging Worker. The earlier run's staging deploy landed second, so the
+# later run waited eight minutes for its own bundle to appear, saw the
+# earlier one instead, and failed as "not building this commit" — a
+# commit that was fine. Not cancel-in-progress: a run already deploying
+# to production must finish, and the next one simply follows it.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # --- test, build, and prove the build on staging ---------------------------
   staging:
