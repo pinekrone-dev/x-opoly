@@ -37,8 +37,9 @@ export default function AccountMenu({
 
   /**
    * The house's pen: a single-use code that makes one signup free forever.
-   * Only an exempt workspace sees the button, and the server refuses anyone
-   * else. Shown once, right after minting, and copied from here.
+   * Only the instance owner's own account sees the button — not their
+   * teammates, not the other exempt accounts — and the server refuses
+   * everyone else. Shown once, right after minting, and copied from here.
    */
   const mintFreeCode = async () => {
     setBusy(true)
@@ -327,7 +328,7 @@ export default function AccountMenu({
                       }.`
                     : 'Not active.'}
               </p>
-              {billing.status === 'exempt' ? (
+              {billing.canMintCodes ? (
                 <div className="mt-2">
                   <button
                     type="button"
