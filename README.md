@@ -329,7 +329,14 @@ allowance of five million a day. What runs now, and what it reads:
   and the catalogue proxy (`/catalog/*`, byte ranges included) are cached
   with the Cache API, keyed on the question and never on who asked: ten
   minutes for a search, five for a market, a day for a tile archive. The
-  sign-in check still runs first. `x-edge-cache: hit|miss` says which.
+  sign-in check still runs first. `x-edge-cache: hit|miss` says which, and
+  `x-edge-colo` names the data centre: the Cache API is local to one, so a
+  reader whose requests land in different data centres (a CI runner, not a
+  browser holding one connection) sees misses that are not misses. A request
+  carrying `x-edge-debug: 1` waits for the write and answers `x-edge-store:
+  stored|missing|refused: …`, which is how the live probe checks the edge.
+  A partial response is kept as a whole one under a key naming the range,
+  since the edge refuses a 206; nothing over 32 MB is kept whole.
 
 Measured on a synthetic 200,000-parcel county in `node:sqlite`: the text
 search "main st" (25,000 matches) went from 331 ms of four full scans to 56 ms
