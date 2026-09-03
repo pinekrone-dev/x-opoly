@@ -20,6 +20,7 @@ import {
   putParcels,
   readyMarkets,
   reindexMarket,
+  resetTextIndex,
   searchParcels,
   sealMarket,
 } from '../app/lib/parcels.js'
@@ -466,14 +467,19 @@ describe('the text index', () => {
     assert.equal((await searchParcels(fts, 'austin-tx', { query: 'main st' })).count, 2)
   })
 
-  test('reindexing walks the market in bounded steps and flips the flag at the end', async () => {
+  test('reindexing walks the market in bounded steps, remembers where it got to, and flips the flag at the end', async () => {
     let step = await reindexMarket(fts, 'austin-tx', { budget: 2 })
     assert.equal(step.done, false)
-    assert.ok(step.cursor > 0)
-    step = await reindexMarket(fts, 'austin-tx', { after: step.cursor, budget: 2 })
+    assert.equal(step.indexed, 2)
+    forgetParcelSchema()
+    assert.equal((await marketSummary(fts, 'austin-tx')).fts, false, 'half indexed is not indexed')
+    step = await reindexMarket(fts, 'austin-tx', { budget: 2 })
+    assert.equal(step.indexed, 2, 'the second run carries on from the cursor')
+    step = await reindexMarket(fts, 'austin-tx', { budget: 2 })
     assert.equal(step.done, true)
     forgetParcelSchema()
     assert.equal((await marketSummary(fts, 'austin-tx')).fts, true)
+    assert.deepEqual(await reindexMarket(fts, 'austin-tx'), { indexed: 0, cursor: 0, done: true, already: true })
   })
 
   test('the indexed search answers the same questions as the scan did', async () => {
@@ -506,19 +512,23 @@ describe('the text index', () => {
     assert.equal((await searchParcels(fts, 'austin-tx', { query: 'ortiz' })).count, 0, 'a dropped row is gone')
   })
 
-  test('reindexing again does not double the index', async () => {
+  test('a reset empties the index for every market and the fill starts over cleanly', async () => {
+    await resetTextIndex(fts)
+    forgetParcelSchema()
+    assert.equal((await marketSummary(fts, 'austin-tx')).fts, false)
+    assert.equal((await searchParcels(fts, 'austin-tx', { query: 'main' })).count, 2, 'searched by LIKE meanwhile')
     let step = await reindexMarket(fts, 'austin-tx')
-    while (!step.done) step = await reindexMarket(fts, 'austin-tx', { after: step.cursor ?? 0 })
+    while (!step.done) step = await reindexMarket(fts, 'austin-tx')
     const res = await searchParcels(fts, 'austin-tx', { query: 'main' })
     assert.equal(res.count, 2)
-    assert.equal(res.ids.length, 2)
+    assert.equal(res.ids.length, 2, 'no row is in the index twice')
   })
 
   test('clearing an indexed market empties the index with it', async () => {
     await putParcels(fts, 'gone-yy', [{ id: 1, ad: 'Unique Zebra Lane', mv: 1, ac: 1 }])
     await sealMarket(fts, 'gone-yy', {})
     let step = await reindexMarket(fts, 'gone-yy')
-    while (!step.done) step = await reindexMarket(fts, 'gone-yy', { after: step.cursor ?? 0 })
+    while (!step.done) step = await reindexMarket(fts, 'gone-yy')
     await clearMarket(fts, 'gone-yy')
     const orphans = await fts.all("SELECT rowid FROM parcels_fts WHERE parcels_fts MATCH '\"zebra\"*'")
     assert.equal(orphans.length, 0)

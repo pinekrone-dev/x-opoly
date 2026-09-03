@@ -132,6 +132,7 @@ import {
   putParcels,
   readyMarkets,
   reindexMarket,
+  resetTextIndex,
   searchParcels,
   sealMarket,
 } from './lib/parcels.js'
@@ -2197,11 +2198,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       }
       if (action === 'reindex') {
         // Mirror the market into the text index, a bounded step at a time.
-        // The caller repeats with the cursor until `done` — see
-        // reindexMarket for why a county cannot be indexed in one request.
-        const after = Number(c.req.query('after'))
+        // The store keeps the cursor, so the caller repeats until `done`
+        // across as many runs and days as its write budget allows; `rows`
+        // bounds one request. `reset=1` empties the index for every market
+        // first, which is the way back from an interrupted fill.
+        if (c.req.query('reset') === '1') {
+          await resetTextIndex(parcels)
+          return c.json({ reset: true })
+        }
+        const rows = Number(c.req.query('rows'))
         const step = await reindexMarket(parcels, market, {
-          after: Number.isFinite(after) ? after : 0,
+          budget: Number.isFinite(rows) && rows > 0 ? Math.min(rows, 100_000) : undefined,
         })
         return c.json({ market, ...step })
       }

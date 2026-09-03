@@ -172,6 +172,9 @@ const PARCEL_ADDED_COLUMNS = [
   // Whether this market's rows are mirrored into the text index. See the
   // schema note on parcels_fts for why this is a per-market state.
   ['parcel_markets', 'fts', 'INTEGER NOT NULL DEFAULT 0'],
+  // How far a reindex has got, as the last rowid mirrored, so the work can
+  // be spread over as many days as the write budget wants.
+  ['parcel_markets', 'fts_cursor', 'INTEGER NOT NULL DEFAULT 0'],
 ]
 
 /*
@@ -241,57 +244,62 @@ export const REINDEX_CHUNK = 5000
 export const REINDEX_BUDGET = 50_000
 
 /**
+ * Empty the text index for every market at once.
+ *
+ * FTS5's own delete-all, which drops the index's segments rather than
+ * forgetting rows one by one — the one way to get back to a known state
+ * from an interrupted fill, since a half-indexed market has entries the
+ * store cannot enumerate. Every market goes back to being searched by LIKE
+ * and to a cursor of zero; the fill starts over from there.
+ */
+export async function resetTextIndex(db) {
+  await ensureParcelSchema(db)
+  await db.run("INSERT INTO parcels_fts(parcels_fts) VALUES('delete-all')")
+  await db.run('UPDATE parcel_markets SET fts = 0, fts_cursor = 0')
+  summaries.clear()
+}
+
+/**
  * Mirror a market's rows into the text index, a bounded step at a time.
  *
- * Resumable by rowid cursor like listHashes, for the same reason: a county is
- * more rows than one request may touch. Starting over (no cursor) first takes
- * the market out of the index, so a market indexed twice reads once. The flag
- * flips only on the pass that reaches the end, so a market half-indexed by an
- * interrupted run is still searched by LIKE — slower, never wrong.
+ * Resumable from a cursor the store keeps: each call fills at most `budget`
+ * rows past where the last one stopped and records how far it got, so the
+ * work can be spread over days to stay inside a write allowance. The flag
+ * flips only on the pass that reaches the end, so a market half-indexed is
+ * still searched by LIKE — slower, never wrong. A market already indexed
+ * answers done without touching anything; resetTextIndex is how to start
+ * over.
  */
-export async function reindexMarket(db, market, { after = 0, budget = REINDEX_BUDGET } = {}) {
+export async function reindexMarket(db, market, { budget = REINDEX_BUDGET } = {}) {
   await ensureParcelSchema(db)
-  let cursor = Number(after) || 0
+  const state = await db.get('SELECT fts, fts_cursor FROM parcel_markets WHERE market = ?', [market])
+  if (!state) return { indexed: 0, cursor: 0, done: false, missing: true }
+  if (Number(state.fts) === 1) return { indexed: 0, cursor: 0, done: true, already: true }
+  let cursor = Number(state.fts_cursor) || 0
   let indexedRows = 0
-  if (!cursor && (await indexed(db, market))) {
-    // Already indexed: forget it whole before starting again. Bounded like
-    // the rest, so the caller keeps asking until the flag has dropped.
-    await db.run('UPDATE parcel_markets SET fts = 0 WHERE market = ?', [market])
-    forgetSummary(market)
-    let cleared = 0
-    while (cleared < budget) {
-      const rows = await db.all(
-        'SELECT rowid AS r FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
-        [market, cursor, REINDEX_CHUNK],
-      )
-      if (!rows.length) break
-      const lo = rows[0].r
-      const hi = rows[rows.length - 1].r
-      await unindex(db, 'SELECT rowid FROM parcels WHERE market = ? AND rowid BETWEEN ? AND ?', [market, lo, hi])
-      cleared += rows.length
-      cursor = hi
-    }
-    // Come back with no cursor once the old index is gone; the next call
-    // starts the fill from the top.
-    return { indexed: 0, cursor: 0, done: false, cleared }
-  }
-  while (indexedRows < budget) {
+  const cap = Math.max(1, Number(budget) || REINDEX_BUDGET)
+  while (indexedRows < cap) {
     const rows = await db.all(
       'SELECT rowid AS r FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
-      [market, cursor, REINDEX_CHUNK],
+      [market, cursor, Math.min(REINDEX_CHUNK, cap - indexedRows)],
     )
     if (!rows.length) {
-      await db.run('UPDATE parcel_markets SET fts = 1 WHERE market = ?', [market])
+      await db.run('UPDATE parcel_markets SET fts = 1, fts_cursor = 0 WHERE market = ?', [market])
       forgetSummary(market)
       return { indexed: indexedRows, cursor: null, done: true }
     }
     const lo = rows[0].r
     const hi = rows[rows.length - 1].r
-    await db.run(
-      `INSERT INTO parcels_fts(rowid, hay)
-         SELECT rowid, hay FROM parcels WHERE market = ? AND rowid BETWEEN ? AND ?`,
-      [market, lo, hi],
-    )
+    // The fill and the cursor land together, so a request that dies between
+    // them cannot leave rows mirrored twice on the next pass.
+    await db.batch([
+      [
+        `INSERT INTO parcels_fts(rowid, hay)
+           SELECT rowid, hay FROM parcels WHERE market = ? AND rowid BETWEEN ? AND ?`,
+        [market, lo, hi],
+      ],
+      ['UPDATE parcel_markets SET fts_cursor = ? WHERE market = ?', [hi, market]],
+    ])
     indexedRows += rows.length
     cursor = hi
   }
