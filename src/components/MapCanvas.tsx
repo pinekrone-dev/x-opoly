@@ -608,12 +608,23 @@ export default function MapCanvas({
    * advice. The choice is remembered, and reversible from the banner.
    */
   const [lite, setLite] = useState(liteWanted)
+  /*
+   * Only a machine-level failure is remembered. A start that hung twice is
+   * usually the network or the machine having a bad minute, and remembering
+   * it pinned browsers to the basic map for good: parcels then came one
+   * server-decoded tile at a time and "the map is slow" was the whole
+   * experience, with the cure a small link nobody noticed. The session still
+   * drops to the basic map; the next visit tries the full one again.
+   */
+  const REMEMBERED_REASONS = new Set(['no-webgl', 'context-lost-repeatedly'])
   const enterLite = (why: string) => {
     tattle('lite-mode-entered', { why })
-    try {
-      window.localStorage.setItem('lq-lite', '1')
-    } catch {
-      /* the session still gets the basic map; only the memory of it is lost */
+    if (REMEMBERED_REASONS.has(why)) {
+      try {
+        window.localStorage.setItem('lq-lite', '1')
+      } catch {
+        /* the session still gets the basic map; only the memory of it is lost */
+      }
     }
     setLite(true)
   }

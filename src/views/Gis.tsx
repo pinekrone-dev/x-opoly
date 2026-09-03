@@ -934,19 +934,15 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   const [rail, setRail] = useState<RailTab | null>('layers')
   /*
-   * Nothing is switched on when the view opens.
+   * The parcel outlines are on from the start; everything else is off.
    *
-   * Landing with the parcel layer already drawn meant every visit began by
-   * dismissing a map somebody else chose — and on a county of four hundred
-   * thousand parcels that is a heavy thing to render before anyone has asked
-   * for it. The catalog and the saved views are the way in instead, and the
-   * first-run tips say so, because an empty map with no explanation is
-   * indistinguishable from a broken one.
-   *
-   * The attribute index still loads either way: search and the filters need
-   * it, and it is what makes the first switch-on instant.
+   * A parcel map that opens with no parcels reads as broken, and the outline
+   * is also the thing to click: every other layer's sections hang off the
+   * parcel under the pointer. The cost is bounded — the tiles only draw past
+   * the zoom gate and only for the view — so the county's size does not
+   * matter here the way it did when the whole index had to download first.
    */
-  const [showParcels, setShowParcels] = useState(false)
+  const [showParcels, setShowParcels] = useState(true)
   const [showOwners, setShowOwners] = useState(false)
   /*
    * Who is behind the parcels.
@@ -1176,6 +1172,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     // summary card in between, with the panel a second click behind it;
     // every layer that is on now adds its section to the one panel instead.
     setExpanded(true)
+    // A selected parcel is drawn selected. Chosen from the address search
+    // with the outlines switched off, it used to be highlighted on a layer
+    // that was not there, so nothing on the map changed.
+    setShowParcels(true)
     let cancelled = false
     setKnown(null)
     api.crm
