@@ -282,7 +282,52 @@ deferred. `pipeline/budget.py` in the prospector repo prints what is staged
 and what promotion costs in D1 writes, R2 bytes and days.
 
 The rule that keeps the store bill flat: nothing from this register is bulk
-loaded into D1. Per-parcel values ride in the row that a search already
+loaded into D1 **as parcels**. National reference tables are the exception,
+below.
+
+## National reference tables, for tenant and ownership analysis
+
+Some national sources are worth holding in the store rather than looking up,
+because the question they answer is "who is this name, and where else does it
+appear", which is a join, not a lookup: the IRS exempt-organisation file (every
+nonprofit, with address, NTEE code and revenue), SEC EDGAR's registrant list
+(every public company with its business address), the SBA loan files (every
+borrower with the address it bought), the NPPES provider file the plan above
+already loads, USAspending recipients, and the corporations registers of the
+states that give them away (Florida today). Together they let a parcel's
+owner name or a lease's tenant name be resolved to an entity with a kind, a
+size and a footprint, which is the tenant and ownership analysis the product
+is heading for.
+
+The design, when it is built:
+
+- **Its own D1 database**, `landquotient-entities`, bound beside `PARCELS`.
+  The parcel store stays a parcel store and its size, which the plan meters,
+  is not inflated by reference rows.
+- **One table, `entities`**, with the columns every source can fill:
+  `name_norm` (uppercased, punctuation and suffixes stripped: LLC, INC, TRUST),
+  `name`, `kind` (nonprofit, public company, SBA borrower, provider, federal
+  recipient, corporation), `source`, `source_id`, `address`, `city`, `state`,
+  `zip`, `lat`, `lon`, `revenue`, `employees`, `as_of`. An index on
+  `(name_norm)` and one on `(state, zip)`.
+- **Loaded by the same daily harvest**, a file at a time under the write
+  budget, with the same cursor discipline. IRS and SEC are a few million rows
+  between them; on Workers Paid that is a week of budget, once, then monthly
+  deltas.
+- **Queried, never scanned**: a parcel's `ow` is normalised the same way at
+  publish time into `rest.ow_norm`, so the join is an index seek on
+  `name_norm`, and a "who else does this owner hold" is a seek on the parcel
+  store's owner cluster keys, which already exist. Reads are cheap on the plan;
+  scans are what the search hardening above exists to prevent.
+- **Triangulation**: an owner name matched to a nonprofit, a public company or
+  an SBA borrower gets the entity's kind and size on its parcel card; a tenant
+  name from a permit, a licence or a certificate of occupancy is resolved the
+  same way. Two independent sources agreeing on an address is the confidence
+  signal; one source alone is shown as a candidate, never as fact.
+
+None of this is built yet. It is written here so the harvester's shape, one
+budgeted page at a time into a keyed table, is reused rather than reinvented
+when it is. Per-parcel values ride in the row that a search already
 reads, and everything else is a file in R2 that the edge caches. Keys the
 register names (`HUD_USER_TOKEN`, `USPTO_API_KEY`) are repository secrets in
 prospector for the pipeline and `wrangler secret put` here for any lookup;
