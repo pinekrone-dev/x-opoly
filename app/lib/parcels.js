@@ -869,32 +869,43 @@ export async function searchParcels(
   }
 
   /*
-   * One pass for every number: the count, the value, the acreage and the
-   * breakdown by asset type come out of a single grouped read of the
-   * matching rows, where they used to be two reads of the whole set.
+   * The numbers and the highlight list, from one walk of the matches.
+   *
+   * The store bills every row a query touches, and a text search on a
+   * market that has no text index yet touches the whole market: on the
+   * free plan, which fails every query for the rest of the day once five
+   * million rows have been read, two walks of a 1.7-million-parcel county
+   * were most of a day. So the matches are walked once into a materialised
+   * table — the count, the value, the acreage and the breakdown by asset
+   * type are grouped from it, and the highlight ids are listed from it — and
+   * the county is read once, not twice. On an indexed market the same
+   * statement reads only the matches, as before.
    */
-  const grouped = await db.all(
-    `SELECT COALESCE(NULLIF(TRIM(at),''), 'Unclassified') AS value, COUNT(*) AS count,
-            COALESCE(SUM(mv),0) AS total, COALESCE(SUM(${ACRES_PER_LOT}),0) AS acreage
-       FROM ${source} WHERE ${sql} GROUP BY value ORDER BY count DESC`,
-    params,
-  )
+  const scan = `WITH m AS MATERIALIZED (
+       SELECT parcels.pid AS pid, at, mv, ${ACRES_PER_LOT} AS acres
+         FROM ${source} WHERE ${sql} ORDER BY mv DESC)
+     SELECT COALESCE(NULLIF(TRIM(at),''), 'Unclassified') AS value, COUNT(*) AS count,
+            COALESCE(SUM(mv),0) AS total, COALESCE(SUM(acres),0) AS acreage, NULL AS ids
+       FROM m GROUP BY value
+     UNION ALL
+     SELECT '', 0, 0, 0, (SELECT json_group_array(pid) FROM (SELECT pid FROM m LIMIT ?))`
+  const wantIds = filtersActive(filters)
+  const both = await db.all(scan, [...params, wantIds ? MAX_HIGHLIGHT_IDS + 1 : 0])
+  const grouped = both.filter((row) => row.ids == null).sort((a, b) => Number(b.count) - Number(a.count))
   const count = grouped.reduce((sum, row) => sum + Number(row.count), 0)
   const total = grouped.reduce((sum, row) => sum + Number(row.total), 0)
   const acreage = grouped.reduce((sum, row) => sum + Number(row.acreage), 0)
   const byAsset = grouped.map((row) => [row.value, Number(row.count)])
 
-  // The highlight list is only fetched when a filter is actually set. With no
+  // The highlight list is only kept when a filter is actually set. With no
   // filter the map draws every parcel anyway, and shipping a county's worth of
   // ids to say "all of them" would rebuild the problem this replaced.
   let ids = null
   let truncated = false
   let rows
-  if (filtersActive(filters)) {
-    const held = await db.all(
-      `SELECT pid FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ?`,
-      [...params, MAX_HIGHLIGHT_IDS + 1],
-    )
+  if (wantIds) {
+    const listed = both.find((row) => row.ids != null)
+    const held = (listed ? JSON.parse(listed.ids) : []).map((pid) => ({ pid: String(pid) }))
     truncated = held.length > MAX_HIGHLIGHT_IDS
     ids = held.slice(0, MAX_HIGHLIGHT_IDS).map((row) => row.pid)
     /*

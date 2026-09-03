@@ -323,9 +323,19 @@ allowance of five million a day. What runs now, and what it reads:
   100,000 writes a day), the store keeping each market's cursor between
   runs. Every later publish keeps the index in step. An unindexed or
   half-indexed market is searched by LIKE as before.
-- **One grouped pass for every number.** Count, value, acreage and the asset
-  breakdown come from a single `GROUP BY` over the matches; the page is the
-  slice of the highlight list it belongs to, fetched by key.
+- **One walk of the matches for every number and the highlight list.** The
+  matches are read once into a materialised table; count, value, acreage,
+  the asset breakdown and the highlight ids all come from it, and the page
+  is the slice of that list fetched by key. On a market without a text
+  index yet, that halves what a text search reads: the county once, not
+  twice.
+- **A closed store is said, not crashed.** Since 1 September 2026 the free
+  plan fails every query for the rest of the day once its daily reads or
+  writes are spent. The search route answers that case with a 503 and
+  `closed: true` plus the time it reopens, and the app drops back to the
+  published county file for the day, the path every unpublished market
+  already takes. The daily harvest spends at most 80,000 writes and
+  indexes the largest markets first so the biggest scans stop soonest.
 - **Answers are kept at the edge.** `GET /api/gis/parcels`, `/api/gis/market`
   and the catalogue proxy (`/catalog/*`, byte ranges included) are cached
   with the Cache API, keyed on the question and never on who asked: ten

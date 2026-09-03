@@ -1866,9 +1866,19 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         .then((result) => {
           if (!cancelled) setFound(result)
         })
-        .catch(() => {
-          // Leave the previous answer standing rather than blanking the panel
-          // on one failed request; the next keystroke tries again.
+        .catch((cause: unknown) => {
+          // The store has spent its daily allowance and is closed until
+          // midnight UTC: it says so with a 503 and `closed`. Not a failed
+          // request, a closed door — so the market goes back to the
+          // published county file for the rest of the day, which is the
+          // path every unpublished market already takes.
+          const closed = (cause as { status?: number; body?: { closed?: boolean } } | null)
+          if (closed?.status === 503 && closed.body?.closed) {
+            setServer({ ready: false, market: active })
+            return
+          }
+          // Otherwise leave the previous answer standing rather than blanking
+          // the panel on one failed request; the next keystroke tries again.
         })
         .finally(() => {
           if (!cancelled) setSearching(false)

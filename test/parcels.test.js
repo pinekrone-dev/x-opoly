@@ -543,6 +543,14 @@ describe('what a search reads', () => {
     assert.equal(res.rows.length, 4, 'the page is still real rows')
   })
 
+  test('a text search on an unindexed market walks the matches once and still lists them', async () => {
+    const res = await searchParcels(db, 'austin-tx', { q: 'main' }, { summary: { count: 4, total: 1, acreage: 1, assets: [], fts: false } })
+    assert.ok(res.count >= 1, 'the numbers come from the walk')
+    assert.ok(Array.isArray(res.ids) && res.ids.length === res.count, 'and so does the highlight list')
+    assert.equal(res.rows.length, Math.min(res.count, 200), 'the page is fetched by key from that list')
+    assert.equal(res.truncated, false)
+  })
+
   test('a filtered page is the slice of the highlight list, in the same order', async () => {
     const res = await searchParcels(db, 'austin-tx', { assets: ['Retail'] }, { limit: 1, offset: 1 })
     assert.equal(res.ids.length, 2)

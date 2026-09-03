@@ -2107,6 +2107,21 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         })
         return c.json({ ready: true, market, ...found })
       } catch (cause) {
+        /*
+         * The free plan refuses every query for the rest of the day once
+         * its daily reads or writes are spent. That is not a broken search,
+         * it is a closed store until midnight UTC, and the app is told so
+         * in a way it can act on: fall back to the county file it can read
+         * itself, and say when the store reopens.
+         */
+        if (/exceeded D1's free tier/i.test(cause.message || '')) {
+          const now = new Date()
+          const reopens = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+          return c.json(
+            { error: 'The parcel store has used its daily allowance and reopens at midnight UTC.', closed: true, reopens: reopens.toISOString() },
+            503,
+          )
+        }
         return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
       }
     })
