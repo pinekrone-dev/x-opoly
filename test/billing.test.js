@@ -102,8 +102,9 @@ describe('creating a checkout', () => {
     assert.ok(body.includes('client_reference_id=team-1'))
     assert.ok(body.includes('subscription_data[metadata][team_id]=team-1'))
     assert.ok(body.includes('customer_email=buyer@example.com'))
-    assert.ok(body.includes('ui_mode=embedded'))
+    assert.ok(body.includes('ui_mode=embedded_page'), "Stripe's current name for the embedded form")
     assert.ok(body.includes('return_url=https://survey.example.com/billing/return?session_id={CHECKOUT_SESSION_ID}'))
+    assert.equal(fetchImpl.calls.length, 1, 'no fallback when the current name is accepted')
     assert.ok(body.includes('allow_promotion_codes=true'), 'dashboard promo codes work at checkout')
     assert.ok(
       body.includes('payment_method_collection=if_required'),
@@ -120,7 +121,40 @@ describe('creating a checkout', () => {
       fetchImpl,
     })
     assert.equal(fetchImpl.calls[0].init.headers.authorization, 'Bearer sk_test_alias')
-    assert.ok(decodeURIComponent(fetchImpl.calls[0].init.body).includes('ui_mode=embedded'))
+    assert.ok(decodeURIComponent(fetchImpl.calls[0].init.body).includes('ui_mode=embedded_page'))
+  })
+
+  test('an account pinned to an older API version gets the old ui_mode name on retry', async () => {
+    const fetchImpl = stubFetch(
+      { status: 400, body: { error: { message: "Invalid ui_mode: must be one of hosted or embedded" } } },
+      { body: { client_secret: 'cs_old' } },
+    )
+    const result = await createCheckout(db, ENV, {
+      teamId: 'team-1',
+      email: 'buyer@example.com',
+      origin: 'https://survey.example.com',
+      fetchImpl,
+    })
+    assert.equal(result.clientSecret, 'cs_old')
+    assert.equal(fetchImpl.calls.length, 2)
+    const retry = decodeURIComponent(fetchImpl.calls[1].init.body)
+    assert.ok(retry.includes('ui_mode=embedded') && !retry.includes('embedded_page'))
+  })
+
+  test('the ui_mode retry never happens for a hosted session or an unrelated refusal', async () => {
+    const hostedRefusal = stubFetch({ status: 400, body: { error: { message: 'Invalid ui_mode' } } })
+    await assert.rejects(
+      createCheckout(db, ENV, { teamId: 'team-1', email: 'x@example.com', origin: 'https://a', hosted: true, fetchImpl: hostedRefusal }),
+      BillingError,
+    )
+    assert.equal(hostedRefusal.calls.length, 1)
+
+    const unrelated = stubFetch({ status: 400, body: { error: { message: 'No such customer: cus_gone' } } })
+    await assert.rejects(
+      createCheckout(db, ENV, { teamId: 'team-1', email: 'x@example.com', origin: 'https://a', fetchImpl: unrelated }),
+      /No such customer/,
+    )
+    assert.equal(unrelated.calls.length, 1)
   })
 
   test('asking for hosted overrides the embedded form, so a blocked script is not a dead end', async () => {

@@ -112,7 +112,7 @@ export async function createCheckout(db, env, { teamId, email, origin, hosted = 
   // fall back to, so the redirect version has to be asked for explicitly.
   const embedded = !hosted && Boolean(publishableKey(env))
 
-  const params = {
+  const params = (uiMode) => ({
     mode: 'subscription',
     line_items: [lineItem(env)],
     client_reference_id: teamId,
@@ -124,14 +124,26 @@ export async function createCheckout(db, env, { teamId, email, origin, hosted = 
     payment_method_collection: 'if_required',
     ...(existing?.customer_id ? { customer: existing.customer_id } : { customer_email: email }),
     ...(embedded
-      ? { ui_mode: 'embedded', return_url: `${origin}/billing/return?session_id={CHECKOUT_SESSION_ID}` }
+      ? { ui_mode: uiMode, return_url: `${origin}/billing/return?session_id={CHECKOUT_SESSION_ID}` }
       : {
           success_url: `${origin}/billing/return?session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${origin}/`,
         }),
-  }
+  })
 
-  const session = await stripe(env, '/checkout/sessions', { params, fetchImpl })
+  // Stripe renamed the embedded form's ui_mode from `embedded` to
+  // `embedded_page` in its recent API versions and refuses the old name
+  // there; older pinned versions know only the old name. No version header
+  // goes out, so the account's default decides — the current name is tried
+  // first, and the old one only when Stripe says it does not know the new.
+  // The client secret mounts the same way under either.
+  let session
+  try {
+    session = await stripe(env, '/checkout/sessions', { params: params('embedded_page'), fetchImpl })
+  } catch (error) {
+    if (!(embedded && error instanceof BillingError && /ui_mode|embedded_page/i.test(error.message))) throw error
+    session = await stripe(env, '/checkout/sessions', { params: params('embedded'), fetchImpl })
+  }
   return { clientSecret: session.client_secret ?? null, url: session.url ?? null, embedded }
 }
 
