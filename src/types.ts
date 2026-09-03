@@ -101,7 +101,11 @@ export interface BillingStatus {
   periodEnd: string | null
   portalAvailable: boolean
   priceLabel: string
-  /** Whether this account, personally, may mint free signup codes. */
+  /**
+   * Whether this account, personally, is the instance owner. The site shows
+   * no code minter — free codes are made in Stripe — but the owner-only
+   * checks in the Account menu hang off this.
+   */
   canMintCodes: boolean
 }
 

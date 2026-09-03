@@ -32,8 +32,6 @@ export default function AccountMenu({
   const [notice, setNotice] = useState<string | null>(null)
   const [enrolment, setEnrolment] = useState<{ secret: string; uri: string; qr: string } | null>(null)
   const [totpCode, setTotpCode] = useState('')
-  const [freeCode, setFreeCode] = useState<string | null>(null)
-  const [freeCodeCopied, setFreeCodeCopied] = useState(false)
   const [emailCheck, setEmailCheck] = useState<string | null>(null)
 
   /**
@@ -50,26 +48,6 @@ export default function AccountMenu({
     } catch (cause) {
       setEmailCheck(null)
       setError(cause instanceof Error ? cause.message : 'The test email could not be sent.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  /**
-   * The house's pen: a single-use code that makes one signup free forever.
-   * Only the instance owner's own account sees the button — not their
-   * teammates, not the other exempt accounts — and the server refuses
-   * everyone else. Shown once, right after minting, and copied from here.
-   */
-  const mintFreeCode = async () => {
-    setBusy(true)
-    setError(null)
-    setFreeCodeCopied(false)
-    try {
-      const { code } = await api.mintFreeCode()
-      setFreeCode(code)
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'The code could not be minted.')
     } finally {
       setBusy(false)
     }
@@ -348,49 +326,20 @@ export default function AccountMenu({
                       }.`
                     : 'Not active.'}
               </p>
+              {/* Instance owner only: no minting here — free codes are made
+                  in Stripe, off the site — but the email path can be proven
+                  from this menu. */}
               {billing.canMintCodes ? (
                 <div className="mt-2">
                   <button
                     type="button"
                     className="btn-secondary w-full text-xs"
                     disabled={busy}
-                    onClick={() => void mintFreeCode()}
-                  >
-                    {busy ? 'Minting…' : 'Mint a free signup code'}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-secondary mt-2 w-full text-xs"
-                    disabled={busy}
                     onClick={() => void runEmailCheck()}
                   >
                     {busy ? 'Working…' : 'Send me a test email'}
                   </button>
                   {emailCheck ? <p className="mt-2 text-xs text-brand-deep">{emailCheck}</p> : null}
-                  {freeCode ? (
-                    <div className="mt-2 rounded-lg border border-brand/30 bg-brand-tint p-2">
-                      <p className="text-xs text-body">
-                        One use, free forever, no card asked. Hand it over; it is entered at checkout.
-                      </p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 select-all rounded bg-white px-2 py-1 text-xs">{freeCode}</code>
-                        <button
-                          type="button"
-                          className="btn-secondary text-xs"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(freeCode)
-                              setFreeCodeCopied(true)
-                            } catch {
-                              // The code is selectable either way.
-                            }
-                          }}
-                        >
-                          {freeCodeCopied ? 'Copied' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               ) : null}
               {billing.portalAvailable ? (
