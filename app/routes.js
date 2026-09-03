@@ -1831,21 +1831,29 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
             wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
           )
           if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
-          if (!wants) return new Response(object.body, { headers })
+          // The length is known here and nowhere downstream: the browser
+          // gets a progress bar, and the edge gets told what it is keeping.
+          if (!wants) return new Response(object.body, { headers: { ...headers, 'content-length': String(object.size) } })
           const served = object.range?.length ?? object.size - offset
           const end = offset + served - 1
           return new Response(object.body, {
             status: 206,
-            headers: { ...headers, 'content-range': `bytes ${offset}-${end}/${object.size}` },
+            headers: {
+              ...headers,
+              'content-length': String(served),
+              'content-range': `bytes ${offset}-${end}/${object.size}`,
+            },
           })
         },
         {
           params: { range: asked || '' },
-          // Whole archives are hundreds of megabytes; the edge keeps ranges
-          // and the small files, not a county in one piece.
+          // Whole archives and whole indexes are tens or hundreds of
+          // megabytes; the edge keeps ranges and the small files, not a
+          // county in one piece. (A copy is held in memory while it is
+          // written, so the bound is the isolate's as much as the edge's.)
           cacheable: (answer) =>
             (answer.status === 206 || answer.status === 200) &&
-            (asked || Number(answer.headers.get('content-length') || 0) < 32 * 1024 * 1024 || !/\.pmtiles$/.test(key)),
+            (Boolean(asked) || Number(answer.headers.get('content-length') || 0) < 32 * 1024 * 1024),
         },
       )
     }

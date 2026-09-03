@@ -101,6 +101,39 @@ describe('answers kept at the edge', () => {
     assert.equal(await again.text(), 'bytes')
   })
 
+  test('a reader who asks is told where the edge was and whether it kept the copy', async () => {
+    const produce = async () => new Response('{}', { headers: { 'content-type': 'application/json' } })
+    const asking = {
+      req: { url: 'https://x.test/api?market=dc-xx', header: (name) => (name === 'x-edge-debug' ? '1' : undefined), raw: { cf: { colo: 'IAD' } } },
+      executionCtx: { waitUntil: () => {} },
+    }
+    const first = await edgeCached(asking, 'parcels/dc-xx', 60, produce)
+    assert.equal(first.headers.get('x-edge-cache'), 'miss')
+    assert.equal(first.headers.get('x-edge-store'), 'stored', 'waited for, then found')
+    assert.equal(first.headers.get('x-edge-colo'), 'IAD')
+    const second = await edgeCached(asking, 'parcels/dc-xx', 60, produce)
+    assert.equal(second.headers.get('x-edge-cache'), 'hit')
+    assert.equal(second.headers.get('x-edge-colo'), 'IAD')
+    assert.equal(second.headers.get('x-edge-store'), null, 'a hit stored nothing')
+    const quiet = await edgeCached(context('https://x.test/api?market=va-xx'), 'parcels/va-xx', 60, produce)
+    assert.equal(quiet.headers.get('x-edge-store'), null, 'nobody asked')
+    assert.equal(quiet.headers.get('x-edge-colo'), null)
+  })
+
+  test('a refused put is reported, not thrown', async () => {
+    const refusing = { default: { match: async () => undefined, put: async () => { throw new Error('no room') } } }
+    globalThis.caches = refusing
+    const produce = async () => new Response('{}')
+    const asking = {
+      req: { url: 'https://x.test/api?market=dc-xx', header: (name) => (name === 'x-edge-debug' ? '1' : undefined) },
+      executionCtx: { waitUntil: () => {} },
+    }
+    const answer = await edgeCached(asking, 'parcels/dc-xx', 60, produce)
+    assert.equal(answer.headers.get('x-edge-store'), 'refused: no room')
+    assert.equal(await answer.text(), '{}')
+    globalThis.caches = caches
+  })
+
   test('without a cache, every call produces', async () => {
     delete globalThis.caches
     let produced = 0

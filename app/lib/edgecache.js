@@ -65,6 +65,12 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
   const cache = store()
   if (!cache) return produce()
   const key = edgeKey(c.req.url, name, params ?? queryParams(c.req.url))
+  // The data centre answering, so that two reads that disagree about the
+  // edge can be told apart from two data centres: the edge is one place.
+  const colo = c.req.raw?.cf?.colo || null
+  // A reader who asks to see the store's answer waits for it, and is told
+  // whether the copy was kept — the probe, not the browser.
+  const debug = Boolean(typeof c.req.header === 'function' && c.req.header('x-edge-debug'))
   try {
     const held = await cache.match(key)
     if (held) {
@@ -81,6 +87,7 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
       if (span) headers.set('content-range', span)
       const answer = new Response(held.body, { status: span ? 206 : held.status, headers })
       answer.headers.set('x-edge-cache', 'hit')
+      if (colo) answer.headers.set('x-edge-colo', colo)
       return answer
     }
   } catch {
@@ -101,7 +108,25 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
   }
   const answer = new Response(toUser, { status, headers: new Headers(fresh.headers) })
   answer.headers.set('x-edge-cache', 'miss')
-  const put = cache.put(key, stored).catch(() => {})
+  if (colo) answer.headers.set('x-edge-colo', colo)
+  const put = cache.put(key, stored).then(
+    () => 'stored',
+    (error) => `refused: ${error && error.message ? error.message : error}`,
+  )
+  if (debug) {
+    // Waited for, then asked back: a put resolves whether or not the edge
+    // kept the copy, so only a match says what happened.
+    let outcome = await put
+    if (outcome === 'stored') {
+      try {
+        outcome = (await cache.match(key)) ? 'stored' : 'missing'
+      } catch {
+        outcome = 'unreadable'
+      }
+    }
+    answer.headers.set('x-edge-store', outcome)
+    return answer
+  }
   // Handed to the runtime to finish after the answer is sent, where that is
   // possible; awaited otherwise, since a write nobody waits for is a write
   // the runtime may drop when the request ends.
