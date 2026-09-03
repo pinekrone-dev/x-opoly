@@ -379,7 +379,33 @@ describe('minting a free code', () => {
 
     const promoBody = decodeURIComponent(fetchImpl.calls[1].init.body)
     assert.ok(fetchImpl.calls[1].url.endsWith('/promotion_codes'))
-    assert.ok(promoBody.includes('coupon=coupon_1'))
+    assert.ok(promoBody.includes('promotion[type]=coupon'), "Stripe's current shape goes first")
+    assert.ok(promoBody.includes('promotion[coupon]=coupon_1'))
     assert.ok(promoBody.includes('max_redemptions=1'))
+    assert.equal(fetchImpl.calls.length, 2, 'no fallback when the first shape is accepted')
+  })
+
+  test('falls back to the bare coupon field on an account pinned to an older API version', async () => {
+    const { mintFreeCode } = await import('../app/lib/billing.js')
+    const fetchImpl = stubFetch(
+      { body: { id: 'coupon_2' } },
+      { status: 400, body: { error: { message: 'Received unknown parameter: promotion' } } },
+      { body: { id: 'promo_2', code: 'FREE-OLD' } },
+    )
+    const minted = await mintFreeCode({ STRIPE_SECRET_KEY: 'sk_test_stub' }, { fetchImpl })
+    assert.equal(minted.code, 'FREE-OLD')
+    assert.equal(fetchImpl.calls.length, 3)
+    const retryBody = decodeURIComponent(fetchImpl.calls[2].init.body)
+    assert.ok(retryBody.includes('coupon=coupon_2') && !retryBody.includes('promotion['))
+  })
+
+  test('any other Stripe refusal is surfaced, not retried', async () => {
+    const { mintFreeCode } = await import('../app/lib/billing.js')
+    const fetchImpl = stubFetch(
+      { body: { id: 'coupon_3' } },
+      { status: 402, body: { error: { message: 'Your account cannot currently make live charges.' } } },
+    )
+    await assert.rejects(() => mintFreeCode({ STRIPE_SECRET_KEY: 'sk_test_stub' }, { fetchImpl }), /live charges/)
+    assert.equal(fetchImpl.calls.length, 2)
   })
 })
