@@ -544,7 +544,7 @@ describe('what a search reads', () => {
   })
 
   test('a text search on an unindexed market walks the matches once and still lists them', async () => {
-    const res = await searchParcels(db, 'austin-tx', { q: 'main' }, { summary: { count: 4, total: 1, acreage: 1, assets: [], fts: false } })
+    const res = await searchParcels(db, 'austin-tx', { query: 'main' }, { summary: { count: 4, total: 1, acreage: 1, assets: [], fts: false } })
     assert.ok(res.count >= 1, 'the numbers come from the walk')
     assert.ok(Array.isArray(res.ids) && res.ids.length === res.count, 'and so does the highlight list')
     assert.equal(res.rows.length, Math.min(res.count, 200), 'the page is fetched by key from that list')
