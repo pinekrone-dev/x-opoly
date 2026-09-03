@@ -79,6 +79,8 @@ export const api = {
   confirmCheckout: (sessionId: string) =>
     request<{ active: boolean; status: string }>(`/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`),
   billingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),
+  /** Operator only: a single-use code that makes a signup free, forever, with no card. */
+  mintFreeCode: () => request<{ code: string }>('/api/billing/free-code', { method: 'POST' }),
   signIn: (input: { email: string; password: string }) =>
     request<{
       user?: Account
