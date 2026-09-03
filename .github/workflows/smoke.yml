@@ -40,6 +40,12 @@ jobs:
       # secrets" after they had been added.
       SMOKE_EMAIL: ${{ secrets.SMOKE_EMAIL }}
       SMOKE_PASSWORD: ${{ secrets.SMOKE_PASSWORD }}
+      # Production now deploys only after the staging gate in deploy.yml
+      # holds, so this commit reaches the live site several minutes later
+      # than the push. The default waits were tuned for a deploy that raced
+      # the push and would time out on the gated one.
+      COMMIT_WAIT_MS: '900000'
+      DEPLOY_WAIT_MS: '900000'
 
     steps:
       - uses: actions/checkout@v4
@@ -78,4 +84,5 @@ jobs:
           path: |
             smoke-map.png
             smoke-book.png
+            smoke-gis.png
           if-no-files-found: warn

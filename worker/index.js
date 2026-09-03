@@ -61,6 +61,17 @@ function appFor(env) {
   if (!app) {
     app = createApp({
       db: d1Adapter(env.DB),
+      /*
+       * The parcel store, when the deployment provisions one.
+       *
+       * Millions of parcel rows do not belong in the database that holds the
+       * surveys: it would slow every migration and weigh down every backup for
+       * data that is rebuilt from the county each month anyway. Absent the
+       * binding this falls back to the main database, which is what the local
+       * rig does, and the app simply keeps using the published index until a
+       * rebuild fills the store.
+       */
+      parcelDb: env.PARCELS ? d1Adapter(env.PARCELS) : null,
       storage: r2Storage(env.BUCKET),
       env,
     })
@@ -125,7 +136,21 @@ export default {
       return Response.redirect(url.toString(), 301)
     }
 
-    if (url.pathname.startsWith('/api/')) {
+    /*
+     * What the app answers, as opposed to what the asset binding answers.
+     *
+     * This was `/api/` alone, and the catalogue route added beside the API
+     * went to the static assets instead — which serve index.html for anything
+     * they do not recognise, so `/catalog/markets.json` came back as the HTML
+     * shell with a 200 on it. Nothing failed; the browser simply tried to
+     * parse a web page as a market list and found no counties in it.
+     *
+     * Worth naming because the tests could not see it: the Node server hands
+     * every path to the same app, so a route registered there works there. It
+     * is only here that the two runtimes disagree about who answers, and only
+     * here that a route can exist and never be reached.
+     */
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/')) {
       if (env.DB) {
         // Let the request through even if migrating failed: routes that do not
         // touch the database still work, and the ones that do will report the

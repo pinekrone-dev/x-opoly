@@ -249,6 +249,83 @@ export const SCHEMA_STATEMENTS = [
     color        TEXT NOT NULL DEFAULT '#f59e0b',
     created_at   TEXT NOT NULL
   )`,
+  /*
+   * Sale comparables the team imported from what their own browser showed
+   * them. `team_id` on every row is the whole security model: comps are one
+   * broker's collected knowledge, never a shared database, and a listing
+   * site's compiled data must not become one here.
+   *
+   * `placed` is three-valued on purpose. NULL means the address has not been
+   * looked up yet and belongs in the geocoding queue; 'geocoded' and 'failed'
+   * both mean it has been tried, which is what keeps an unreadable address
+   * from costing a lookup on every subsequent pass.
+   */
+  /*
+   * A saved map view: one market, configured, under a name.
+   *
+   * Getting a map to say something takes a dozen small decisions — which
+   * layers, in what colours, at what opacity, coloured by which field, filtered
+   * to which asset types and value band, looking at where. All of it lived in
+   * the browser tab, so it was gone on refresh and impossible to hand to a
+   * colleague or return to next week.
+   *
+   * The configuration is stored as a JSON blob rather than thirty columns on
+   * purpose. The set of things a view captures grows every time the map gains
+   * a control, and a schema migration per control is a tax on adding them.
+   * Nothing queries inside it — views are listed by market and applied whole.
+   */
+  `CREATE TABLE IF NOT EXISTS map_views (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    created_by TEXT,
+    market     TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    state      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`,
+  /*
+   * What each workspace has spent on the AI, per day.
+   *
+   * In the database rather than in memory because Worker isolates recycle
+   * often, and a daily cap that resets several times a day is decorative.
+   * One row per workspace per kind per day; swept after a week.
+   */
+  `CREATE TABLE IF NOT EXISTS ai_usage (
+    team_id TEXT NOT NULL,
+    day     TEXT NOT NULL,
+    kind    TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (team_id, day, kind)
+  )`,
+  `CREATE TABLE IF NOT EXISTS comps (
+    id             TEXT PRIMARY KEY,
+    team_id        TEXT NOT NULL,
+    market         TEXT,
+    source_key     TEXT NOT NULL,
+    address        TEXT,
+    name           TEXT,
+    price_str      TEXT,
+    price          REAL,
+    sale_lease     TEXT,
+    prop_type      TEXT,
+    sqft           REAL,
+    acres          REAL,
+    units          REAL,
+    cap_rate       REAL,
+    year_built     REAL,
+    price_per_sf   REAL,
+    price_per_acre REAL,
+    price_per_unit REAL,
+    url            TEXT,
+    source         TEXT,
+    scraped_at     TEXT,
+    lat            REAL,
+    lng            REAL,
+    placed         TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+  )`,
 
   'CREATE INDEX IF NOT EXISTS idx_properties_survey ON properties(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_surveys_share ON surveys(share_token)',
@@ -267,6 +344,12 @@ export const SCHEMA_STATEMENTS = [
   'CREATE INDEX IF NOT EXISTS idx_invites_digest ON invites(token_digest)',
   'CREATE INDEX IF NOT EXISTS idx_zones_survey ON zones(survey_id)',
   'CREATE INDEX IF NOT EXISTS idx_challenges_user ON login_challenges(user_id)',
+  // Saved views are always asked for one way — "what has this team saved for
+  // the market I am looking at" — so that is the index.
+  'CREATE INDEX IF NOT EXISTS idx_map_views_team ON map_views(team_id, market)',
+  // Re-importing the same page is the normal case, so the dedupe lookup —
+  // "has this team seen this listing before" — is the one that must be fast.
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key)',
 ]
 
 /**
@@ -364,10 +447,23 @@ export const COLUMN_ADDITIONS = [
   // Which factor a pending challenge is waiting on.
   ['login_challenges', 'method', "TEXT NOT NULL DEFAULT 'sms'"],
 
+  /*
+   * Which metric shades the client's map.
+   *
+   * The owner picks one in the demographics panel — income, renters, median
+   * age — and until now that choice lived only in the browser that made it.
+   * The shared report shaded by population regardless and its legend said
+   * "Population", so a broker who built a case around renter share sent a
+   * client a map coloured by something else, labelled correctly for a metric
+   * they had not chosen.
+   */
+  ['surveys', 'share_metric', "TEXT NOT NULL DEFAULT 'population'"],
+
   // What the shared report includes. Demographics shades the client's map;
   // QR puts a directions code on each tour book stop. Both broker choices.
   ['surveys', 'share_demographics', 'INTEGER NOT NULL DEFAULT 0'],
   ['surveys', 'share_qr', 'INTEGER NOT NULL DEFAULT 1'],
+  ['surveys', 'book_style', 'TEXT'],
 
   // The last routed tour, as JSON: road geometry, legs, and the stop order.
   // Saved so repeat views (and the client's shared link) reuse the routed

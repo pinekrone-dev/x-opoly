@@ -8,6 +8,11 @@
  */
 
 import { Hono } from 'hono'
+import { VectorTile } from '@mapbox/vector-tile'
+// pbf v5 split the old default export into reader and writer; only reading
+// happens here, and @mapbox/vector-tile v3 is built against this interface.
+import { PbfReader } from 'pbf'
+import { FetchSource, PMTiles } from 'pmtiles'
 
 import { BUILD_COMMIT } from './lib/build-info.js'
 import { nowIso } from './lib/ids.js'
@@ -87,7 +92,8 @@ import {
 import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
 import { extractFromText } from './lib/paste.js'
-import { resolveProvider } from './lib/ai.js'
+import { askJson, resolveProvider } from './lib/ai.js'
+import { BOOK_STYLE_PROMPT, normalizeBookStyle } from './lib/bookstyle.js'
 import { heuristicScout, runScout } from './lib/scout.js'
 import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
@@ -106,6 +112,29 @@ import {
 } from './lib/billing.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
+import {
+  MAX_COMPS_PER_IMPORT,
+  clearComps,
+  deleteComp,
+  listComps,
+  placeComps,
+  readComps,
+  readDelimited,
+  saveComps,
+} from './lib/comps.js'
+import { deleteView, listViews, renameView, saveView } from './lib/mapviews.js'
+import {
+  clearMarket,
+  dropParcels,
+  getParcel,
+  listHashes,
+  marketSummary,
+  putParcels,
+  readyMarkets,
+  searchParcels,
+  sealMarket,
+} from './lib/parcels.js'
+import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -214,8 +243,18 @@ function bindingError(error, binding) {
  * @param {object} context.storage file store (disk or R2)
  * @param {object} context.env     configuration and secrets
  */
-export function createApp({ db, storage, env = {} }) {
+export function createApp({ db, storage, env = {}, parcelDb = null }) {
   const app = new Hono()
+
+  /*
+   * Where the county lives.
+   *
+   * Its own database when the deployment gives it one — parcels outnumber
+   * every other row in the product and do not belong beside the surveys — and
+   * the same database otherwise, which is what the local rig and the tests
+   * run against.
+   */
+  const parcels = parcelDb || db
 
   const notFound = (c, message) => c.json({ error: message }, 404)
 
@@ -419,11 +458,28 @@ export function createApp({ db, storage, env = {} }) {
     // Public census data: the shared client map shades its block groups
     // without a session, and nothing here is private to the workspace.
     /^\/api\/demographics$/,
+    // The map's own trouble reports. Public of necessity: this fires at the
+    // exact moment the app is failing, possibly before anyone could sign in,
+    // and a beacon that requires a session cannot describe a broken login
+    // screen. Write-only — no GET is registered on the path, so exempting it
+    // exposes nothing to read.
+    /^\/api\/diag\/map$/,
     // Stripe calls this unauthenticated; the webhook signature is the auth.
     /^\/api\/billing\/webhook$/,
     // The parcel pipeline calls this from GitHub Actions; a verified OIDC
     // token from an allowed repository is the auth, not a session.
     /^\/api\/gis\/ingest$/,
+    /*
+     * The same door, for rows rather than files.
+     *
+     * This has its own path rather than sharing /api/gis/parcels with the
+     * search, and the reason is the shape of this list: it matches on path
+     * alone, with no idea of method. Exempting /api/gis/parcels to let the
+     * pipeline POST to it would have un-gated the GET beside it, which serves
+     * a whole county to anyone who asks. Both anchors end in $, so neither
+     * entry can widen to cover the other.
+     */
+    /^\/api\/gis\/ingest\/parcels$/,
   ]
 
   /**
@@ -517,6 +573,38 @@ export function createApp({ db, storage, env = {} }) {
     if (verdict.allowed) return null
     c.header('Retry-After', String(verdict.retryAfterSeconds))
     return c.json({ error: 'Too many attempts. Slow down and try again shortly.', code: 'rate_limited' }, 429)
+  }
+
+  /**
+   * Answers 429 when this workspace has spent its day's AI budget, else null.
+   *
+   * Sits beside `limited` rather than replacing it, because they stop
+   * different things: that one stops a burst from one address, this one stops
+   * a sustained spend by one workspace. A script held just under the burst
+   * limit runs seventeen thousand model calls a day and never trips it.
+   *
+   * The message names the cap and when it resets. "Too many attempts" tells
+   * somebody who has hit a daily budget nothing they can act on.
+   */
+  const afforded = async (c, kind) => {
+    const user = c.get('user')
+    // Opportunistic housekeeping: there is no cron here, and one row per
+    // workspace per kind per day is not urgent but should not grow forever.
+    if (Math.random() < 0.005) await sweepUsage(db).catch(() => {})
+    const verdict = await spend(db, { teamId: user?.teamId ?? null, kind, env })
+    if (verdict.allowed) return null
+    c.header('Retry-After', String(verdict.retryAfterSeconds))
+    return c.json(
+      {
+        error:
+          `This workspace has used its ${verdict.cap.toLocaleString()} AI requests for today. ` +
+          `The budget resets at midnight UTC.`,
+        code: 'ai_budget',
+        cap: verdict.cap,
+        used: verdict.used,
+      },
+      429,
+    )
   }
 
   app.get('/api/auth/me', async (c) => {
@@ -1523,6 +1611,10 @@ export function createApp({ db, storage, env = {} }) {
     'tracts.json': 'application/json',
     'tracts.geojson': 'application/geo+json',
     'owners.json': 'application/json',
+    // The county's own recorded sales, for markets whose roll carries them.
+    // Public data, published like the rest — separate from a workspace's own
+    // imported comps, which never leave the workspace that collected them.
+    'sales.json': 'application/json',
     // What extra layers this market publishes, and what each one is.
     'layers.json': 'application/json',
   }
@@ -1538,8 +1630,253 @@ export function createApp({ db, storage, env = {} }) {
    */
   const INGEST_LAYER_FILE = /^layer-[a-z0-9-]{1,40}\.geojson$/
 
+  /*
+   * The same layers, as tile archives.
+   *
+   * A published overlay used to be one GeoJSON file fetched whole — Austin's
+   * zoning is 41 MB of it, parsed into an object graph several times that size
+   * before a single district appears. Tiled, the same layer is read by range
+   * like the parcels are, and a viewport costs hundreds of kilobytes.
+   *
+   * Named by slug rather than with the `layer-` prefix, because the tiles are
+   * cut alongside `parcels.pmtiles` and share its naming. The bound is the
+   * same in either case: a slug and a fixed extension, so nothing can address
+   * a file the pipeline could not have written or climb out of its county.
+   */
+  const INGEST_TILE_FILE = /^[a-z0-9-]{1,40}\.pmtiles$/
+
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
+
+  /*
+   * The catalogue, read from this origin.
+   *
+   * These files decide whether the product has anything to show: markets.json
+   * is the list of counties, and a market's meta.json is where it opens and
+   * how it is drawn. The browser used to fetch them straight from the data
+   * domain, which makes every one of them subject to that bucket's CORS
+   * policy — and a cross-origin refusal does not look like a refusal. It
+   * arrives as `TypeError: Failed to fetch` with status 0, the market list
+   * comes back empty, no county is ever chosen, and the whole view is blank.
+   * The map appeared broken because the app had been told there were no
+   * markets.
+   *
+   * Read through this origin instead and there is no cross-origin request to
+   * refuse. The browser asks the app for the app's own data, which is what it
+   * looked like it was doing all along.
+   *
+   * Two things keep this from becoming a way to read the bucket. The names
+   * are the same allowlist the ingest side writes through, so nothing can be
+   * fetched that the pipeline could not have put there; and the market is
+   * matched as a slug, so no path can climb out of its county. When there is
+   * no bucket bound — the Node server, a preview — it fetches the public file
+   * from the data domain server-side, where CORS does not apply either.
+   */
+  const CATALOG_ORIGIN = (env.PARCEL_CATALOG_ORIGIN || 'https://data.realestateaistudio.com')
+    .replace(/\/$/, '')
+
+  /*
+   * Open tile archives, kept for the life of the isolate.
+   *
+   * A PMTiles instance carries the archive's decoded directory, and the
+   * directory is the expensive part: without this cache every lite tile
+   * would re-read it from R2 before reading the tile itself. Bounded, since
+   * an isolate serves a handful of markets, not an unbounded set.
+   */
+  const archives = new Map()
+  const archiveFor = (key) => {
+    if (archives.has(key)) return archives.get(key)
+    const bucket = env.PROSPECTOR_DATA
+    const source =
+      bucket && typeof bucket.get === 'function'
+        ? {
+            getKey: () => key,
+            getBytes: async (offset, length) => {
+              const object = await bucket.get(key, { range: { offset, length } })
+              if (!object) throw new Error(`no archive at ${key}`)
+              return { data: await object.arrayBuffer() }
+            },
+          }
+        : new FetchSource(`${CATALOG_ORIGIN}/${key}`)
+    const archive = new PMTiles(source)
+    if (archives.size > 16) archives.clear()
+    archives.set(key, archive)
+    return archive
+  }
+
+  app.get('/catalog/*', async (c) => {
+    const path = new URL(c.req.url).pathname.replace(/^\/catalog\//, '')
+    const parts = path.split('/')
+
+    /*
+     * The lite map's tiles: the same parcel archive, served one tile at a
+     * time as plain GeoJSON.
+     *
+     * This exists so the map can work on a machine with no usable GPU at
+     * all. The WebGL map reads the archive itself and hands binary tiles to
+     * the graphics card; a browser whose WebGL is broken, disabled, or
+     * software-rendered gets nothing from that path — not even the basemap,
+     * since the whole map draws through one canvas. The lite path instead
+     * asks this route for one tile's worth of parcels as GeoJSON and draws
+     * them with Canvas 2D, which every browser has.
+     *
+     * The decode runs here rather than in the browser on purpose. The point
+     * of the tier is to ask nothing of the weak machine: the server holds
+     * the directory, seeks the tile, and unpacks the protobuf, and the
+     * client receives coordinates it can draw with no library at all.
+     *
+     *   /catalog/<market>/lite/<z>/<x>/<y>.json
+     */
+    if (parts.length === 5 && parts[1] === 'lite' && /^[a-z0-9-]{2,40}$/.test(parts[0])) {
+      const z = Number(parts[2])
+      const x = Number(parts[3])
+      const y = Number(parts[4].replace(/\.json$/, ''))
+      // The parcel pyramid runs zoom 11 to 16; outside it there is no tile
+      // to serve, and answering anything but 404 would invent one.
+      if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y)) {
+        return c.json({ error: 'Tiles are addressed as z/x/y integers.' }, 400)
+      }
+      if (z < 11 || z > 16 || x < 0 || y < 0 || x >= 2 ** z || y >= 2 ** z) {
+        return c.json({ error: 'Outside the tile pyramid.' }, 404)
+      }
+      try {
+        const tile = await archiveFor(`${parts[0]}/parcels.pmtiles`).getZxy(z, x, y)
+        const features = []
+        if (tile?.data) {
+          const decoded = new VectorTile(new PbfReader(new Uint8Array(tile.data)))
+          const layer = decoded.layers.parcels
+          for (let i = 0; layer && i < layer.length; i += 1) {
+            const feature = layer.feature(i)
+            const shaped = feature.toGeoJSON(x, y, z)
+            if (feature.id != null) shaped.id = feature.id
+            features.push(shaped)
+          }
+        }
+        return new Response(JSON.stringify({ type: 'FeatureCollection', features }), {
+          headers: {
+            'content-type': 'application/geo+json',
+            'cache-control': 'public, max-age=86400',
+            'access-control-allow-origin': '*',
+          },
+        })
+      } catch (cause) {
+        return c.json({ error: `No tiles for that market: ${cause.message}` }, 404)
+      }
+    }
+
+    let key = null
+    let contentType = null
+    if (parts.length === 1 && parts[0] in INGEST_ROOT_FILES) {
+      key = parts[0]
+      contentType = INGEST_ROOT_FILES[parts[0]]
+    } else if (parts.length === 2 && /^[a-z0-9-]{2,40}$/.test(parts[0])) {
+      const file = parts[1]
+      if (file in INGEST_FILES) contentType = INGEST_FILES[file]
+      else if (INGEST_LAYER_FILE.test(file)) contentType = 'application/geo+json'
+      else if (INGEST_TILE_FILE.test(file)) contentType = 'application/octet-stream'
+      if (contentType) key = `${parts[0]}/${file}`
+    }
+    if (!key) return c.json({ error: 'No such catalogue file.' }, 404)
+
+    // A day in the browser. The catalogue changes when a county is rebuilt,
+    // which is monthly, and a tile archive not at all within a build.
+    const headers = {
+      'content-type': contentType,
+      'cache-control': 'public, max-age=86400',
+      // Harmless here and useful everywhere: this is public county data, and
+      // saying so means a preview deployment on another hostname can read it
+      // too rather than rediscovering this same failure.
+      'access-control-allow-origin': '*',
+      // Announced on every answer, not only on ranged ones: a client decides
+      // whether to ask for a range by looking at a plain response first.
+      'accept-ranges': 'bytes',
+    }
+
+    /*
+     * Byte ranges, because the parcel tiles are read that way.
+     *
+     * A pmtiles archive is one file of hundreds of megabytes that the map
+     * reads a few kilobytes of at a time — it seeks a directory, then the one
+     * tile under the viewport. Serving it whole would mean downloading a
+     * county to draw a block, which is the download this entire change exists
+     * to remove. So a Range on the way in has to be a range on the way out,
+     * and anything else silently turns the map back into that download.
+     */
+    const asked = c.req.header('range')
+    const wants = /^bytes=(\d+)-(\d*)$/.exec(asked || '')
+    const offset = wants ? Number(wants[1]) : 0
+    const last = wants && wants[2] !== '' ? Number(wants[2]) : null
+
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(
+        key,
+        wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
+      )
+      if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
+      if (!wants) return new Response(object.body, { headers })
+      const served = object.range?.length ?? object.size - offset
+      const end = offset + served - 1
+      return new Response(object.body, {
+        status: 206,
+        headers: { ...headers, 'content-range': `bytes ${offset}-${end}/${object.size}` },
+      })
+    }
+
+    // No bucket here. Fetch the public file the same way anyone would, except
+    // from the server, where there is no origin to be refused for — carrying
+    // the range through so this path reads tiles the same way.
+    const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
+      headers: {
+        'user-agent': 'LandQuotient/1.0 (+https://survey.realestateaistudio.com)',
+        ...(asked ? { range: asked } : {}),
+      },
+    })
+    if (!answer.ok && answer.status !== 206) {
+      return c.json({ error: 'No such catalogue file.' }, answer.status === 404 ? 404 : 502)
+    }
+    const through = { ...headers }
+    const span = answer.headers.get('content-range')
+    if (span) through['content-range'] = span
+    return new Response(answer.body, { status: answer.status, headers: through })
+  })
+
+  /*
+   * What a failing map saw, reported by the map itself.
+   *
+   * Every diagnosis of "the map isn't loading" so far has been made from a
+   * clean headless browser where the map loads fine — which is how four real
+   * faults each took an extra round to find, and how a machine-level WebGL
+   * failure stayed invisible for a day. This is the end of diagnosing by
+   * guess: when the map cannot start, loses its GPU context, or hangs, the
+   * browser that actually failed posts what it saw, and the report can be
+   * read from the database instead of inferred from here.
+   *
+   * Deliberately small and bounded: a 4 KB cap on the report, a rate limit
+   * per address, and only the newest five hundred rows kept. It stores what
+   * the page chose to say and the user agent, nothing more.
+   */
+  app.post('/api/diag/map', async (c) => {
+    const throttled = limited(c, 'diag', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+    let report
+    try {
+      report = JSON.stringify(await c.req.json()).slice(0, 4000)
+    } catch {
+      return c.json({ error: 'A JSON body is required.' }, 400)
+    }
+    await db.run(
+      'CREATE TABLE IF NOT EXISTS diag (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, ua TEXT, report TEXT NOT NULL)',
+    )
+    await db.run('INSERT INTO diag (at, ua, report) VALUES (?, ?, ?)', [
+      new Date().toISOString(),
+      (c.req.header('user-agent') || '').slice(0, 300),
+      report,
+    ])
+    // Bounded, so a looping failure cannot grow the table without limit.
+    await db.run('DELETE FROM diag WHERE id <= (SELECT MAX(id) FROM diag) - 500')
+    return c.json({ noted: true })
+  })
 
   app.post('/api/gis/ingest', async (c) => {
     const throttled = limited(c, 'ingest', 300, 10 * 60 * 1000)
@@ -1571,14 +1908,19 @@ export function createApp({ db, storage, env = {} }) {
       if (!/^[a-z0-9-]{2,40}$/.test(market)) {
         return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
       }
-      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file)) {
+      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file) && !INGEST_TILE_FILE.test(file)) {
         return c.json(
-          { error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, or a layer-<name>.geojson.` },
+          {
+            error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, ` +
+              'a layer-<name>.geojson, or a <name>.pmtiles.',
+          },
           400,
         )
       }
       key = `${market}/${file}`
-      contentType = INGEST_FILES[file] ?? 'application/geo+json'
+      contentType =
+        INGEST_FILES[file] ??
+        (INGEST_TILE_FILE.test(file) ? 'application/octet-stream' : 'application/geo+json')
     }
     const action = String(c.req.query('action') || 'put')
 
@@ -1615,6 +1957,339 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   /*
+   * Sale comps, imported by the broker rather than harvested by the server.
+   *
+   * There is no crawler behind these endpoints and there is not going to be
+   * one. A listing site's compiled database belongs to that site; scraping it
+   * into a shared table here would redistribute their work and would be worth
+   * suing over. What a broker's own browser showed them on pages they were
+   * licensed to view is a different thing, and it stays in their workspace:
+   * every query below is scoped by `team_id`, and nothing joins across teams.
+   */
+  /*
+   * The county, answered rather than downloaded.
+   *
+   * Every one of these replaces a computation the browser used to do over the
+   * whole attribute index: the search, the totals under it, the card for one
+   * parcel, and the facts a market states about itself. The index is still
+   * published, and a market whose rebuild has not reached this store yet still
+   * works the old way — `/api/gis/market` answering `ready: false` is how the
+   * app knows which of the two it is looking at.
+   */
+
+  /** Numbers to a number, blank to null. A missing bound is not a zero bound. */
+  const bound = (raw) => {
+    const value = (raw ?? '').toString().trim()
+    if (value === '') return null
+    const n = Number(value)
+    return Number.isFinite(n) ? n : null
+  }
+
+  /** The filters, read off the query string exactly once. */
+  const parcelFilters = (c) => {
+    const ownerId = (c.req.query('owner') ?? '').trim()
+    return {
+      query: (c.req.query('q') ?? '').trim().slice(0, 120),
+      assets: (c.req.query('at') ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 40),
+      valueMin: bound(c.req.query('vmin')),
+      valueMax: bound(c.req.query('vmax')),
+      acresMin: bound(c.req.query('amin')),
+      acresMax: bound(c.req.query('amax')),
+      owner: ownerId ? { kind: c.req.query('ownerKind') === 'b' ? 'b' : 'p', id: ownerId } : null,
+    }
+  }
+
+  const marketSlug = (c) => {
+    const market = (c.req.query('market') ?? '').trim()
+    return /^[a-z0-9-]{2,40}$/.test(market) ? market : null
+  }
+
+  /*
+   * What a market is, before anything is asked of it.
+   *
+   * The app calls this first and branches on `ready`: served from here, or the
+   * whole index downloaded the old way. Cheap enough to call on every market
+   * change — it reads one row.
+   */
+  app.get('/api/gis/market', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const summary = await marketSummary(parcels, market).catch(() => null)
+    if (!summary) return c.json({ ready: false, market })
+    return c.json({ ready: true, ...summary })
+  })
+
+  /** Every market this server can answer for, so the app can say so up front. */
+  app.get('/api/gis/markets', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const ready = await readyMarkets(parcels).catch(() => [])
+    return c.json({ ready })
+  })
+
+  /*
+   * One search: the page, the ids to highlight, and what the whole match adds
+   * up to. Three readings of one predicate, so the report can never disagree
+   * with the map beside it.
+   */
+  app.get('/api/gis/parcels', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'parcels', 600, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+
+    const summary = await marketSummary(parcels, market).catch(() => null)
+    if (!summary) return c.json({ ready: false, market }, 404)
+
+    try {
+      const found = await searchParcels(parcels, market, parcelFilters(c), {
+        limit: Number(c.req.query('limit')) || undefined,
+        offset: Number(c.req.query('offset')) || 0,
+      })
+      return c.json({ ready: true, market, ...found })
+    } catch (cause) {
+      return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
+    }
+  })
+
+  /** One parcel, for the card. Everything the county published about it. */
+  app.get('/api/gis/parcel', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const id = (c.req.query('id') ?? '').trim()
+    if (!id) return c.json({ error: 'id is required.' }, 400)
+    const found = await getParcel(parcels, market, id).catch(() => null)
+    if (!found) return notFound(c, 'No such parcel in that market.')
+    return c.json({ parcel: found })
+  })
+
+  /*
+   * Publishing a county into the store.
+   *
+   * The same door and the same proof as the file ingest above: a GitHub
+   * Actions token from one of two repositories, no credential stored on either
+   * side. A rebuild reads `hashes`, sends `rows` for the parcels whose hash
+   * moved, `drop` for the ones the county no longer carries, then `seal` — and
+   * only the seal makes the market answerable, so a run that dies halfway
+   * leaves the app on the old path rather than on half a county.
+   *
+   * `clear` remains for the rare case that wants the market genuinely emptied.
+   * It is no longer part of a normal publish: emptying a county and refilling
+   * it bills every row twice, once for the delete and once for the insert,
+   * which is the whole of what the diff exists to avoid.
+   */
+  app.post('/api/gis/ingest/parcels', async (c) => {
+    const throttled = limited(c, 'ingest', 3000, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const token = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
+    try {
+      await verifyActionsToken(token, {
+        audience: INGEST_AUDIENCE,
+        repositories: INGEST_REPOS,
+        fetchImpl: env.JWKS_FETCH,
+      })
+    } catch (cause) {
+      return c.json({ error: `Ingest refused: ${cause.message}.` }, 401)
+    }
+
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const action = String(c.req.query('action') || 'rows')
+
+    try {
+      if (action === 'clear') {
+        // Bounded, and says whether it finished. A county holds more rows
+        // than one request can delete inside D1's CPU budget, so the caller
+        // repeats this until `done` — see clearMarket.
+        const { removed, done } = await clearMarket(parcels, market)
+        return c.json({ cleared: market, removed, done })
+      }
+      if (action === 'hashes') {
+        // What the market already holds, so a publisher can send only what
+        // changed. Paged by pid — see listHashes for why not by offset.
+        const asked = Number(c.req.query('limit'))
+        const { hashes, cursor } = await listHashes(parcels, market, {
+          after: String(c.req.query('after') ?? ''),
+          limit: Number.isFinite(asked) ? asked : undefined,
+        })
+        return c.json({ market, hashes, cursor })
+      }
+      if (action === 'drop') {
+        const body = await c.req.json().catch(() => null)
+        const pids = Array.isArray(body) ? body : body?.pids
+        if (!Array.isArray(pids)) {
+          return c.json({ error: 'Send the parcel ids as a JSON array.' }, 400)
+        }
+        if (pids.length > 20000) {
+          return c.json({ error: 'Send at most 20000 parcel ids per request.' }, 413)
+        }
+        return c.json({ dropped: await dropParcels(parcels, market, pids) })
+      }
+      if (action === 'rows') {
+        const body = await c.req.json().catch(() => null)
+        const rows = Array.isArray(body) ? body : body?.parcels
+        if (!Array.isArray(rows)) {
+          return c.json({ error: 'Send the parcels as a JSON array.' }, 400)
+        }
+        if (rows.length > 5000) {
+          return c.json({ error: 'Send at most 5000 parcels per request.' }, 413)
+        }
+        return c.json({ stored: await putParcels(parcels, market, rows) })
+      }
+      if (action === 'seal') {
+        const body = await c.req.json().catch(() => ({}))
+        const sealed = await sealMarket(parcels, market, {
+          keys: Array.isArray(body?.keys) ? body.keys : [],
+          builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
+        })
+        return c.json({ sealed: market, ...sealed })
+      }
+    } catch (cause) {
+      return c.json({ error: `Ingest failed: ${cause.message}.` }, 500)
+    }
+    return c.json({ error: `Unknown action "${action}".` }, 400)
+  })
+
+  app.get('/api/gis/comps', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = (c.req.query('market') ?? '').trim() || null
+    const comps = await listComps(db, user.teamId, { market })
+    return c.json({
+      comps,
+      // What the map cannot draw yet, so the client knows whether to keep
+      // asking for another geocoding pass.
+      unplaced: comps.filter((comp) => !comp.placed).length,
+    })
+  })
+
+  app.post('/api/gis/comps', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'comps', 60, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => null)
+    if (!body) return c.json({ error: 'Send the captured listings as JSON.' }, 400)
+    const market = typeof body?.market === 'string' && body.market.trim() ? body.market.trim() : null
+    const source = typeof body?.source === 'string' && body.source.trim() ? body.source.trim().slice(0, 60) : null
+
+    /*
+     * Two shapes, because listings do not arrive in one.
+     *
+     * `listings` is a parsed array — what a capture produces, and what the
+     * client sends after reading a file. `csv` is the raw text of a delimited
+     * export, accepted so that a broker with a spreadsheet is not told to go
+     * and convert it first.
+     */
+    const source_rows =
+      typeof body?.csv === 'string' ? readDelimited(body.csv) : (body.listings ?? body)
+    const { rows, read, dropped, error } = readComps(source_rows, { source })
+    if (error) return c.json({ error }, 400)
+    if (!rows.length) {
+      return c.json(
+        {
+          error: dropped
+            ? `Read ${read} entries but none carried an address or a name.`
+            : 'That list was empty.',
+        },
+        400,
+      )
+    }
+    const { added, updated } = await saveComps(db, user.teamId, rows, { market })
+    return c.json({
+      added,
+      updated,
+      dropped,
+      // Only the first page-worth is capped, and saying so beats silently
+      // storing 2,000 of the 3,000 someone collected.
+      truncated: read > MAX_COMPS_PER_IMPORT ? read - MAX_COMPS_PER_IMPORT : 0,
+    })
+  })
+
+  /*
+   * One geocoding pass. The client calls this repeatedly until `remaining`
+   * reaches zero, because a single request that looked up four hundred
+   * addresses would sit past the edge's timeout and lose the lot.
+   */
+  app.post('/api/gis/comps/place', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'comps-place', 200, 10 * 60 * 1000)
+    if (throttled) return throttled
+    return c.json(await placeComps(db, user.teamId, geocode, { env }))
+  })
+
+  app.delete('/api/gis/comps/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (c.req.param('id') === 'all') {
+      return c.json({ removed: await clearComps(db, user.teamId) })
+    }
+    if (!(await deleteComp(db, user.teamId, c.req.param('id')))) {
+      return notFound(c, 'That comp does not exist.')
+    }
+    return c.json({ removed: 1 })
+  })
+
+  /*
+   * Saved map views: a market, configured, under a name.
+   *
+   * Team-scoped like everything else in a workspace, so a colleague opening
+   * the same market sees the same saved views. That is deliberate — a view is
+   * how somebody framed a market, and framing is exactly the kind of thing a
+   * brokerage wants to share rather than each person rebuilding.
+   */
+  app.get('/api/gis/views', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = (c.req.query('market') ?? '').trim() || null
+    return c.json({ views: await listViews(db, user.teamId, market) })
+  })
+
+  app.post('/api/gis/views', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'views', 120, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const result = await saveView(db, user.teamId, await c.req.json().catch(() => ({})), {
+      userId: user.id,
+    })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ view: result.view }, 201)
+  })
+
+  app.patch('/api/gis/views/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await renameView(db, user.teamId, c.req.param('id'), body?.name)
+    if (result.missing) return notFound(c, 'That view does not exist.')
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ view: result.view })
+  })
+
+  app.delete('/api/gis/views/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!(await deleteView(db, user.teamId, c.req.param('id')))) {
+      return notFound(c, 'That view does not exist.')
+    }
+    return c.json({ removed: 1 })
+  })
+
+  /*
    * The parcel scout: a hunt in plain English, answered as the GIS view's
    * own filters. The vocabulary comes up with the request because the server
    * holds no parcel data at all — asset types are whatever the county the
@@ -1622,8 +2297,12 @@ export function createApp({ db, storage, env = {} }) {
    * without a key the heuristic answers and says so.
    */
   app.post('/api/gis/scout', async (c) => {
-    const throttled = limited(c, 'scout', 120, 10 * 60 * 1000)
+    // 120 in ten minutes was set when this was the only guard; with a daily
+    // budget behind it the burst limit only has to stop a hammering, and 30
+    // is well above what a person typing sentences reaches.
+    const throttled = limited(c, 'scout', 30, 10 * 60 * 1000)
     if (throttled) return throttled
+
 
     const body = await c.req.json().catch(() => ({}))
     const prompt = String(body?.prompt ?? '').trim().slice(0, 500)
@@ -1646,22 +2325,95 @@ export function createApp({ db, storage, env = {} }) {
      */
     const ruled = heuristicScout(prompt, vocab)
     if (!ruled.empty) {
+      // Answered without a model, so nothing is charged. This is the common
+      // case, and charging it would lock somebody out of the AI over three
+      // hundred hunts that never cost anything.
       return c.json({ ...ruled, explanation: null, source: 'rules', provider: null, model: null })
     }
 
     const aiThrottled = limited(c, 'scout-ai', 10, 10 * 60 * 1000)
     if (aiThrottled) return aiThrottled
 
+    // Only here, where a model is actually about to be called, does the day's
+    // budget get spent.
+    const overspent = await afforded(c, 'scout')
+    if (overspent) return overspent
+
     try {
-      return c.json(await runScout(prompt, vocab, resolveProvider(env), env))
+      const answer = await runScout(prompt, vocab, resolveProvider(env), env)
+      // Carried back so the budget becomes visible as it is used rather than
+      // arriving as a refusal out of nowhere.
+      const budget = await usageToday(db, c.get('user')?.teamId ?? null, env)
+      return c.json(budget ? { ...answer, budget: budget.scout } : answer)
     } catch (cause) {
       return c.json({ error: cause?.message || 'The scout could not read that hunt.' }, 422)
     }
   })
 
-  app.post('/api/surveys/:id/paste', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+  /*
+   * Restyles the tour book from a sentence.
+   *
+   * The style has six levers and the model may only move those: the answer
+   * is normalized down to the known keys, so a model that invents an option
+   * invents nothing. Costs a "read" from the day's AI budget, because it is
+   * one small completion — and an instruction the rules could never need a
+   * model for is still sent to one, since parsing style intent is exactly
+   * the fuzzy step the model is for.
+   */
+  app.post('/api/surveys/:id/book-style', async (c) => {
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+
+    const body = await c.req.json().catch(() => ({}))
+    const instruction = String(body?.instruction ?? '').trim().slice(0, 500)
+
+    // A direct style object needs no model and costs no budget.
+    if (!instruction && body?.style) {
+      const saved = await updateSurvey(db, survey.id, { bookStyle: body.style })
+      return c.json({ book: saved.book })
+    }
+    if (!instruction) return c.json({ error: 'Say how the book should change.' }, 400)
+
+    const provider = resolveProvider(env)
+    if (!provider) {
+      return c.json(
+        {
+          error:
+            'Restyling with AI needs an AI key. Set ANTHROPIC_API_KEY, GEMINI_API_KEY, or ' +
+            'XAI_API_KEY on the server, or adjust the options by hand.',
+        },
+        422,
+      )
+    }
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
+
+    try {
+      const answer = await askJson(
+        provider,
+        {
+          system: BOOK_STYLE_PROMPT,
+          user:
+            `Current style: ${JSON.stringify(normalizeBookStyle(survey.book))}\n` +
+            `Instruction: ${instruction}`,
+        },
+        env,
+      )
+      const saved = await updateSurvey(db, survey.id, { bookStyle: answer })
+      return c.json({ book: saved.book })
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'The restyle failed.'
+      return c.json({ error: message }, 502)
+    }
+  })
+
+  app.post('/api/surveys/:id/paste', async (c) => {
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -1704,8 +2456,10 @@ export function createApp({ db, storage, env = {} }) {
   })
 
   app.post('/api/surveys/:id/flyer', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const { survey, error } = await requireSurvey(c)
     if (error) return error
 
@@ -1867,8 +2621,10 @@ export function createApp({ db, storage, env = {} }) {
    * they ask for rather than something that happens to them.
    */
   app.post('/api/properties/:id/extract', async (c) => {
-    const throttled = limited(c, 'ai', 30, 10 * 60 * 1000)
+    const throttled = limited(c, 'ai', 20, 10 * 60 * 1000)
     if (throttled) return throttled
+    const overspent = await afforded(c, 'read')
+    if (overspent) return overspent
     const id = c.req.param('id')
     {
       const { error } = await requireProperty(c, id)

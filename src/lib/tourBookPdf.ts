@@ -1,4 +1,4 @@
-import type { DealStage, Property, Survey, TourStopSchedule } from '../types'
+import type { BookStyle, DealStage, Property, Survey, TourStopSchedule } from '../types'
 import { displayName, fullAddress } from './format'
 import { directionsQr, directionsUrl } from './directions'
 import { api } from '../api'
@@ -31,7 +31,23 @@ export const INK = { r: 15, g: 23, b: 42 }
 export const BODY = { r: 51, g: 65, b: 85 }
 export const MUTED = { r: 113, g: 128, b: 150 }
 export const RULE = { r: 226, g: 232, b: 240 }
-export const ACCENT = { r: 13, g: 148, b: 136 }
+export const ACCENT = { r: 1, g: 163, b: 168 }
+/** The brand's navy pair: night for the cover ground, deep for headings. */
+export const NIGHT = { r: 12, g: 31, b: 66 }
+export const DEEP = { r: 20, g: 51, b: 102 }
+export const EDGE = { r: 34, g: 64, b: 111 }
+export const SUNKEN = { r: 241, g: 245, b: 249 }
+const WHITE = { r: 255, g: 255, b: 255 }
+const SOFT = { r: 203, g: 213, b: 225 }
+
+/** A colour mixed toward white, for the tinted pills stage chips sit on. */
+function tint(colour: typeof INK, amount: number) {
+  return {
+    r: Math.round(colour.r * amount + 255 * (1 - amount)),
+    g: Math.round(colour.g * amount + 255 * (1 - amount)),
+    b: Math.round(colour.b * amount + 255 * (1 - amount)),
+  }
+}
 
 /** The QR block sits bottom-right; content flows above it. */
 const QR_SIZE = 96
@@ -44,6 +60,8 @@ interface BookInput {
   summary: { startTime: string; endTime: string; driveLabel: string } | null
   /** Print a directions QR on each stop. The broker's report option. */
   includeQr?: boolean
+  /** The book's style levers; the survey's saved style when omitted. */
+  style?: BookStyle
 }
 
 export interface LoadedImage {
@@ -100,7 +118,15 @@ function setText(doc: Doc, size: number, colour: typeof INK, weight: 'normal' | 
   doc.setTextColor(colour.r, colour.g, colour.b)
 }
 
-export async function exportTourBook({ survey, stops, stages, times, summary, includeQr = true }: BookInput) {
+/** The accent as jsPDF wants it, from the style's hex. */
+function accentOf(style: BookStyle) {
+  const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(style.accent)
+  return match
+    ? { r: parseInt(match[1], 16), g: parseInt(match[2], 16), b: parseInt(match[3], 16) }
+    : ACCENT
+}
+
+export async function exportTourBook({ survey, stops, stages, times, summary, includeQr = true, style }: BookInput) {
   // Loaded on demand: dead weight on the map page otherwise.
   const { jsPDF } = await import('jspdf')
 
@@ -123,18 +149,27 @@ export async function exportTourBook({ survey, stops, stages, times, summary, in
       const [hero, extras, qr] = await Promise.all([
         heroImage ? loadImage(heroImage.url) : Promise.resolve(null),
         Promise.all(extraImages.map((image) => loadImage(image.url))),
-        includeQr ? directionsQr(property) : Promise.resolve(null),
+        includeQr && (style ?? survey.book).showQr ? directionsQr(property) : Promise.resolve(null),
       ])
 
       assets.set(property.id, { hero, extras: extras.filter(Boolean) as LoadedImage[], qr })
     }),
   )
 
-  drawCover(doc, { survey, stops, times, summary })
+  const book = style ?? survey.book
+  const accent = accentOf(book)
+
+  drawCover(doc, { survey, stops, summary, book, accent })
+  if (book.showSchedule && stops.length > 0) {
+    doc.addPage()
+    drawItinerary(doc, { survey, stops, stages, times, summary, accent })
+  }
 
   stops.forEach((property, index) => {
     doc.addPage()
     drawStop(doc, {
+      book,
+      accent,
       survey,
       property,
       index,
@@ -151,87 +186,196 @@ export async function exportTourBook({ survey, stops, stages, times, summary, in
 
 function drawCover(
   doc: Doc,
-  { survey, stops, times, summary }: Pick<BookInput, 'survey' | 'stops' | 'times' | 'summary'>,
+  {
+    survey,
+    stops,
+    summary,
+    book,
+    accent,
+  }: Pick<BookInput, 'survey' | 'stops' | 'summary'> & { book: BookStyle; accent: typeof INK },
 ) {
-  // A rule of accent colour across the top, so the cover reads as designed
-  // rather than as the first page of a plain report.
-  doc.setFillColor(ACCENT.r, ACCENT.g, ACCENT.b)
-  doc.rect(0, 0, PAGE.width, 6, 'F')
+  const navy = book.cover !== 'light'
+  const ink = navy ? WHITE : DEEP
+  const soft = navy ? SOFT : BODY
+  const quiet = navy ? { r: 100, g: 116, b: 139 } : MUTED
 
-  let y = MARGIN + 56
+  if (navy) {
+    doc.setFillColor(NIGHT.r, NIGHT.g, NIGHT.b)
+    doc.rect(0, 0, PAGE.width, PAGE.height, 'F')
+    // The route motif: a dashed path with a node at each end, quiet enough
+    // to read as texture rather than as a map.
+    doc.setDrawColor(EDGE.r, EDGE.g, EDGE.b)
+    doc.setLineWidth(1.2)
+    doc.setLineDashPattern([1.5, 6], 0)
+    doc.lines(
+      [
+        [70, 105, -30, 210, 20, 320],
+        [-40, 90, 55, 200, 25, 300],
+      ],
+      PAGE.width - 150,
+      90,
+    )
+    doc.setLineDashPattern([], 0)
+    doc.setFillColor(accent.r, accent.g, accent.b)
+    doc.circle(PAGE.width - 150, 90, 5, 'F')
+    doc.circle(PAGE.width - 105, 710, 5, 'F')
+  } else {
+    doc.setFillColor(accent.r, accent.g, accent.b)
+    doc.rect(MARGIN, MARGIN + 12, 48, 4.5, 'F')
+  }
 
-  setText(doc, 9, MUTED, 'bold')
-  doc.text('SITE TOUR', MARGIN, y, { charSpace: 2.5 })
+  // The wordmark, top left on either ground.
+  setText(doc, 11, navy ? WHITE : DEEP, 'bold')
+  doc.text('Land', MARGIN, MARGIN + (navy ? 10 : 0))
+  const landWidth = doc.getTextWidth('Land ')
+  setText(doc, 11, accent, 'bold')
+  doc.text('Quotient', MARGIN + landWidth, MARGIN + (navy ? 10 : 0))
 
-  y += 38
-  setText(doc, 30, INK, 'bold')
-  for (const line of doc.splitTextToSize(survey.name || 'Site tour', CONTENT_WIDTH).slice(0, 3)) {
+  let y = 300
+
+  setText(doc, 10, accent, 'bold')
+  doc.text('SITE TOUR', MARGIN, y, { charSpace: 3 })
+  y += 40
+
+  setText(doc, 34, ink, 'bold')
+  for (const line of doc.splitTextToSize(survey.name || 'Site tour', CONTENT_WIDTH - 60).slice(0, 3)) {
     doc.text(line, MARGIN, y)
-    y += 34
+    y += 38
   }
 
   if (survey.clientName) {
-    setText(doc, 14, MUTED)
+    y += 2
+    setText(doc, 14, soft)
     doc.text(`Prepared for ${survey.clientName}`, MARGIN, y)
-    y += 26
+    y += 20
   }
-
-  y += 16
-  doc.setDrawColor(RULE.r, RULE.g, RULE.b)
-  doc.line(MARGIN, y, PAGE.width - MARGIN, y)
-  y += 26
-
-  if (survey.brokerName) {
-    setText(doc, 11, INK, 'bold')
-    doc.text(survey.brokerName, MARGIN, y)
-    y += 15
-  }
-  if (survey.companyName) {
-    setText(doc, 10, MUTED)
-    doc.text(survey.companyName, MARGIN, y)
-    y += 15
-  }
-
-  y += 10
-  setText(doc, 10, BODY)
-  const plural = stops.length === 1 ? '' : 's'
+  setText(doc, 10, quiet)
   doc.text(
-    summary
-      ? `${stops.length} stop${plural}  ·  ${summary.startTime} to ${summary.endTime}  ·  ${summary.driveLabel} driving`
-      : `${stops.length} stop${plural}`,
+    new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
     MARGIN,
     y,
   )
+  y += 24
 
-  y += 36
-  setText(doc, 9, MUTED, 'bold')
-  doc.text('ITINERARY', MARGIN, y, { charSpace: 1.5 })
-  y += 18
-
-  for (const [index, property] of stops.entries()) {
-    if (y > FOOTER_Y - 40) break
-
-    setText(doc, 10, MUTED)
-    doc.text(String(index + 1), MARGIN + 12, y, { align: 'right' })
-
-    // The name and its address, because a client scanning the cover is
-    // orienting themselves geographically, not by building name.
-    setText(doc, 11, INK, 'bold')
-    const [name] = doc.splitTextToSize(displayName(property), CONTENT_WIDTH - 110)
-    doc.text(name, MARGIN + 26, y)
-
-    const time = times.get(property.id)
-    if (time) {
-      setText(doc, 10, ACCENT, 'bold')
-      doc.text(time.arrive, PAGE.width - MARGIN, y, { align: 'right' })
+  if (book.intro) {
+    setText(doc, 11, soft)
+    for (const line of doc.splitTextToSize(book.intro, CONTENT_WIDTH - 120).slice(0, 4)) {
+      doc.text(line, MARGIN, y)
+      y += 15
     }
-
-    y += 13
-    setText(doc, 9, MUTED)
-    const [address] = doc.splitTextToSize(fullAddress(property) || '—', CONTENT_WIDTH - 110)
-    doc.text(address, MARGIN + 26, y)
-    y += 18
   }
+
+  // The bottom band: who prepared it, and the tour in three numbers.
+  const bandY = PAGE.height - 130
+  doc.setDrawColor(navy ? EDGE.r : RULE.r, navy ? EDGE.g : RULE.g, navy ? EDGE.b : RULE.b)
+  doc.setLineWidth(0.8)
+  doc.line(MARGIN, bandY, PAGE.width - MARGIN, bandY)
+
+  let infoY = bandY + 24
+  if (survey.brokerName) {
+    setText(doc, 12, ink, 'bold')
+    doc.text(survey.brokerName, MARGIN, infoY)
+    infoY += 15
+  }
+  if (survey.companyName) {
+    setText(doc, 10, quiet)
+    doc.text(survey.companyName, MARGIN, infoY)
+  }
+
+  const stats: [string, string][] = [[String(stops.length), stops.length === 1 ? 'STOP' : 'STOPS']]
+  if (summary) {
+    stats.push([`${summary.startTime}–${summary.endTime}`, 'TOUR WINDOW'])
+    stats.push([summary.driveLabel, 'DRIVING'])
+  }
+  let statX = PAGE.width - MARGIN
+  for (const [value, label] of [...stats].reverse()) {
+    setText(doc, 15, ink, 'bold')
+    const valueWidth = doc.getTextWidth(value)
+    setText(doc, 7, quiet, 'bold')
+    const labelWidth = doc.getTextWidth(label) * 1.4
+    const width = Math.max(valueWidth, labelWidth)
+    statX -= width
+    setText(doc, 15, ink, 'bold')
+    doc.text(value, statX + width, bandY + 26, { align: 'right' })
+    setText(doc, 7, quiet, 'bold')
+    doc.text(label, statX + width, bandY + 40, { align: 'right', charSpace: 1 })
+    statX -= 26
+  }
+}
+
+function drawItinerary(
+  doc: Doc,
+  {
+    survey,
+    stops,
+    stages,
+    times,
+    summary,
+    accent,
+  }: Pick<BookInput, 'survey' | 'stops' | 'stages' | 'times' | 'summary'> & { accent: typeof INK },
+) {
+  setText(doc, 9, accent, 'bold')
+  doc.text('ITINERARY', MARGIN, MARGIN + 12, { charSpace: 2.5 })
+  setText(doc, 17, DEEP, 'bold')
+  doc.text(doc.splitTextToSize(survey.name || 'Site tour', CONTENT_WIDTH - 140)[0] ?? '', MARGIN, MARGIN + 34)
+  if (summary) {
+    setText(doc, 9, MUTED)
+    doc.text(
+      `Starts ${summary.startTime} · ${stops.length} stops · ${summary.driveLabel} driving`,
+      PAGE.width - MARGIN,
+      MARGIN + 34,
+      { align: 'right' },
+    )
+  }
+  doc.setDrawColor(DEEP.r, DEEP.g, DEEP.b)
+  doc.setLineWidth(1.4)
+  doc.line(MARGIN, MARGIN + 46, PAGE.width - MARGIN, MARGIN + 46)
+
+  let y = MARGIN + 78
+  const timeX = MARGIN + 44
+  const nodeX = timeX + 26
+  const textX = nodeX + 22
+
+  stops.forEach((property, index) => {
+    if (y > FOOTER_Y - 44) {
+      footer(doc, survey, null)
+      doc.addPage()
+      y = MARGIN + 30
+    }
+    const time = times.get(property.id)
+    const stage = stages.find((entry) => entry.id === property.stageId) ?? null
+    const last = index === stops.length - 1
+
+    if (!last) {
+      doc.setDrawColor(RULE.r, RULE.g, RULE.b)
+      doc.setLineWidth(1.2)
+      doc.line(nodeX, y - 2, nodeX, y + 46)
+    }
+    doc.setFillColor(last ? accent.r : DEEP.r, last ? accent.g : DEEP.g, last ? accent.b : DEEP.b)
+    doc.circle(nodeX, y - 3, 9, 'F')
+    setText(doc, 9, WHITE, 'bold')
+    doc.text(String(index + 1), nodeX, y, { align: 'center' })
+
+    setText(doc, 10, INK, 'bold')
+    doc.text(time?.arrive ?? '', timeX, y, { align: 'right' })
+
+    setText(doc, 11, INK, 'bold')
+    const name = doc.splitTextToSize(displayName(property), CONTENT_WIDTH - 200)[0] ?? ''
+    doc.text(name, textX, y - 3)
+    if (stage) {
+      const colour = hexToRgb(stage.color)
+      setText(doc, 7.5, colour, 'bold')
+      doc.text(stage.name.toUpperCase(), textX + doc.getTextWidth(name) * 1.16 + 10, y - 3, { charSpace: 0.8 })
+    }
+    setText(doc, 9, MUTED)
+    doc.text(doc.splitTextToSize(fullAddress(property) || '—', CONTENT_WIDTH - 200)[0] ?? '', textX, y + 9)
+
+    if (time && time.driveMinutes > 0 && !last) {
+      setText(doc, 8, { r: 148, g: 163, b: 184 })
+      doc.text(`↓  ${time.driveMinutes} min drive`, textX, y + 24)
+    }
+    y += 46
+  })
 
   footer(doc, survey, null)
 }
@@ -248,6 +392,8 @@ function drawStop(
     hero,
     extras,
     qr,
+    book,
+    accent,
   }: {
     survey: Survey
     property: Property
@@ -258,21 +404,29 @@ function drawStop(
     hero: LoadedImage | null
     extras: LoadedImage[]
     qr: string | null
+    book: BookStyle
+    accent: typeof INK
   },
 ) {
   let y = MARGIN + 20
 
-  doc.setFillColor(ACCENT.r, ACCENT.g, ACCENT.b)
+  doc.setFillColor(DEEP.r, DEEP.g, DEEP.b)
   doc.circle(MARGIN + 13, y - 5, 13, 'F')
   setText(doc, 13, { r: 255, g: 255, b: 255 }, 'bold')
   doc.text(String(index + 1), MARGIN + 13, y, { align: 'center' })
 
   if (stage) {
+    // The pill the app uses: the stage colour at thirteen percent behind
+    // itself, so map, sidebar and book all speak one language.
     const colour = hexToRgb(stage.color)
+    const ground = tint(colour, 0.13)
     setText(doc, 8, colour, 'bold')
-    doc.text(stage.name.toUpperCase(), PAGE.width - MARGIN, y - 8, {
-      align: 'right',
-      charSpace: 1,
+    const pillWidth = doc.getTextWidth(stage.name.toUpperCase()) * 1.15 + 16
+    doc.setFillColor(ground.r, ground.g, ground.b)
+    doc.roundedRect(PAGE.width - MARGIN - pillWidth, y - 17, pillWidth, 15, 7, 7, 'F')
+    doc.text(stage.name.toUpperCase(), PAGE.width - MARGIN - pillWidth / 2, y - 7, {
+      align: 'center',
+      charSpace: 0.8,
     })
   }
 
@@ -294,11 +448,17 @@ function drawStop(
   }
 
   if (time) {
-    y += 4
-    setText(doc, 10, ACCENT, 'bold')
-    const drive = time.driveMinutes > 0 ? `${time.driveMinutes} min drive · ` : ''
-    doc.text(`${drive}Arrive ${time.arrive} · ${time.stopMinutes} min on site · Depart ${time.depart}`, left, y)
-    y += 8
+    y += 6
+    doc.setFillColor(SUNKEN.r, SUNKEN.g, SUNKEN.b)
+    doc.roundedRect(MARGIN, y - 11, CONTENT_WIDTH, 22, 5, 5, 'F')
+    const drive = time.driveMinutes > 0 ? ` after ${time.driveMinutes} min drive` : ''
+    setText(doc, 9.5, BODY)
+    doc.text(
+      `Arrive ${time.arrive}${drive}   ·   ${time.stopMinutes} min on site   ·   Depart ${time.depart}`,
+      MARGIN + 12,
+      y + 3,
+    )
+    y += 20
   }
 
   y += 14
@@ -327,7 +487,7 @@ function drawStop(
   }
 
   // Details, two columns, filling down the left before the right.
-  const fields = property.fields ?? []
+  const fields = book.showDetails ? property.fields ?? [] : []
   if (fields.length > 0) {
     y += 6
     doc.setDrawColor(RULE.r, RULE.g, RULE.b)
@@ -385,9 +545,20 @@ function drawStop(
   doc.line(MARGIN, blockTop - 14, PAGE.width - MARGIN, blockTop - 14)
 
   if (qr) {
-    doc.addImage(qr, 'PNG', PAGE.width - MARGIN - QR_SIZE, blockTop, QR_SIZE, QR_SIZE)
-    setText(doc, 7.5, MUTED)
-    doc.text('SCAN FOR DIRECTIONS', PAGE.width - MARGIN - QR_SIZE / 2, blockTop + QR_SIZE + 11, {
+    const pad = 8
+    doc.setFillColor(233, 245, 246)
+    doc.roundedRect(
+      PAGE.width - MARGIN - QR_SIZE - pad * 2,
+      blockTop - pad,
+      QR_SIZE + pad * 2,
+      QR_SIZE + pad * 2 + 12,
+      6,
+      6,
+      'F',
+    )
+    doc.addImage(qr, 'PNG', PAGE.width - MARGIN - QR_SIZE - pad, blockTop, QR_SIZE, QR_SIZE)
+    setText(doc, 7.5, DEEP, 'bold')
+    doc.text('SCAN FOR DIRECTIONS', PAGE.width - MARGIN - pad - QR_SIZE / 2, blockTop + QR_SIZE + 11, {
       align: 'center',
       charSpace: 0.5,
     })
@@ -405,7 +576,7 @@ function drawStop(
   // serves paper; this serves the same person on a laptop.
   const link = directionsUrl(property)
   if (link) {
-    setText(doc, 9, ACCENT, 'bold')
+    setText(doc, 9, accent, 'bold')
     doc.textWithLink('Get directions →', MARGIN, Math.min(contactY + 4, FOOTER_Y - 12), { url: link })
   }
 

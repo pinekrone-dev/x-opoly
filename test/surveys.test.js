@@ -186,3 +186,30 @@ describe('client sharing', () => {
     assert.equal(mine.find((p) => p.id === shown.id).hidden, false)
   })
 })
+
+describe('the metric a shared map is shaded by', () => {
+  test("the broker's choice reaches the client, and a bad one cannot", async () => {
+    const s = await createSurvey(db, { name: 'Renter-share pitch' })
+
+    // Population until somebody chooses otherwise, so every link made before
+    // this existed renders exactly as it did.
+    assert.equal(s.share.metric, 'population')
+
+    const picked = await updateSurvey(db, s.id, { shareMetric: 'renterShare' })
+    assert.equal(picked.share.metric, 'renterShare')
+
+    await updateShare(db, s.id, { enabled: true })
+    const shared = await resolveShare(db, picked.share.token)
+    assert.equal(shared.ok, true)
+    assert.equal(
+      shared.survey.metric,
+      'renterShare',
+      'the client shades by what the broker picked, not by population',
+    )
+
+    // A key the client cannot draw would shade nothing while the legend named
+    // it confidently, so the server refuses to store one.
+    const bogus = await updateSurvey(db, s.id, { shareMetric: 'nonsense' })
+    assert.equal(bogus.share.metric, 'population')
+  })
+})

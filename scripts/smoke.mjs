@@ -178,6 +178,7 @@ try {
   })
   check('POST /api/surveys creates a survey', created.status === 201, `status ${created.status}`)
   surveyId = created.body?.survey?.id
+  const surveyName = created.body?.survey?.name ?? ''
   if (!surveyId) throw new Error(`No survey id came back: ${JSON.stringify(created.body)}`)
 
   // Stages are seeded with the survey; the sidebar is built around them.
@@ -264,9 +265,22 @@ try {
       shapes.length > 0 && shapes.every((area) =>
         area.geometry.type && Array.isArray(area.geometry.coordinates)),
       `${shapes.length} shapes, first: ${JSON.stringify(shapes[0]?.geometry?.type ?? null)}`)
+  } else if (!integrations.census && demographics.status === 503) {
+    /*
+     * The designed degradation, not an outage. Without CENSUS_API_KEY the
+     * app calls ACS keyless, and the Census Bureau throttles keyless calls
+     * from shared egress IPs — Workers and CI runners chief among them. The
+     * server answered with its honest 503 and a message saying exactly what
+     * to configure, which is the behavior the no-key posture promises.
+     * Staging runs keyless on purpose, so failing the gate here would block
+     * every deploy on a third party's rate limiter. A keyed deployment
+     * (production) still fails hard below, because there a 503 is real.
+     */
+    check('census demographics degrade honestly without a key', true,
+      `keyless, status 503: ${JSON.stringify(demographics.body?.error ?? '').slice(0, 120)}`)
   } else {
-    // A census outage should not fail the build, but it must be visible
-    // rather than quietly skipped.
+    // A census outage on a keyed deployment fails the build: the key is
+    // configured, so an error here is the integration actually broken.
     check('census demographics are reachable', false,
       `status ${demographics.status}: ${JSON.stringify(demographics.body).slice(0, 200)}`)
   }
@@ -377,8 +391,9 @@ try {
   check('and is credited to the flyer', imageAdded.body?.image?.source === 'flyer-crop',
     String(imageAdded.body?.image?.source))
 
-  // 3. Load it in a real browser.
-  browser = await chromium.launch()
+  // 3. Load it in a real browser. CI installs Playwright's own build; a
+  // sandbox with a system Chromium can point at it instead.
+  browser = await chromium.launch({ executablePath: process.env.SMOKE_CHROMIUM || undefined })
   // acceptDownloads is explicit rather than relied on: the export check
   // depends on it, and a default that changes would fail as a mystery timeout.
   const context = await browser.newContext({
@@ -620,13 +635,13 @@ try {
   // schedule — and on a cold worker that can take well over the guessed
   // pause this used to be. Wait for the content itself; the arrival times
   // come last, so they get their own wait before anything reads the page.
-  await page.waitForSelector('text=Site tour', { timeout: 30000 }).catch(() => undefined)
+  await page.waitForSelector('text=SITE TOUR', { timeout: 30000 }).catch(() => undefined)
   await page
     .waitForFunction(() => /\d{1,2}:\d{2}\s?(AM|PM)/i.test(document.body.innerText), { timeout: 30000 })
     .catch(() => undefined)
   await page.waitForTimeout(500)
   const bookText = await page.textContent('body')
-  check('the book names the survey', bookText?.includes('Site tour') ?? false)
+  check('the book names the survey', bookText?.includes(surveyName) ?? false)
   check('the book lists a stop', bookText?.includes(PINS[0].name) ?? false)
   const bookImages = await page.$$eval('.book-page img', (nodes) =>
     nodes.filter((node) => node.complete && node.naturalWidth > 0).length,
@@ -654,9 +669,10 @@ try {
       const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
       const doc = await pdfjs.getDocument({ data: new Uint8Array(bytes) }).promise
 
+      // The designed book: a cover, an itinerary page, then one page per stop.
       check(
-        'the book is a cover plus one page per stop',
-        doc.numPages === PINS.length + 1,
+        'the book is a cover, an itinerary, and one page per stop',
+        doc.numPages === PINS.length + 2,
         `${doc.numPages} pages for ${PINS.length} stops`,
       )
 
@@ -689,6 +705,293 @@ try {
     check('Export PDF downloads a file', false, error.message.split('\n')[0])
   }
   await page.screenshot({ path: 'smoke-book.png', fullPage: false })
+
+  /*
+   * The GIS, which this test did not open until it had already shipped a
+   * broken one.
+   *
+   * The parcel search moved to the server, and a market only takes that path
+   * once its rows are published and sealed. Every run of this test until then
+   * had been exercising the fallback — the browser downloading the county —
+   * because no market was ready yet. So the path that real users would hit
+   * first was the one path never opened here, and it reached them broken.
+   *
+   * What this checks is deliberately blunt: the map paints, no script threw,
+   * and no request the view depends on came back an error. A blank map with a
+   * clean console is still a blank map, so the canvas is measured rather than
+   * merely found.
+   */
+  const gisErrors = []
+  const gisFailures = []
+  page.on('pageerror', (error) => gisErrors.push(error.message))
+  page.on('response', (response) => {
+    const url = response.url()
+    if (response.status() < 400) return
+    if (!/\/api\/gis\/|\/catalog\/|index\.json|meta\.json|\.pmtiles/.test(url)) return
+    /*
+     * Overlay layers are the one catalog file a market may honestly not
+     * have. They are published by a separate job from the county build, so
+     * a market always exists for a while before its layers do — Orange
+     * County blocked this gate on exactly that, with a map that was
+     * otherwise perfect: the parcels drew, the count was right, the tiles
+     * read. The GIS offers no overlays when it 404s here and carries on.
+     *
+     * Only a missing one is forgiven. A 500 means the file is there and
+     * the catalog is broken, which is the failure this check exists for,
+     * and every other file stays a hard dependency.
+     */
+    if (response.status() === 404 && /\/layers\.json$/.test(url)) return
+    gisFailures.push(`${response.status()} ${url.replace(BASE, '')}`)
+  })
+
+  /*
+   * The parcel tiles, counted per market.
+   *
+   * A basemap paints whether or not a single parcel arrives, so "the canvas
+   * has pixels" is not evidence that the map has the county on it. What a
+   * person means by the map not loading is usually this: streets, no parcels.
+   * pmtiles are read by HTTP range request, so a market that drew anything
+   * leaves a trail of 200s and 206s here and one that drew nothing leaves
+   * none.
+   */
+  const tiles = { ok: 0, bad: [] }
+  page.on('response', (response) => {
+    if (!/\.pmtiles/.test(response.url())) return
+    if (response.status() === 200 || response.status() === 206) tiles.ok += 1
+    else tiles.bad.push(`${response.status()} ${response.url().split('/').pop()}`)
+  })
+
+  const gis = await page.goto(`${BASE}/gis`, { waitUntil: 'domcontentloaded', timeout: 45000 })
+  check('GET /gis serves the app', gis?.status() === 200, `status ${gis?.status()}`)
+
+  const gisMap = await page
+    .waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 })
+    .catch(() => null)
+  check('the GIS map paints a canvas', gisMap != null,
+    gisMap ? '' : ((await page.textContent('body')) ?? '').slice(0, 300))
+
+  if (gisMap) {
+    // Long enough for the market status, the tiles and the first search to
+    // settle. A map that is going to fail generally fails in this window.
+    await page.waitForTimeout(9000)
+    const size = await page.$eval('canvas.maplibregl-canvas', (node) => ({
+      w: node.clientWidth, h: node.clientHeight,
+    }))
+    check('the GIS map has real size', size.w > 400 && size.h > 300, `${size.w}x${size.h}`)
+
+    /*
+     * The catalogue, asked for from inside the page.
+     *
+     * Every market in the picker comes from this one file, so if it does not
+     * answer as JSON then no market loads and the failure looks like "the map
+     * is broken" rather than "one file is missing". It has to be read from
+     * the page because it is served from another origin that a runner may
+     * reach differently.
+     */
+    const catalogue = await page.evaluate(async () => {
+      // The address the app actually reads, which is now this origin. It used
+      // to read the data domain directly, and that is exactly what broke: a
+      // cross-origin refusal there arrives as `TypeError: Failed to fetch`
+      // with status 0, the market list comes back empty, and the view is
+      // blank because the app was told there are no counties. The direct
+      // address is still probed, but only for the record — a refusal there is
+      // no longer the product's problem.
+      const bases = ['/catalog', 'https://data.realestateaistudio.com']
+      const out = []
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}/markets.json`, { cache: 'no-store' })
+          const body = await res.text()
+          let slugs = null
+          try {
+            slugs = (JSON.parse(body).markets || []).map((m) => `${m.slug}:${m.status}`)
+          } catch { slugs = null }
+          out.push({ base, status: res.status, type: res.headers.get('content-type') || '',
+                     slugs, head: slugs ? '' : body.slice(0, 120) })
+        } catch (error) {
+          out.push({ base, status: 0, type: '', slugs: null, head: String(error).slice(0, 120) })
+        }
+      }
+      return out
+    })
+    for (const answer of catalogue) {
+      const ok = answer.status === 200 && Array.isArray(answer.slugs) && answer.slugs.length > 0
+      const detail = `status ${answer.status} ${answer.type} ${answer.slugs ? answer.slugs.join(' ') : answer.head}`
+      if (answer.base === '/catalog') {
+        check('the market catalogue answers as JSON from this origin', ok, detail)
+      } else {
+        // Reported, never asserted. Whether another origin's bucket will talk
+        // to this one is that bucket's business now, not the product's.
+        console.log(`NOTE  the data domain direct: ${detail}`)
+      }
+    }
+
+    // The onboarding tour sits over the panel on a workspace that has never
+    // chosen a county, and a click that lands on it is not a click on the map.
+    for (const label of ['Skip', 'Done']) {
+      await page.click(`button:has-text("${label}")`, { timeout: 2500 }).catch(() => undefined)
+    }
+    await page.click('[data-tour="layers"], text=Layers', { timeout: 5000 }).catch(() => undefined)
+    await page.waitForTimeout(600)
+
+    const picker = await page.$('#gis-market')
+    check('the market picker is on the panel', picker != null)
+    if (picker) {
+      const options = await page.$$eval('#gis-market option', (nodes) =>
+        nodes.map((n) => n.value).filter(Boolean))
+      check('the picker lists the published markets', options.length > 0, options.join(' '))
+
+      /*
+       * Every market, not just the first.
+       *
+       * "None of them load" is a different fault from "one of them loads",
+       * and a test that only ever opens the market that happens to sort first
+       * cannot tell the two apart.
+       */
+      /*
+       * The market already showing goes last.
+       *
+       * Selecting the option that is already selected changes nothing, so no
+       * tiles are read and the count for it comes back zero — not because
+       * that county is broken but because nothing happened. Starting at the
+       * second option and coming back to the first makes every step in this
+       * loop a real change of market, which is the thing being tested.
+       */
+      for (const slug of [...options.slice(1), options[0]]) {
+        await page.selectOption('#gis-market', slug).catch(() => undefined)
+        // The market's meta, its server status and its first search, in that
+        // order. Generous because a cold Worker adds a second on the first ask.
+        await page.waitForTimeout(7000)
+
+        /*
+         * In past the zoom where parcels are drawn.
+         *
+         * A county opens at the gate itself, and a tile is only fetched once
+         * the view moves inside it — so counting at the opening view counts
+         * zero, correctly, and says nothing about whether the county draws.
+         *
+         * Zoomed with the map's own control rather than by writing the
+         * address bar. Writing the hash looked like the tidier way to ask and
+         * moved nothing at all: every market reported no tiles, which read as
+         * eight broken counties rather than one instruction the map never
+         * received. The control is what the survey map's own check already
+         * uses, and that one has been passing all along.
+         */
+        const zoomOf = async () =>
+          Number(/^#([\d.]+)/.exec(await page.evaluate(() => window.location.hash))?.[1] ?? NaN)
+        const opened = await zoomOf()
+        const before = tiles.ok
+
+        /*
+         * Zoomed with the wheel, over the map itself.
+         *
+         * Two tidier-looking ways failed silently before this one. Writing the
+         * address bar moved nothing. Clicking the zoom control hit the panel
+         * that sits over the top-left corner of this page, and a click that
+         * lands on the wrong element throws, which was being swallowed. Both
+         * reported eight counties failing to draw when nothing had asked them
+         * to draw anything.
+         *
+         * The wheel goes to whatever is under the pointer, so putting the
+         * pointer in the middle of the canvas is unambiguous about who is
+         * being asked.
+         */
+        const box = await (await page.$('canvas.maplibregl-canvas'))?.boundingBox()
+        if (box) {
+          await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+          for (let step = 0; step < 4; step += 1) {
+            await page.mouse.wheel(0, -400)
+            await page.waitForTimeout(900)
+          }
+        }
+        await page.waitForTimeout(4000)
+        const reached = await zoomOf()
+        const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
+        const count = text.match(/([\d,]{4,})\s*parcels/i)
+        check(`${slug}: the panel states a parcel count`, count != null,
+          count ? count[1] : text.slice(0, 240))
+        check(`${slug}: nothing on the panel reports a failure`,
+          !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
+          text.slice(0, 240))
+        // The zoom is reported either way. Without it a failure cannot say
+        // whether the county would not draw or was never asked to, and those
+        // are opposite problems that look identical from here.
+        check(`${slug}: the parcel tiles are read once past the zoom gate`, tiles.ok > before,
+          `${tiles.ok - before} pmtiles responses, zoom ${opened} -> ${reached}`)
+      }
+      check('no parcel tile came back an error', tiles.bad.length === 0,
+        tiles.bad.slice(0, 4).join(' | '))
+
+      /*
+       * The no-GPU path's server half, against the real archive.
+       *
+       * The basic map asks the server for one tile's worth of parcels as
+       * GeoJSON instead of drawing the archive through WebGL. A browser
+       * falls back to it precisely when everything else has failed, so this
+       * is the one endpoint that must not be discovered broken at that
+       * moment. Austin's downtown tile has thousands of parcels; zero
+       * features here means the decode broke, whatever the status code says.
+       */
+      const lite = await page.evaluate(async () => {
+        const lat = 30.2672, lng = -97.7431, z = 14
+        const x = Math.floor(((lng + 180) / 360) * 2 ** z)
+        const rad = (lat * Math.PI) / 180
+        const y = Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * 2 ** z)
+        try {
+          const res = await fetch(`/catalog/austin-tx/lite/${z}/${x}/${y}.json`)
+          const doc = res.ok ? await res.json() : null
+          return { status: res.status, features: doc?.features?.length ?? 0 }
+        } catch (error) {
+          return { status: 0, features: 0, error: String(error).slice(0, 120) }
+        }
+      })
+      check('the basic map can get parcels with no GPU at all',
+        lite.status === 200 && lite.features > 0,
+        `status ${lite.status}, ${lite.features} features ${lite.error ?? ''}`)
+
+      /*
+       * A position left over from somewhere else.
+       *
+       * The map keeps its view in the URL so a refresh returns you to the
+       * block you were reading. The hash outlives the tab, though, so one
+       * belonging to another county used to be restored over a market a
+       * thousand miles away — parcels loaded, camera in a different state,
+       * and reloading put it straight back because the hash came too. A
+       * failure a reload cannot clear is the worst kind, so it is pinned
+       * here with a position no market of ours is anywhere near.
+       */
+      const target = options[0]
+      // Away first, so this is a real document load.
+      //
+      // Navigating from /gis to /gis#... differs only by the fragment, which
+      // the browser treats as a same-document navigation: nothing reloads, the
+      // map is never rebuilt, and the case under test — a fresh visit carrying
+      // somebody else's position — never happens. The first version of this
+      // check did exactly that and reported a failure the product does not
+      // have, while saying nothing about the one it did.
+      await page.goto('about:blank')
+      await page.goto(`${BASE}/gis#12/40.7128/-74.0060`, {
+        waitUntil: 'domcontentloaded', timeout: 45000,
+      })
+      await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 }).catch(() => null)
+      await page.waitForTimeout(9000)
+      // The map writes its own position back, so the address bar is the
+      // honest answer to where it actually ended up.
+      const landed = await page.evaluate(() => window.location.hash)
+      const parts = landed.replace('#', '').split('/')
+      const lat = Number(parts[1])
+      const lng = Number(parts[2])
+      check('a hash from another part of the country does not strand the map',
+        Number.isFinite(lat) && Number.isFinite(lng) &&
+          (Math.abs(lat - 40.7128) > 1 || Math.abs(lng - -74.006) > 1),
+        `${target} opened at ${landed || '(no hash written)'}`)
+    }
+  }
+
+  check('no uncaught errors in the GIS', gisErrors.length === 0, gisErrors.slice(0, 3).join(' | '))
+  check('no failed requests the GIS depends on', gisFailures.length === 0,
+    gisFailures.slice(0, 4).join(' | '))
+  await page.screenshot({ path: 'smoke-gis.png', fullPage: false })
 } catch (error) {
   failed = true
   console.error(`\nSmoke test threw: ${error.stack || error.message}`)

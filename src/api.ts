@@ -1,4 +1,4 @@
-import type {
+import type { BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -10,7 +10,13 @@ import type {
   Zone,
   AppFeatures,
   DealStage,
+  Comp,
   CompetitionResult,
+  MapView,
+  MarketStatus,
+  ParcelQuery,
+  ParcelRow,
+  ParcelSearch,
   Demographics,
   GeocodeResult,
   PlaceCategory,
@@ -168,7 +174,102 @@ export const api = {
       source: 'ai' | 'heuristic' | 'rules'
       provider: string | null
       model: string | null
+      /** Today's AI spend, present only when a model was actually called. */
+      budget?: { used: number; cap: number }
     }>('/api/gis/scout', json(input)),
+
+  /*
+   * Sale comps the broker collected themselves.
+   *
+   * Nothing here fetches from a listing site. `importComps` takes what their
+   * own capture produced, and it lands in their workspace only — comps are
+   * never pooled across teams.
+   */
+  comps: {
+    list: (market?: string) =>
+      request<{ comps: Comp[]; unplaced: number }>(
+        market ? `/api/gis/comps?market=${encodeURIComponent(market)}` : '/api/gis/comps',
+      ),
+    /** `listings` for parsed records, `csv` for the raw text of an export. */
+    import: (input: {
+      listings?: unknown
+      csv?: string
+      market?: string
+      source?: string
+    }) =>
+      request<{ added: number; updated: number; dropped: number; truncated: number }>(
+        '/api/gis/comps',
+        json(input),
+      ),
+    /** One geocoding pass. Call again while `remaining` is above zero. */
+    place: () =>
+      request<{ placed: number; failed: number; remaining: number }>(
+        '/api/gis/comps/place',
+        json({}),
+      ),
+    remove: (id: string) =>
+      request<{ removed: number }>(`/api/gis/comps/${id}`, { method: 'DELETE' }),
+  },
+
+  /*
+   * Saved map views: a market, configured, under a name.
+   *
+   * The state is an opaque blob on both sides. The server bounds and scopes
+   * it; only the map knows what is in it.
+   */
+  views: {
+    list: (market?: string) =>
+      request<{ views: MapView[] }>(
+        market ? `/api/gis/views?market=${encodeURIComponent(market)}` : '/api/gis/views',
+      ),
+    save: (input: { market: string; name: string; state: Record<string, unknown> }) =>
+      request<{ view: MapView }>('/api/gis/views', json(input)),
+    rename: (id: string, name: string) =>
+      request<{ view: MapView }>(`/api/gis/views/${id}`, {
+        ...json({ name }),
+        method: 'PATCH',
+      }),
+    remove: (id: string) =>
+      request<{ removed: number }>(`/api/gis/views/${id}`, { method: 'DELETE' }),
+  },
+
+  /*
+   * The county, asked rather than downloaded.
+   *
+   * A market whose rebuild has reached the server answers these; one that has
+   * not answers `ready: false`, and the GIS falls back to downloading the
+   * published index the old way. That fallback is why every call here is
+   * allowed to fail quietly.
+   */
+  parcels: {
+    /** What a market is, and whether the server can answer for it at all. */
+    market: (market: string) =>
+      request<MarketStatus>(`/api/gis/market?market=${encodeURIComponent(market)}`),
+
+    /** One search: a page of parcels, the ids to highlight, and the totals. */
+    search: (market: string, filters: ParcelQuery = {}, page: { limit?: number; offset?: number } = {}) => {
+      const params = new URLSearchParams({ market })
+      if (filters.query) params.set('q', filters.query)
+      if (filters.assets?.length) params.set('at', filters.assets.join(','))
+      if (filters.valueMin != null) params.set('vmin', String(filters.valueMin))
+      if (filters.valueMax != null) params.set('vmax', String(filters.valueMax))
+      if (filters.acresMin != null) params.set('amin', String(filters.acresMin))
+      if (filters.acresMax != null) params.set('amax', String(filters.acresMax))
+      if (filters.owner) {
+        params.set('owner', filters.owner.id)
+        params.set('ownerKind', filters.owner.kind)
+      }
+      if (page.limit != null) params.set('limit', String(page.limit))
+      if (page.offset) params.set('offset', String(page.offset))
+      return request<ParcelSearch>(`/api/gis/parcels?${params.toString()}`)
+    },
+
+    /** One parcel, whole, for the card. */
+    one: (market: string, id: string | number) =>
+      request<{ parcel: ParcelRow }>(
+        `/api/gis/parcel?market=${encodeURIComponent(market)}&id=${encodeURIComponent(String(id))}`,
+      ),
+  },
 
   listSurveys: () => request<{ surveys: Survey[] }>('/api/surveys'),
   createSurvey: (input: { name: string; clientName?: string; brokerName?: string; companyName?: string; centerLat?: number; centerLng?: number; zoom?: number }) =>
@@ -247,6 +348,8 @@ export const api = {
       body: file,
     }),
 
+  bookStyle: (surveyId: string, input: { instruction?: string; style?: Partial<BookStyle> }) =>
+    request<{ book: BookStyle }>(`/api/surveys/${surveyId}/book-style`, json(input)),
   planTour: (surveyId: string, options: TourRequest = {}) =>
     request<TourPlan>(`/api/surveys/${surveyId}/tour`, json(options)),
   saveTourOrder: (surveyId: string, order: string[]) =>

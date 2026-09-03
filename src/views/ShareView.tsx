@@ -52,9 +52,13 @@ export default function ShareView({ token, features }: { token: string; features
 
   const choropleth = useMemo(() => {
     if (!demographics) return null
+    // The metric the broker chose before sharing, not always population.
+    // Falling back to population keeps every link made before this shipped
+    // rendering exactly as it did.
+    const metric = payload?.survey.metric || 'population'
     const shapes = demographics.areas.filter((area) => area.geometry)
     const values = shapes
-      .map((area) => area.metrics?.population)
+      .map((area) => area.metrics?.[metric])
       .filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
     if (values.length === 0) return null
     const min = Math.min(...values)
@@ -68,12 +72,14 @@ export default function ShareView({ token, features }: { token: string; features
       entries: shapes.map((area) => ({
         geoid: area.geoid,
         geometry: area.geometry,
-        color: colorFor(area.metrics?.population, min, max),
-        // The client can tap any shaded area for its numbers too.
-        info: areaInfoHtml(area.metrics, 'population'),
+        color: colorFor(area.metrics?.[metric], min, max),
+        // The client can tap any shaded area for its numbers too, with the
+        // metric being shaded listed first.
+        info: areaInfoHtml(area.metrics, metric),
       })),
+      metric,
     }
-  }, [demographics])
+  }, [demographics, payload?.survey.metric])
 
   if (error) {
     return (
@@ -201,7 +207,7 @@ export default function ShareView({ token, features }: { token: string; features
             demographics={
               choropleth
                 ? {
-                    colorBy: 'population',
+                    colorBy: choropleth.metric,
                     radius: 5,
                     busy: false,
                     scale: { min: choropleth.min, max: choropleth.max, median: choropleth.median },

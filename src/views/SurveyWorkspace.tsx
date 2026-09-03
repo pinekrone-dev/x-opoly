@@ -174,6 +174,17 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
       setDemoView(null)
       return
     }
+    /*
+     * Remembered on the survey, not just in this tab.
+     *
+     * The client's shared map shades by whatever is stored here, and until
+     * this line existed that was always population — so a broker who built
+     * their case on renter share sent a client a map coloured by something
+     * else, with a legend confidently naming a metric nobody had picked.
+     * Fire and forget: failing to remember a colour must not cost the broker
+     * the layer they just asked for.
+     */
+    if (survey) void api.updateSurvey(survey.id, { shareMetric: colorBy }).catch(() => {})
     if (mapDemoData.current) {
       setDemoView({ data: mapDemoData.current, colorBy, radius })
       return

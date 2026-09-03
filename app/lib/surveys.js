@@ -7,6 +7,7 @@
  */
 
 import { newId, newShareToken, nowIso, toBool } from './ids.js'
+import { normalizeBookStyle } from './bookstyle.js'
 import {
   cleanPropertyFields,
   fieldsBySurvey,
@@ -61,6 +62,17 @@ const PROPERTY_FIELDS = {
   hidden: (v) => (v ? 1 : 0),
 }
 
+/*
+ * The metrics a shared map may be shaded by — the same list the demographics
+ * panel offers, kept here so the server never stores a key the client cannot
+ * draw. Density is excluded on purpose: it is derived in the browser from
+ * population and area, and is not a column the shared payload carries.
+ */
+const SHARE_METRICS = new Set([
+  'population', 'medianHouseholdIncome', 'households', 'renterShare',
+  'medianAge', 'educationShare', 'medianHomeValue',
+])
+
 const SURVEY_FIELDS = {
   name: (v) => text(v, 200),
   client_name: (v) => text(v, 200),
@@ -71,7 +83,14 @@ const SURVEY_FIELDS = {
   center_lng: (v) => number(v, -180, 180),
   zoom: (v) => integer(v, 1, 20),
   share_demographics: (v) => (v ? 1 : 0),
+  // Checked against the list rather than stored as given: this string is
+  // read back as a metric key on the client's map, and an unknown one would
+  // shade nothing while the legend named it confidently.
+  share_metric: (v) => (SHARE_METRICS.has(String(v)) ? String(v) : 'population'),
   share_qr: (v) => (v ? 1 : 0),
+  // Stored as JSON, but never as given: the style is validated down to its
+  // six known levers so a stored book can only describe a book we can draw.
+  book_style: (v) => JSON.stringify(normalizeBookStyle(v)),
   tour_start_time: (v) => text(v, 20),
   tour_stop_minutes: (v) => integer(v, 0, 600),
   tour_start_address: (v) => text(v, 300),
@@ -160,8 +179,16 @@ function mapSurvey(row) {
       expiresAt: row.share_expires_at,
       url: row.share_token ? `/s/${row.share_token}` : null,
       showDemographics: toBool(row.share_demographics),
+      metric: row.share_metric || 'population',
       showQr: row.share_qr == null ? true : toBool(row.share_qr),
     },
+    book: (() => {
+      try {
+        return normalizeBookStyle(row.book_style ? JSON.parse(row.book_style) : null)
+      } catch {
+        return normalizeBookStyle(null)
+      }
+    })(),
     tour: {
       startTime: row.tour_start_time || '10:00',
       stopMinutes: row.tour_stop_minutes ?? 20,
@@ -482,6 +509,10 @@ export async function resolveShare(db, token) {
       expiresAt: survey.share.expiresAt,
       // Which extras the broker turned on for this report.
       showDemographics: survey.share.showDemographics,
+      // Which metric shades it. Without this the client's map was always
+      // coloured by population and its legend always said so, whatever the
+      // broker had chosen before sharing.
+      metric: survey.share.metric,
     },
     // Stage names and colours are part of the story the client reads — a
     // green "Qualified" pin means something — so they travel with the map.

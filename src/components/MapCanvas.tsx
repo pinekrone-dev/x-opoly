@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
 import maplibregl from 'maplibre-gl'
 import { Protocol } from 'pmtiles'
 import type { Property, TileConfig } from '../types'
 import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
+import LiteMap from './LiteMap'
 
 /*
  * The map engine.
@@ -35,6 +36,151 @@ function registerPmtiles() {
 }
 
 const PARCEL_SOURCE = 'parcels'
+
+/*
+ * A failing map reports what it saw, from the browser that actually failed.
+ *
+ * Every diagnosis of "the map isn't loading" so far was made from a clean
+ * headless browser where the map loads — which is how four real faults each
+ * took an extra round to find, and how a machine-level WebGL failure stayed
+ * invisible for a day. So the map now testifies for itself: on a start that
+ * throws, a context that is taken, or a load that hangs, it posts what it
+ * can see — whether WebGL exists here at all, and which renderer answers,
+ * since "SwiftShader" in that field is the whole diagnosis: it means the
+ * browser is software-rendering because GPU acceleration is off or denied.
+ *
+ * Capped per page load, silent on failure, and never allowed to throw:
+ * diagnosis must not break the thing it is diagnosing.
+ */
+/*
+ * Whether this browser should skip WebGL entirely and open the basic map.
+ *
+ * Two ways in: the machine has no WebGL at all — acceleration off, a policy,
+ * a driver denylist — or a person (or a previous failure) chose the basic
+ * map and the choice was kept. The probe is cheap and runs once per page.
+ */
+function liteWanted(): boolean {
+  try {
+    if (window.localStorage.getItem('lq-lite') === '1') return true
+  } catch {
+    /* storage denied says nothing about the GPU */
+  }
+  try {
+    const probe = document.createElement('canvas')
+    if (!probe.getContext('webgl2') && !probe.getContext('webgl')) return true
+  } catch {
+    return true
+  }
+  return false
+}
+
+let tattled = 0
+function tattle(kind: string, detail: Record<string, unknown> = {}) {
+  if (tattled >= 5) return
+  tattled += 1
+  try {
+    let webgl = false
+    let webgl2 = false
+    let renderer: string | null = null
+    try {
+      const probe = document.createElement('canvas')
+      let gl = probe.getContext('webgl2') as WebGLRenderingContext | null
+      webgl2 = gl != null
+      if (!gl) gl = probe.getContext('webgl') as WebGLRenderingContext | null
+      webgl = gl != null
+      const debug = gl?.getExtension('WEBGL_debug_renderer_info')
+      if (gl && debug) renderer = String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL))
+    } catch {
+      /* a probe that throws is itself the finding: webgl stays false */
+    }
+    fetch('/api/diag/map', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        kind,
+        ...detail,
+        webgl,
+        webgl2,
+        renderer,
+        dpr: window.devicePixelRatio,
+        page: window.location.pathname,
+        screen: `${window.innerWidth}x${window.innerHeight}`,
+      }),
+    }).catch(() => undefined)
+  } catch {
+    /* never let the report become a second failure */
+  }
+}
+
+/*
+ * The zoom below which parcels are not drawn at all.
+ *
+ * This is the difference between a map that opens and a map that eats the
+ * GPU. A county's tiles start at zoom 11, and a single zoom-11 tile over
+ * Maricopa carries a large share of 1.74 million polygons — every one of
+ * which the browser must decode, triangulate and hold in GPU buffers. At that
+ * zoom a parcel is smaller than a pixel, so the entire cost buys a grey smear
+ * that nobody can read and nobody can click.
+ *
+ * It was drawing them because nothing said not to. Each step up the pyramid
+ * quarters the parcels in a tile, so 13 is where a tile becomes a sane thing
+ * to ask a browser for and a parcel becomes a shape rather than a speck.
+ *
+ * Below this the map is for orientation — basemap, demographics, the places
+ * already pinned — and the county is searched from the panel, which is
+ * answered by the server and never needed the geometry at all.
+ */
+export const PARCEL_MIN_ZOOM = 13
+
+/*
+ * How much GPU memory this map asks for, and what it settles for.
+ *
+ * A browser takes the graphics context away when it is short of GPU memory,
+ * and it takes it from the tab that is easiest to evict rather than the tab
+ * that is greedy. So a person with a full browser loses the map through no
+ * fault of their own, and the only advice we had for them was to close other
+ * tabs — which is not advice, it is asking them to rearrange their day around
+ * our defaults.
+ *
+ * These are the two things that actually cost memory here. `pixelRatio` sets
+ * how many physical pixels the framebuffer holds: on a 3x phone screen a
+ * full-window map is nine times the pixels of a 1x one, for every buffer the
+ * renderer keeps. `maxTileCacheSize` bounds how many decoded tiles are held
+ * in GPU buffers beyond the ones on screen.
+ *
+ * Step 0 is what everyone gets, and it is already less than the default asks
+ * for: capping at 2 leaves a retina display pixel-identical and stops a 3x
+ * screen quadrupling the bill for a difference nobody can see at arm's
+ * length. The later steps are what a machine under real pressure gets, and
+ * they trade sharpness for existing at all — which is the right trade, since
+ * the alternative on offer was a grey rectangle.
+ */
+const GPU_STEPS = [
+  // Everyone. `levels` is MapLibre's own knob and it defaults to 5 — five
+  // zoom levels of tiles held per source, on top of what is on screen, for
+  // each of the basemap and the parcels. Three is still more than a pinch or
+  // a scroll wheel can outrun, and it scales with the window rather than
+  // being a number guessed against one monitor.
+  { cap: 2, levels: 3, tiles: null, note: null },
+  { cap: 1.5, levels: 2, tiles: 24, note: 'Running the map at reduced quality to fit the memory this browser has spare.' },
+  { cap: 1, levels: 1, tiles: 10, note: 'Running the map at its lowest quality — this browser is very short of GPU memory.' },
+]
+
+/** The step's settings, resolved against this screen. */
+function gpuStep(level: number) {
+  const step = GPU_STEPS[Math.min(level, GPU_STEPS.length - 1)]
+  const dpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1
+  return { pixelRatio: Math.min(dpr, step.cap), levels: step.levels, tiles: step.tiles, note: step.note }
+}
+
+/*
+ * How far a restored position may sit from the market it is restored into.
+ *
+ * Degrees, and deliberately loose: a county is a degree or so across, and the
+ * point is not to police where someone was looking but to catch a position
+ * that belongs to a different part of the country entirely.
+ */
+const SAME_MARKET_DEGREES = 3
 const BASEMAP_SOURCE = 'basemap'
 const BASEMAP_LAYER = 'basemap'
 
@@ -73,6 +219,15 @@ const OVERLAY_ORDER = [
  * clicked, which is why `onSelectParcel` hands back an id and nothing more.
  */
 export interface ParcelLayer {
+  /**
+   * Whether the land-use wash paints, with the geometry staying either way.
+   *
+   * The parcels card used to remove the whole layer, which also removed the
+   * outlines and every click target — a county you could not touch. Off now
+   * means invisible fill: the hairline outlines stay so there is always a
+   * shape to click, and hover and selection still light the parcel up.
+   */
+  fillVisible?: boolean
   /** Absolute URL of the .pmtiles file. */
   url: string
   /** The layer name inside the tiles. */
@@ -105,6 +260,15 @@ const PARCEL_COLORS: [string, string][] = [
   ['Vacant land', '#1baf7a'],
   ['Single family', '#9AA1B4'],
 ]
+/*
+ * The outline colour when nothing shades the map.
+ *
+ * Near-black rather than black: pure #000 against a pale basemap reads as a
+ * printing artefact, and against the dark basemap it disappears entirely.
+ * This is the brand's ink, which is what every other line in the product uses.
+ */
+const PARCEL_INK = '#0f172a'
+
 const PARCEL_OTHER = '#5C6377'
 
 /** One hue, light to dark. A value is a magnitude, never a set of categories. */
@@ -122,7 +286,26 @@ const VALUE_RAMP = ['#EDE7FA', '#D6C6F3', '#BBA0EA', '#9D77DD', '#7F4FCB', '#603
 export interface ExtraLayer {
   id: string
   kind: 'point' | 'polygon' | 'line'
-  data: GeoJSON.FeatureCollection
+  /**
+   * The whole layer as GeoJSON, for a market that has not been tiled yet.
+   *
+   * This is the expensive path and it is on its way out: Austin's zoning was
+   * 41 MB of JSON parsed into an object graph several times that size before
+   * a single district could be drawn. Null when `tiles` is set, which is the
+   * point of `tiles` being set.
+   */
+  data?: GeoJSON.FeatureCollection | null
+  /**
+   * The layer as a tile archive, read by range like the parcels are.
+   *
+   * A viewport's worth of tiles is hundreds of kilobytes against tens of
+   * megabytes for the county, and nothing outside the view is ever decoded.
+   */
+  tiles?: string | null
+  /** The layer's name inside the archive. Required for tiles, absent without. */
+  sourceLayer?: string | null
+  minzoom?: number | null
+  maxzoom?: number | null
   color: string
   opacity: number
   /** Property names worth showing when one is clicked, in reading order. */
@@ -156,7 +339,34 @@ interface Props {
   onSelect?: (id: string) => void
   onMapClick?: (lat: number, lng: number) => void
   /** Reports where the map is looking, so a dropped flyer can land nearby. */
-  onViewChange?: (center: { lat: number; lng: number }) => void
+  /**
+   * Where the map is looking, on every settle.
+   *
+   * Zoom rides along with the centre because a saved view has to restore both
+   * — "here at county scale" and "here at street scale" are different views of
+   * the same point. Existing callers that only read lat and lng are unaffected.
+   */
+  onViewChange?: (center: { lat: number; lng: number; zoom: number }) => void
+  /**
+   * A hook the view fills with "photograph the map, now".
+   *
+   * A ref rather than a callback prop on purpose: the capture function only
+   * exists while a live, loaded map instance does, and a ref lets the export
+   * button ask at click time without the map re-rendering to keep a prop
+   * fresh. The capture waits for a render frame, because reading a WebGL
+   * canvas outside one returns black — the buffer is not preserved, and
+   * preserving it full-time taxes every frame to serve a rare export.
+   */
+  captureRef?: MutableRefObject<(() => Promise<HTMLCanvasElement | null>) | null>
+  /**
+   * A clicked extra-layer feature, handed to the view instead of a popup.
+   *
+   * The popup was the first draft and it reads like a tooltip: cramped,
+   * covering the map, gone on the next click. A view that supplies this
+   * callback gets the feature's properties and renders them wherever records
+   * belong — the same right-hand card a parcel uses.
+   */
+  onExtraPick?: (pick: { layerId: string; properties: Record<string, unknown> }) => void
   /** The survey's pipeline, for pin colours that match the sidebar. */
   stages?: { id: string; color: string }[]
   /** Tour start and end, drawn as their own flags — a tour begins at the
@@ -217,6 +427,38 @@ const BASEMAP_STORAGE_KEY = 'sitesurvey.basemap'
  * not in Austin. Remembering the last view means the second survey opens
  * where the broker actually works, with nothing to configure.
  */
+/*
+ * What the GPU situation actually is, asked when the map fails to start.
+ *
+ * A start that hangs with no error gives the person a shrug and gives a bug
+ * report nothing to go on — an afternoon went on exactly that. The three
+ * conditions this tells apart want three different responses: WebGL denied
+ * outright means the browser needs hardware acceleration switched on or tabs
+ * closed; a software renderer means acceleration is off and everything will
+ * crawl; a healthy GPU means the stall is elsewhere, and in practice that is
+ * an extension interfering with the map's background workers.
+ */
+function engineDiagnosis(): string {
+  try {
+    const probe = document.createElement('canvas')
+    const gl = probe.getContext('webgl2') ?? probe.getContext('webgl')
+    if (!gl) {
+      return 'This tab could not get graphics access at all — usually hardware acceleration switched off in the browser settings, or too many open tabs holding graphics memory. Closing tabs or re-enabling acceleration should cure it.'
+    }
+    const info = gl.getExtension('WEBGL_debug_renderer_info')
+    const renderer = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : ''
+    // The probe context is handed back immediately: the browser caps live
+    // contexts, and the whole point here is not to hold one the map needs.
+    gl.getExtension('WEBGL_lose_context')?.loseContext()
+    if (/swiftshader|software|llvmpipe|basic render/i.test(renderer)) {
+      return `The browser is drawing with software (${renderer}) instead of the graphics card, which makes the map far too slow to start. Switching hardware acceleration on in the browser settings should cure it.`
+    }
+    return `Graphics look healthy${renderer ? ` (${renderer})` : ''}, so the start is stuck elsewhere — a browser extension blocking the map's background workers is the usual cause. A private window with extensions off will confirm it.`
+  } catch {
+    return 'The graphics check itself was blocked, which points at the browser or an extension denying canvas access.'
+  }
+}
+
 function homeView(): { center: LngLat; zoom: number } {
   try {
     const raw = window.localStorage.getItem(HOME_STORAGE_KEY)
@@ -298,6 +540,8 @@ export default function MapCanvas({
   onSelect,
   onMapClick,
   onViewChange,
+  captureRef,
+  onExtraPick,
   stages,
   anchors = null,
   zones = null,
@@ -334,9 +578,68 @@ export default function MapCanvas({
   // silent blank rectangle. Rendered as a card with a reset, because the
   // person looking at it cannot open a console.
   const [engineNote, setEngineNote] = useState<string | null>(null)
+  /*
+   * A rebuild counter, and the reason the last start failed.
+   *
+   * Every source and layer effect below depends on `loaded`, so tearing the
+   * instance down and building a new one re-applies all of them — which makes
+   * rebuilding a real recovery rather than a blank canvas with the panels
+   * still around it.
+   */
+  const [attempt, setAttempt] = useState(0)
+  // What MapLibre itself said, kept in a ref because the timeout reads it
+  // without wanting to re-run on every error.
+  const startupError = useRef<string | null>(null)
+  // Set the moment the GPU takes the context away, and read by the teardown.
+  const contextLost = useRef(false)
+  // Automatic rebuilds since the last healthy start. Bounded, because a
+  // machine whose GPU refuses WebGL outright would otherwise rebuild in a
+  // loop forever; the button has no such limit.
+  const autoTries = useRef(0)
+  /** How far down the memory ladder this session has had to go. */
+  const gpuLevel = useRef(0)
+  /*
+   * The basic-map tier — the answer to "this has to work for everyone".
+   *
+   * A person whose WebGL is broken did nothing wrong and cannot be asked to
+   * fix a driver. When the full map cannot run — no WebGL at all, a context
+   * the browser keeps taking away, a start that hangs twice — the map drops
+   * to Leaflet and Canvas 2D rather than presenting a grey rectangle with
+   * advice. The choice is remembered, and reversible from the banner.
+   */
+  const [lite, setLite] = useState(liteWanted)
+  const enterLite = (why: string) => {
+    tattle('lite-mode-entered', { why })
+    try {
+      window.localStorage.setItem('lq-lite', '1')
+    } catch {
+      /* the session still gets the basic map; only the memory of it is lost */
+    }
+    setLite(true)
+  }
+  const exitLite = () => {
+    try {
+      window.localStorage.removeItem('lq-lite')
+    } catch {
+      /* nothing to forget */
+    }
+    autoTries.current = 0
+    gpuLevel.current = 0
+    setLite(false)
+    setAttempt((n) => n + 1)
+  }
+
   const [basemapNote, setBasemapNote] = useState<string | null>(null)
   /** Parcel tiles failing to arrive, said out loud instead of an empty map. */
   const [parcelNote, setParcelNote] = useState<string | null>(null)
+  /*
+   * Whether the view is currently below the zoom at which parcels are drawn.
+   *
+   * Kept in state rather than read where it is needed, because it has to
+   * re-render the note when the map moves and the map does not re-render
+   * anything by itself.
+   */
+  const [tooFarOut, setTooFarOut] = useState(false)
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
@@ -358,6 +661,10 @@ export default function MapCanvas({
   const anchorMarkers = useRef<maplibregl.Marker[]>([])
   const zoneLabels = useRef<maplibregl.Marker[]>([])
   const popup = useRef<maplibregl.Popup | null>(null)
+  /** Whether the URL named a view before this map was built. */
+  const hadHash = useRef(false)
+  /** Whether the caller's view has been applied even once. */
+  const viewApplied = useRef(false)
   const attribution = useRef<maplibregl.AttributionControl | null>(null)
 
   const clickHandler = useRef(onMapClick)
@@ -412,9 +719,21 @@ export default function MapCanvas({
   // Create the map once; React never re-renders into this subtree.
   useEffect(() => {
     if (!container.current || map.current) return
+    if (lite) return
     const host = container.current
+    if (!host) return
 
     const home = homeView()
+    /*
+     * Read before the map exists, because the map rewrites it.
+     *
+     * With `hash: true` MapLibre keeps the URL in step with the view, so by
+     * the time anything else runs there is always a hash and asking then tells
+     * you nothing. Asking here distinguishes the two cases that matter: a
+     * fresh visit, which should open where the market opens, and a reload or a
+     * pasted link, which already says where to be and must not be overridden.
+     */
+    hadHash.current = /^#[\d.]+\//.test(window.location.hash)
     let instance: maplibregl.Map
     try {
       instance = buildMap()
@@ -426,12 +745,33 @@ export default function MapCanvas({
       setEngineNote(
         `The map engine could not start${cause instanceof Error && cause.message ? ` — ${cause.message}` : ''}.`,
       )
+      tattle('engine-start-failed', {
+        message: cause instanceof Error ? cause.message : String(cause),
+        attempt: attempt,
+      })
       return
     }
 
     function buildMap() {
+      const budget = gpuStep(gpuLevel.current)
       return new maplibregl.Map({
       container: host,
+      // See GPU_STEPS. Asked for explicitly rather than left to the default,
+      // because the default is "as much as this screen implies" and that is
+      // what gets the context taken away on a busy machine.
+      pixelRatio: budget.pixelRatio,
+      maxTileCacheZoomLevels: budget.levels,
+      ...(budget.tiles == null ? {} : { maxTileCacheSize: budget.tiles }),
+      /*
+       * The view lives in the URL.
+       *
+       * Refreshing used to drop you back at the market's default centre,
+       * which on a county-wide map means losing the block you were reading.
+       * MapLibre's own hash keeps zoom and centre in the address bar, so a
+       * refresh returns to the same spot — and a pasted URL opens on it,
+       * which is the same feature seen from the other side.
+       */
+      hash: true,
       style: {
         version: 8,
         sources: { [BASEMAP_SOURCE]: emptySource() as never },
@@ -454,22 +794,161 @@ export default function MapCanvas({
     instance.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left')
     instance.on('click', (event) => clickHandler.current?.(event.lngLat.lat, event.lngLat.lng))
     instance.on('moveend', () => rememberView(instance))
-    instance.on('load', () => {
+    const markReady = () => {
       ready.current = true
+      startupError.current = null
+      autoTries.current = 0
       setLoaded(true)
-      setEngineNote(null)
+      // A map that came back at reduced quality says so. Silently looking
+      // softer than it did a minute ago is the kind of thing people notice
+      // and cannot explain, and an unexplained change reads as a fault.
+      setEngineNote(gpuStep(gpuLevel.current).note)
+    }
+    instance.on('load', markReady)
+
+    // Whatever MapLibre says on the way up, kept so the note can name it.
+    // Without this the only symptom of a real failure is a timeout message
+    // that describes the delay rather than the cause, which is how one
+    // afternoon went entirely on ruling out things that were never wrong.
+    instance.on('error', (event) => {
+      const message = (event as { error?: Error }).error?.message
+      if (message && !ready.current) startupError.current = message
     })
+
+    /*
+     * The GPU can take the context away — another tab, a driver reset, a
+     * laptop switching cards — and MapLibre does not come back on its own.
+     * Losing it before `load` is the one failure that looks exactly like a
+     * hang: the constructor succeeded, so nothing threw, and no further
+     * event ever arrives.
+     */
+    const canvas = instance.getCanvas()
+    let retry: number | undefined
+    const rebuild = () => setAttempt((n) => n + 1)
+    const onLost = (event: Event) => {
+      // Prevents the default so the browser will attempt a restore at all.
+      event.preventDefault()
+      contextLost.current = true
+      ready.current = false
+      setLoaded(false)
+      /*
+       * Then recover without being asked. Context loss is a browser under
+       * memory pressure evicting the oldest context — a machine with forty
+       * tabs hits it on every visit — and the person looking at the grey
+       * grid did nothing wrong, so they should not have to click anything.
+       * A few seconds' pause gives the browser room to actually free the
+       * GPU; rebuilding instantly tends to get the new context evicted too.
+       */
+      /*
+       * And come back smaller.
+       *
+       * The first version of this retried three times and asked for exactly
+       * as much memory each time, which is three ways of finding out the same
+       * thing: if it did not fit, it still does not fit. Then it told the
+       * person to close some tabs, which is the one repair we have no way to
+       * make and they have no reason to want to.
+       *
+       * Every attempt now steps down the ladder, so recovery is a smaller map
+       * rather than the same map again. The pause matters too — rebuilding
+       * instantly tends to get the new context evicted alongside the old one,
+       * before the browser has actually freed anything.
+       */
+      tattle('context-lost', { attempt: autoTries.current, gpuLevel: gpuLevel.current })
+      if (autoTries.current < GPU_STEPS.length + 1) {
+        autoTries.current += 1
+        gpuLevel.current = Math.min(gpuLevel.current + 1, GPU_STEPS.length - 1)
+        setEngineNote('The browser took the graphics context back — restarting the map…')
+        retry = window.setTimeout(rebuild, 2500)
+      } else {
+        // Only said once every step has been tried. At this point the machine
+        // genuinely has no room, and it is worth saying so plainly rather
+        // than leaving a grey rectangle unexplained.
+        tattle('gave-up', { gpuLevel: gpuLevel.current })
+        // Every rung of the memory ladder has been tried; the machine has no
+        // room for a WebGL map today. The basic map needs none.
+        enterLite('context-lost-repeatedly')
+      }
+    }
+    const onRestored = rebuild
+    /*
+     * Coming back to the tab is the other natural recovery point: whatever
+     * needed the GPU had it while this tab was hidden, and returning is the
+     * moment the context is most likely to be grantable again.
+     */
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !ready.current && contextLost.current) rebuild()
+    }
+
+    // Whether the parcels would be drawn at this zoom, kept current as the
+    // map moves. Read off the map rather than tracked alongside it, so the
+    // note can never disagree with what is on screen.
+    const watchZoom = () => setTooFarOut(instance.getZoom() < PARCEL_MIN_ZOOM)
+    watchZoom()
+    instance.on('zoomend', watchZoom)
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
+    document.addEventListener('visibilitychange', onVisible)
 
     // A start that hangs is as blank as one that throws. Long enough that a
     // slow connection never sees it; the note clears itself if load lands.
     const slowStart = window.setTimeout(() => {
-      if (!ready.current) {
-        setEngineNote('The map is taking unusually long to start. Reloading the page usually fixes it.')
+      if (ready.current) return
+      // Ask the map rather than trusting the flag. If the event was missed —
+      // and a missed event is indistinguishable from a hang to everything
+      // else here — the map is fine and saying otherwise is a false alarm
+      // over a working map.
+      if (instance.loaded()) {
+        markReady()
+        return
       }
+      /*
+       * One silent retry before any message. A wedged start — a worker that
+       * never answered, a context granted and then starved — often unsticks
+       * on a fresh instance, and the person should not see a scary panel for
+       * a hiccup that cures itself.
+       */
+      if (!startupError.current && autoTries.current < 1) {
+        autoTries.current += 1
+        rebuild()
+        return
+      }
+      // The hang is the one failure with no event to hook, so it is reported
+      // here, at the moment it is declared rather than suspected.
+      tattle('start-hung', { startupError: startupError.current, attempt: attempt })
+      // One silent retry has already happened. An engine that hangs twice on
+      // this machine is not going to start on the third ask, and the person
+      // watching the grey grid needs a map, not a diagnosis.
+      enterLite('start-hung-twice')
+      return
+      setEngineNote(
+        startupError.current
+          ? `The map engine stopped while starting — ${startupError.current}`
+          : `The map did not finish starting. ${engineDiagnosis()}`,
+      )
     }, 12000)
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
     map.current = instance
+    if (captureRef) {
+      captureRef.current = () =>
+        new Promise((resolve) => {
+          if (!ready.current) {
+            resolve(null)
+            return
+          }
+          // Copied inside the render event, where the buffer is guaranteed
+          // full — one frame later it may already be cleared.
+          instance.once('render', () => {
+            const source = instance.getCanvas()
+            const copy = document.createElement('canvas')
+            copy.width = source.width
+            copy.height = source.height
+            copy.getContext('2d')?.drawImage(source, 0, 0)
+            resolve(copy)
+          })
+          instance.triggerRepaint()
+        })
+    }
     // For the browser checks: the instance is reachable from the DOM, so a
     // test can read the real layer order instead of inferring it from pixels.
     ;(host as HTMLDivElement & { __map?: maplibregl.Map }).__map = instance
@@ -480,15 +959,51 @@ export default function MapCanvas({
 
     return () => {
       window.clearTimeout(slowStart)
+      window.clearTimeout(retry)
+      instance.off('zoomend', watchZoom)
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
+      document.removeEventListener('visibilitychange', onVisible)
       resize.disconnect()
-      popup.current?.remove()
-      instance.remove()
+      /*
+       * The bookkeeping runs whatever happens to the teardown, and that
+       * ordering is the whole reason a rebuild works.
+       *
+       * remove() throws when the graphics context is already gone — which is
+       * exactly the case a rebuild exists for. Left unguarded it aborted the
+       * cleanup before `map.current` was cleared, so the effect's own
+       * `if (map.current) return` guard then refused to build the
+       * replacement: the recovery button tore the map down and put nothing
+       * back.
+       */
+      /*
+       * A map whose context is gone is not torn down — it is abandoned.
+       *
+       * remove() walks its controls calling onRemove, and those reach through
+       * the painter that died with the context, so it throws from inside
+       * MapLibre where no try/catch of ours can contain it: the error escapes
+       * to React, which unmounts this whole subtree, and the recovery button
+       * takes the map away for good instead of bringing it back.
+       *
+       * So when the context is lost the instance is simply dropped. The
+       * container div is keyed on `attempt`, so React discards the element
+       * holding the dead canvas and mounts a fresh one for the next build,
+       * which is the same disposal by a route that cannot throw.
+       */
+      try {
+        popup.current?.remove()
+        if (!contextLost.current) instance.remove()
+      } catch {
+        /* a half-built map is still better dropped than left attached */
+      }
+      contextLost.current = false
+      if (captureRef) captureRef.current = null
       map.current = null
       ready.current = false
       markers.current.clear()
       labels.current.clear()
     }
-  }, [])
+  }, [attempt, lite])
 
   // The basemap is its own source and layer so it can be swapped without
   // tearing down the map, which would drop every pin and reset the viewport.
@@ -664,7 +1179,7 @@ export default function MapCanvas({
 
     const report = () => {
       const center = instance.getCenter()
-      onViewChange({ lat: center.lat, lng: center.lng })
+      onViewChange({ lat: center.lat, lng: center.lng, zoom: instance.getZoom() })
     }
     instance.on('moveend', report)
     report()
@@ -818,19 +1333,43 @@ export default function MapCanvas({
 
     for (const layer of wanted) {
       const source = `x-${layer.id}`
-      const existing = instance.getSource(source) as maplibregl.GeoJSONSource | undefined
+      const existing = instance.getSource(source)
       if (existing) {
-        existing.setData(layer.data)
+        // Only a GeoJSON source can be handed new data. A tiled one is read
+        // from the archive and has nothing to be given.
+        if (!layer.tiles) (existing as maplibregl.GeoJSONSource).setData(layer.data as GeoJSON.FeatureCollection)
       } else {
-        instance.addSource(source, { type: 'geojson', data: layer.data })
+        if (layer.tiles) {
+          registerPmtiles()
+          instance.addSource(source, {
+            type: 'vector',
+            url: `pmtiles://${layer.tiles}`,
+            ...(layer.minzoom == null ? {} : { minzoom: layer.minzoom }),
+            // Past this MapLibre overzooms the deepest tile, which is what
+            // should happen: the geometry is already as detailed as it gets.
+            ...(layer.maxzoom == null ? {} : { maxzoom: layer.maxzoom }),
+          })
+        } else {
+          instance.addSource(source, { type: 'geojson', data: layer.data as GeoJSON.FeatureCollection })
+        }
+        /*
+         * `source-layer` names the layer inside a tile archive, and is the
+         * single easiest thing to get wrong here: a vector layer without it,
+         * or a GeoJSON layer with it, draws nothing and reports no error. An
+         * empty map with a clean console is the whole symptom.
+         */
+        const within = layer.tiles && layer.sourceLayer ? { 'source-layer': layer.sourceLayer } : {}
+        // Below the zoom the archive carries, a tiled layer has nothing to
+        // draw and should not ask for tiles that do not exist.
+        const from = layer.tiles && layer.minzoom != null ? { minzoom: layer.minzoom } : {}
         const specs: maplibregl.LayerSpecification[] =
           layer.kind === 'point'
-            ? [{ id: `x-${layer.id}-point`, type: 'circle', source, paint: {} }]
+            ? [{ id: `x-${layer.id}-point`, type: 'circle', source, ...within, ...from, paint: {} }]
             : layer.kind === 'line'
-              ? [{ id: `x-${layer.id}-line`, type: 'line', source, paint: {} }]
+              ? [{ id: `x-${layer.id}-line`, type: 'line', source, ...within, ...from, paint: {} }]
               : [
-                  { id: `x-${layer.id}-fill`, type: 'fill', source, paint: {} },
-                  { id: `x-${layer.id}-line`, type: 'line', source, paint: {} },
+                  { id: `x-${layer.id}-fill`, type: 'fill', source, ...within, ...from, paint: {} },
+                  { id: `x-${layer.id}-line`, type: 'line', source, ...within, ...from, paint: {} },
                 ]
         for (const spec of specs) instance.addLayer(spec, insertBefore(spec.id))
       }
@@ -898,20 +1437,13 @@ export default function MapCanvas({
           if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
         }
         const props = event.features?.[0]?.properties ?? {}
-        const order = layer.fields?.length ? layer.fields : Object.keys(props)
-        const rows = order
-          .filter((field) => props[field] != null && props[field] !== '')
-          .map(
-            (field) =>
-              `<div><span style="color:#6b7280">${escapeHtml(field)}: </span>${escapeHtml(
-                String(props[field]),
-              )}</div>`,
-          )
-        if (!rows.length) return
-        new maplibregl.Popup({ closeButton: true, maxWidth: '260px' })
-          .setLngLat(event.lngLat)
-          .setHTML(`<div style="font-size:12px;line-height:1.45">${rows.join('')}</div>`)
-          .addTo(instance)
+        if (onExtraPick) {
+          onExtraPick({ layerId: layer.id, properties: props })
+          return
+        }
+        // No handler, nothing to say. The panel is the only place a
+        // feature's fields are ever read out now; a popup here would be a
+        // second, worse copy of it that covers the map while it does so.
       }
       for (const suffix of ['fill', 'line', 'point']) {
         const id = `x-${layer.id}-${suffix}`
@@ -924,7 +1456,7 @@ export default function MapCanvas({
     return () => {
       for (const [id, open] of handlers) instance.off('click', id, open)
     }
-  }, [loaded, extras, onMapClick])
+  }, [loaded, extras, onMapClick, onExtraPick])
 
   // A tract says what it is worth saying — but never while a map click is
   // armed for dropping a pin or placing a zone, when the click must fall
@@ -949,16 +1481,18 @@ export default function MapCanvas({
       if (instance.getLayer('parcel-fill')) {
         if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
       }
-      new maplibregl.Popup({ closeButton: true, maxWidth: '240px' })
-        .setLngLat(event.lngLat)
-        .setHTML(String(info))
-        .addTo(instance)
+      // Into the panel with everything else. A tract is context, and context
+      // belongs beside the subject rather than floating over it.
+      onExtraPick?.({
+        layerId: 'census-tract',
+        properties: event.features?.[0]?.properties ?? {},
+      })
     }
     instance.on('click', 'shading-fill', open)
     return () => {
       instance.off('click', 'shading-fill', open)
     }
-  }, [loaded, onMapClick, choropleth])
+  }, [loaded, onMapClick, choropleth, onExtraPick])
 
   // Start and end flags for the tour.
   useEffect(() => {
@@ -1184,6 +1718,10 @@ export default function MapCanvas({
         type: 'fill',
         source: PARCEL_SOURCE,
         'source-layer': sourceLayer,
+        // Not merely hidden: a layer with a minzoom stops the tiles under it
+        // being requested at all, so this is a download that never happens as
+        // well as geometry that never reaches the GPU.
+        minzoom: PARCEL_MIN_ZOOM,
         paint: { 'fill-color': PARCEL_OTHER, 'fill-opacity': 0.34 },
       },
       below,
@@ -1194,6 +1732,7 @@ export default function MapCanvas({
         type: 'line',
         source: PARCEL_SOURCE,
         'source-layer': sourceLayer,
+        minzoom: PARCEL_MIN_ZOOM,
         paint: {
           'line-color': PARCEL_OTHER,
           'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.4, 15, 0.9, 18, 1.6],
@@ -1256,21 +1795,40 @@ export default function MapCanvas({
     // A selected parcel keeps its own outline rather than changing colour, so
     // the land-use reading of the map never shifts when something is picked.
     instance.setPaintProperty('parcel-fill', 'fill-color', color)
+    const washOff = parcels.fillVisible === false
     instance.setPaintProperty('parcel-fill', 'fill-opacity', [
       'case',
       ['boolean', ['feature-state', 'sel'], false],
       0.7,
       ['boolean', ['feature-state', 'hover'], false],
-      Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
-      parcels.opacity ?? 0.34,
+      washOff ? 0.28 : Math.min((parcels.opacity ?? 0.34) + 0.24, 1),
+      /*
+       * Not zero, even though this reads as "no fill".
+       *
+       * A wholly transparent fill stops hit-testing, and the click target is
+       * the entire point of drawing every parcel. Two per cent is below what
+       * the eye resolves against any basemap — the outline is what you see —
+       * while still giving the renderer a surface to catch the click on.
+       */
+      washOff ? 0.02 : parcels.opacity ?? 0.34,
     ])
+    /*
+     * Outline-only draws in ink, not in land use.
+     *
+     * With the wash on, the line repeats the fill's colour because the two are
+     * one shape reading as one thing. With it off, the colour would be the
+     * only thing left carrying land use, and a map of thin coloured threads
+     * reads as noise. Ink says "here is a parcel" and nothing else, which is
+     * what an unshaded map is for.
+     */
+    instance.setPaintProperty('parcel-line', 'line-opacity', washOff ? 0.85 : 0.5)
     instance.setPaintProperty('parcel-line', 'line-color', [
       'case',
       ['boolean', ['feature-state', 'sel'], false],
       '#C4A6FF',
-      color,
+      washOff ? PARCEL_INK : color,
     ])
-  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp])
+  }, [loaded, parcels?.colorBy, parcels?.valueBreaks, parcels?.url, parcels?.opacity, parcels?.valueRamp, parcels?.fillVisible])
 
   // Which parcels are shown. One filter expression for the whole layer beats
   // restyling features one at a time.
@@ -1361,10 +1919,40 @@ export default function MapCanvas({
     }
   }, [loaded, parcels?.selectedParcelId, parcels?.url, parcels?.sourceLayer])
 
-  // Go where the caller says, when the caller says it changed.
+  /*
+   * Go where the caller says, when the caller says it changed.
+   *
+   * With one exception, and it is the whole of "the map stays put when I
+   * refresh": the first thing a market does is ask for its own centre, which
+   * would throw away the position the URL just restored. A hash that was
+   * already there is the more specific instruction, so the first ask is
+   * skipped and every later one — switching markets, opening a saved view —
+   * still moves the map.
+   *
+   * But only when the two are talking about the same place. The hash survives
+   * everything — a reload, a hard reload, closing the tab and opening the
+   * link again — so a position left over from another county strands the map
+   * a thousand miles from the parcels it just loaded, and every reload puts
+   * it back. That looks exactly like a map that will not load, and it cannot
+   * be cleared by reloading, which is the worst property a bug can have.
+   *
+   * So the restore has to agree with the market. If it does not, the market
+   * wins: it is the thing the person just chose, and the hash is a memory of
+   * something else.
+   */
   useEffect(() => {
     const instance = map.current
     if (!instance || !loaded || !view) return
+    if (!viewApplied.current) {
+      viewApplied.current = true
+      if (hadHash.current) {
+        const here = instance.getCenter()
+        const stray =
+          Math.abs(here.lng - view.center[0]) > SAME_MARKET_DEGREES ||
+          Math.abs(here.lat - view.center[1]) > SAME_MARKET_DEGREES
+        if (!stray) return
+      }
+    }
     instance.jumpTo({ center: view.center, zoom: view.zoom })
   }, [loaded, view?.key])
 
@@ -1431,45 +2019,105 @@ export default function MapCanvas({
     }
   }
 
+  /*
+   * The basic tier takes over the whole component, not a corner of it.
+   *
+   * Everything above this line — recovery, budgets, beacons — exists to keep
+   * the WebGL map alive. When the machine cannot run one, none of it
+   * applies, and rendering the full chrome around a dead canvas is exactly
+   * the grey rectangle this replaces. The panels around the map are
+   * untouched either way: they were always server-driven.
+   */
+  if (lite) {
+    return (
+      <LiteMap
+        tiles={active}
+        properties={properties}
+        stages={stages}
+        view={view}
+        parcelsUrl={parcels?.url ?? null}
+        selectedParcelId={parcels?.selectedParcelId ?? null}
+        onSelect={onSelect}
+        onSelectParcel={parcels?.onSelectParcel}
+        onViewChange={onViewChange}
+        onExit={exitLite}
+      />
+    )
+  }
+
   return (
     <div className={`relative h-full w-full ${active.darkNative ? 'map-dark' : ''}`}>
-      <div ref={container} className={className} role="application" aria-label="Property map" />
+      <div key={attempt} ref={container} className={className} role="application" aria-label="Property map" />
 
       {/*
         * Said out loud rather than silently swapped. A basemap changing under
         * the viewer is confusing; a blank map with no explanation is worse.
         */}
       {engineNote ? (
-        <div className="absolute inset-0 z-[550] flex items-center justify-center">
-          <div className="w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
+        /*
+         * pointer-events-none on the shield, restored on the card. The shield
+         * spans the whole map area and sits above the tool rail, so left
+         * interactive it silently ate every click and scroll on the layers
+         * panel and the account menu — "the side menu will not scroll" was
+         * this overlay, not the menu.
+         */
+        <div className="pointer-events-none absolute inset-0 z-[550] flex items-center justify-center">
+          <div className="pointer-events-auto w-80 max-w-[90%] rounded-lg border border-line bg-surface/97 p-4 text-center shadow-xl backdrop-blur">
             <p className="text-sm font-semibold text-ink">The map did not start</p>
             <p className="mt-1 text-xs leading-snug text-body">{engineNote}</p>
-            <button
-              type="button"
-              className="mt-3 rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
-              onClick={() => {
-                try {
-                  window.localStorage.removeItem(HOME_STORAGE_KEY)
-                  window.localStorage.removeItem(BASEMAP_STORAGE_KEY)
-                } catch {
-                  /* storage may be blocked; the reload alone can still help */
-                }
-                window.location.reload()
-              }}
-            >
-              Reset map settings and reload
-            </button>
+            {/*
+              * Two buttons, cheapest first. Rebuilding the engine keeps the
+              * work already on screen — the market, the filters, the pins —
+              * where a reload throws all of it away, and it is what actually
+              * cures a lost graphics context. The reset stays for the case
+              * where a stored view or basemap is the thing at fault.
+              */}
+            <div className="mt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                className="rounded-md bg-ink px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+                onClick={() => {
+                  setEngineNote(null)
+                  startupError.current = null
+                  autoTries.current = 0
+                  setAttempt((n) => n + 1)
+                }}
+              >
+                Try again
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
+                onClick={() => {
+                  try {
+                    window.localStorage.removeItem(HOME_STORAGE_KEY)
+                    window.localStorage.removeItem(BASEMAP_STORAGE_KEY)
+                  } catch {
+                    /* storage may be blocked; the reload alone can still help */
+                  }
+                  window.location.reload()
+                }}
+              >
+                Reset map settings and reload
+              </button>
+            </div>
           </div>
         </div>
       ) : null}
 
-      {basemapNote || parcelNote ? (
+      {basemapNote || parcelNote || (parcels && tooFarOut) ? (
         <div
           role="status"
           className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] space-y-1 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
         >
           {basemapNote ? <p>{basemapNote}</p> : null}
           {parcelNote ? <p>{parcelNote}</p> : null}
+          {/* Otherwise a county with no outlines on it reads as missing data,
+              which is exactly the wrong conclusion — the data is there and the
+              panel is already searching all of it. */}
+          {parcels && tooFarOut && !parcelNote ? (
+            <p>Zoom in to see parcel outlines. Searching and filtering already cover the whole county.</p>
+          ) : null}
         </div>
       ) : null}
 

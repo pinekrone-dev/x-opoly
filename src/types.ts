@@ -9,6 +9,58 @@ export interface Zone {
   color: string
 }
 
+/**
+ * A sale comparable the broker captured themselves and imported.
+ *
+ * Every field is nullable because a listing placard is not a form: one shows
+ * a cap rate and no square footage, the next the reverse, and a comp missing
+ * half its columns is still worth having on the map.
+ */
+export interface Comp {
+  id: string
+  market: string | null
+  address: string | null
+  name: string | null
+  priceStr: string | null
+  price: number | null
+  saleLease: string | null
+  propType: string | null
+  sqft: number | null
+  acres: number | null
+  units: number | null
+  capRate: number | null
+  yearBuilt: number | null
+  pricePerSf: number | null
+  pricePerAcre: number | null
+  pricePerUnit: number | null
+  url: string | null
+  source: string | null
+  scrapedAt: string | null
+  lat: number | null
+  lng: number | null
+  /** null until the address has been looked up; then 'geocoded' or 'failed'. */
+  placed: string | null
+  createdAt: string
+}
+
+/**
+ * A saved map view: one market, configured, under a name.
+ *
+ * `state` is deliberately untyped here. It holds whatever the map needs to
+ * restore itself, that set grows every time the map gains a control, and a
+ * type that had to be widened for each one would be a tax on adding them.
+ * Applying a view reads the keys it knows and ignores the rest, so an old view
+ * still opens after the map has changed.
+ */
+export interface MapView {
+  id: string
+  market: string
+  name: string
+  state: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
 /** A one-time signup link for a colleague, shown on the Share tab. */
 export interface Invite {
   id: string
@@ -148,9 +200,13 @@ export interface Survey {
     url: string | null
     /** Shade census block groups on the client's map. */
     showDemographics?: boolean
+    /** Which metric shades them — the broker's choice, not always population. */
+    metric?: string
     /** Print a QR directions code on each tour book stop. */
     showQr?: boolean
   }
+  /** The tour book's style: the preset's six levers. */
+  book: BookStyle
   tour: {
     startTime: string
     stopMinutes: number
@@ -160,6 +216,16 @@ export interface Survey {
   pinCount?: number
   createdAt: string
   updatedAt: string
+}
+
+/** How the tour book dresses: which cover, which accent, what rides along. */
+export interface BookStyle {
+  cover: 'navy' | 'light'
+  accent: string
+  showSchedule: boolean
+  showDetails: boolean
+  showQr: boolean
+  intro: string | null
 }
 
 /** Where a tour begins or ends — an address, not necessarily one of the sites. */
@@ -284,6 +350,8 @@ export interface SharePayload {
     zoom: number
     expiresAt: string | null
     showDemographics?: boolean
+    /** The metric the broker chose to shade by, carried to the client's map. */
+    metric?: string
   }
   stages?: { id: string; name: string; color: string }[]
   zones?: Zone[]
@@ -405,3 +473,61 @@ export interface Deal {
 }
 
 export type CrmRecord = Company | Person | Place | Deal
+
+/*
+ * The county, as the server describes it.
+ *
+ * These replace the attribute index the browser used to download whole — 18.7
+ * MB compressed for Travis County, and every visitor paid it before the first
+ * filter could run. `ready` is the switch: false means this market has not
+ * been published into the search store yet, and the GIS falls back to the
+ * download.
+ */
+
+/** One parcel, with whatever columns its county publishes. */
+export type ParcelRow = Record<string, string | number | null | number[]> & {
+  id: string | number
+  bb?: number[] | null
+}
+
+export interface MarketStatus {
+  ready: boolean
+  market: string
+  /** Present only when ready. */
+  count?: number
+  total?: number
+  acreage?: number
+  /** The columns this market publishes, which is what the panel can offer. */
+  keys?: string[]
+  assets?: { value: string; count: number }[]
+  /** Quintile value breaks for the choropleth, computed at publish time. */
+  breaks?: number[]
+  builtAt?: string | null
+}
+
+export interface ParcelQuery {
+  query?: string
+  assets?: string[]
+  valueMin?: number | null
+  valueMax?: number | null
+  acresMin?: number | null
+  acresMax?: number | null
+  owner?: { kind: 'p' | 'b'; id: string } | null
+}
+
+export interface ParcelSearch {
+  ready: boolean
+  market: string
+  /** How many matched, which is not how many came back. */
+  count: number
+  total: number
+  acreage: number
+  byAsset: [string, number][]
+  rows: ParcelRow[]
+  /** The ids to highlight, or null when nothing is filtered and all are drawn. */
+  ids: string[] | null
+  /** True when the match was larger than one response should carry. */
+  truncated: boolean
+  offset: number
+  limit: number
+}

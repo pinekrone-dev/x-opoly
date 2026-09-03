@@ -232,3 +232,83 @@ export async function extractWithProvider(provider, input, env = {}, deps = {}) 
   if (provider === 'grok') return grokExtract(input, env, deps)
   throw new FlyerExtractionError(`Unknown AI provider "${provider}".`)
 }
+
+
+// --- A small text-in, JSON-out ask ----------------------------------------
+
+/**
+ * One question, one JSON answer, on whichever provider this deployment has.
+ *
+ * The flyer path above carries documents and images; this carries neither.
+ * It exists for the little jobs — restyling the tour book from a sentence —
+ * where the whole exchange is a system prompt, a user message, and a JSON
+ * object back. All three providers are called over plain fetch, so it runs
+ * unchanged on Workers.
+ */
+export async function askJson(provider, { system, user }, env = {}, { fetchImpl = fetch } = {}) {
+  if (provider === 'anthropic') {
+    const response = await fetchImpl('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        // The small model on purpose: this is a six-key restyle, not a read.
+        model: env.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001',
+        max_tokens: 500,
+        system,
+        messages: [{ role: 'user', content: user }],
+      }),
+    })
+    const body = await readJson(response, 'Anthropic')
+    const answer = (body?.content ?? []).map((block) => block.text ?? '').join('')
+    return parseModelJson(answer, 'Anthropic')
+  }
+
+  if (provider === 'gemini') {
+    const model = env.GEMINI_MODEL || 'gemini-flash-latest'
+    const response = await fetchImpl(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-goog-api-key': env.GEMINI_API_KEY || env.GOOGLE_API_KEY,
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents: [{ role: 'user', parts: [{ text: user }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0 },
+        }),
+      },
+    )
+    const body = await readJson(response, 'Gemini')
+    const answer = body?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? '').join('')
+    return parseModelJson(answer, 'Gemini')
+  }
+
+  if (provider === 'grok') {
+    const response = await fetchImpl('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${env.XAI_API_KEY || env.GROK_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: env.GROK_MODEL || 'grok-4',
+        temperature: 0,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      }),
+    })
+    const body = await readJson(response, 'Grok')
+    return parseModelJson(body?.choices?.[0]?.message?.content, 'Grok')
+  }
+
+  throw new FlyerExtractionError(`Unknown AI provider "${provider}".`)
+}

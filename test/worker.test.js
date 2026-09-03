@@ -72,6 +72,35 @@ describe('the Cloudflare Worker', () => {
     }
   })
 
+  /*
+   * Who answers the catalogue.
+   *
+   * The Worker used to hand only /api/ to the app and everything else to the
+   * static assets, which serve index.html for anything they do not recognise.
+   * So the catalogue route existed, passed its own tests against the Node
+   * server — which hands every path to the same app — and on Cloudflare
+   * returned the HTML shell with a 200 on it. The browser parsed a web page
+   * as a market list, found no counties, and drew no map.
+   *
+   * The two runtimes disagreeing about who answers a path is a failure only
+   * reachable here, so it is pinned here.
+   */
+  test('the catalogue is answered by the app, not by the static assets', async () => {
+    const env = await workerEnv()
+    const { body } = await call(env, '/catalog/markets.json')
+    assert.doesNotMatch(
+      String(body ?? ''),
+      /<!doctype html>/i,
+      'the asset binding answered a path the app owns',
+    )
+  })
+
+  test('a catalogue name the pipeline could not publish is refused', async () => {
+    const env = await workerEnv()
+    const { status } = await call(env, '/catalog/austin-tx/secrets.json')
+    assert.equal(status, 404)
+  })
+
   test('runs a whole survey through D1', async () => {
     const env = await workerEnv()
 
