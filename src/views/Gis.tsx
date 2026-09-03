@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
+import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import GisRail, {
   CheckList,
@@ -934,6 +935,13 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
 
   const [rail, setRail] = useState<RailTab | null>('layers')
   /*
+   * The right panel: always present, collapsible, two tabs. Opens on the
+   * legend, because that is the question a fresh map asks first, and turns
+   * to the record the moment something is clicked.
+   */
+  const [side, setSide] = useState<SideTab>('legend')
+  const [sideOpen, setSideOpen] = useState(true)
+  /*
    * The parcel outlines are on from the start; everything else is off.
    *
    * A parcel map that opens with no parcels reads as broken, and the outline
@@ -1027,6 +1035,14 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
   /** A clicked layer feature, shown in the right-hand card. */
   const [featurePick, setFeaturePick] = useState<{ layerId: string; properties: Record<string, unknown> } | null>(null)
+  // A click is a question about a thing, so the answer comes forward: the
+  // right panel opens on Data whenever a parcel or a layer feature is picked.
+  useEffect(() => {
+    if (selected != null || featurePick) {
+      setSide('data')
+      setSideOpen(true)
+    }
+  }, [selected, featurePick])
   const [censusOpacity, setCensusOpacity] = useState(0.45)
   const [censusRamp, setCensusRamp] = useState('violet')
   const [parcelRamp, setParcelRamp] = useState('violet')
@@ -2810,7 +2826,10 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
     // one is open. One variable, read by the CSS for both map engines.
     <div
       className="gis-map relative h-full w-full"
-      style={{ ['--map-inset-left' as string]: rail ? '24.25rem' : '4.25rem' }}
+      style={{
+        ['--map-inset-left' as string]: rail ? '24.25rem' : '4.25rem',
+        ['--map-inset-right' as string]: sideOpen ? '24rem' : '2.5rem',
+      }}
     >
       {/*
         The map is not waiting for anything.
@@ -3320,32 +3339,18 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
               </div>
             )}
 
-            {/* The legend says what the colours mean, and says plainly when a
-                county publishes no land use to colour by. */}
-            <div className="border-t border-line pt-2">
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-                {effectiveColorBy === 'value' ? meta?.valueLabel || 'Value' : 'Land use'}
-              </p>
-              {effectiveColorBy === 'value' ? (
-                <>
-                  <div className="flex h-2 overflow-hidden rounded">
-                    {rampOf(parcelRamp).map((hue) => (
-                      <i key={hue} className="flex-1" style={{ background: hue }} />
-                    ))}
-                  </div>
-                  <p className="mt-1 text-[11px] text-muted">Low to high, by seventh.</p>
-                </>
-              ) : (
-                <ul className="space-y-1">
-                  {LEGEND.map(([label, hue]) => (
-                    <li key={label} className="flex items-center gap-2 text-xs text-body">
-                      <i className="h-2.5 w-2.5 rounded-sm" style={{ background: hue }} />
-                      {label}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            {/* What the colours mean lives in the right panel's Legend tab,
+                beside the map it describes, rather than down here. */}
+            <button
+              type="button"
+              className="w-full rounded-md border border-dashed border-line px-2 py-1.5 text-left text-[11px] text-muted hover:border-brand hover:text-body"
+              onClick={() => {
+                setSide('legend')
+                setSideOpen(true)
+              }}
+            >
+              Legend: in the panel on the right →
+            </button>
 
             {meta?.attribution && (
               <p
@@ -3597,24 +3602,92 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         )}
       </GisRail>
 
-      {choropleth && (
-        <div className="absolute bottom-9 left-1/2 z-[500] w-60 -translate-x-1/2 rounded-lg border border-line bg-surface/95 p-2.5 shadow-lg backdrop-blur">
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-            {choropleth.label}
-          </p>
-          <div className="mt-1.5 flex h-2 overflow-hidden rounded-full" aria-hidden>
-            {rampOf(censusRamp).map((hue) => (
-              <i key={hue} className="flex-1" style={{ background: hue }} />
-            ))}
-          </div>
-          <div className="mt-0.5 flex justify-between text-[10px] text-faint">
-            <span>{censusValue(choropleth.scale.min, choropleth.kind)}</span>
-            <span className="text-body">{censusValue(choropleth.scale.median, choropleth.kind)} med</span>
-            <span>{censusValue(choropleth.scale.max, choropleth.kind)}</span>
-          </div>
-          <p className="mt-1 text-[10px] leading-snug text-faint">
-            By census tract, shaded in sevenths of this market's range.
-          </p>
+      {/*
+        The right panel. Data is the record of whatever was clicked — the
+        county's parcel, or a layer feature on its own — and Legend is what
+        every colour on the map means: the parcel wash, the census shading,
+        and each layer that is switched on.
+      */}
+      <GisSide open={sideOpen} tab={side} onTab={setSide} onToggle={() => setSideOpen((open) => !open)}>
+      {side === 'legend' ? (
+        <div className="h-full overflow-y-auto px-4 py-3">
+          <PanelSection title={effectiveColorBy === 'value' ? meta?.valueLabel || 'Value' : 'Land use'}>
+            {effectiveColorBy === 'value' ? (
+              <>
+                <div className="flex h-2 overflow-hidden rounded">
+                  {rampOf(parcelRamp).map((hue) => (
+                    <i key={hue} className="flex-1" style={{ background: hue }} />
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-muted">Low to high, by seventh.</p>
+              </>
+            ) : (
+              <ul className="space-y-1">
+                {LEGEND.map(([label, hue]) => (
+                  <li key={label} className="flex items-center gap-2 text-xs text-body">
+                    <i className="h-2.5 w-2.5 rounded-sm" style={{ background: hue }} />
+                    {label}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </PanelSection>
+
+          {choropleth && (
+            <PanelSection title={choropleth.label}>
+              <div className="flex h-2 overflow-hidden rounded-full" aria-hidden>
+                {rampOf(censusRamp).map((hue) => (
+                  <i key={hue} className="flex-1" style={{ background: hue }} />
+                ))}
+              </div>
+              <div className="mt-0.5 flex justify-between text-[10px] text-faint">
+                <span>{censusValue(choropleth.scale.min, choropleth.kind)}</span>
+                <span className="text-body">{censusValue(choropleth.scale.median, choropleth.kind)} med</span>
+                <span>{censusValue(choropleth.scale.max, choropleth.kind)}</span>
+              </div>
+              <p className="mt-1 text-[10px] leading-snug text-faint">
+                By census tract, shaded in sevenths of this market's range.
+              </p>
+            </PanelSection>
+          )}
+
+          {/* Every layer that is on, with the colour it draws in, so a dot
+              or a wash on the map can be traced back to its card. */}
+          {shownLayers.some((layer) => layerOn[layer.id]) && (
+            <PanelSection title="Layers on">
+              <ul className="space-y-1">
+                {shownLayers
+                  .filter((layer) => layerOn[layer.id])
+                  .map((layer) => {
+                    const hue = layerStyle[layer.id]?.color ?? layer.color
+                    return (
+                      <li key={layer.id} className="flex items-center gap-2 text-xs text-body">
+                        <i
+                          className={layer.kind === 'point' ? 'h-2.5 w-2.5 rounded-full border border-white' : 'h-2.5 w-2.5 rounded-sm'}
+                          style={{ background: hue }}
+                        />
+                        {layer.label}
+                        {layer.kind === 'point' ? <span className="text-faint">· points</span> : null}
+                      </li>
+                    )
+                  })}
+              </ul>
+            </PanelSection>
+          )}
+
+          {meta?.attribution && (
+            <p
+              className="border-t border-line pt-2 text-[11px] leading-snug text-faint"
+              dangerouslySetInnerHTML={{ __html: meta.attribution }}
+            />
+          )}
+        </div>
+      ) : (
+      <>
+      {selected == null && !featurePick && (
+        <div className="px-4 py-6 text-center text-xs text-muted">
+          <p>Click a parcel for the county's record.</p>
+          <p className="mt-1">Click a dot or an area from a layer that is on for its record.</p>
         </div>
       )}
 
@@ -3644,6 +3717,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
         if (selected == null) {
           return (
             <ParcelPanel
+              embedded
               title={label}
               subtitle="Layer record"
               groups={[]}
@@ -3664,6 +3738,7 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           the first click — there is no summary card in between any more. */}
       {selected != null && (
         <ParcelPanel
+          embedded
           title={parcel ? String(parcel.ad || `Parcel ${parcel.gid ?? selected}`) : 'Parcel'}
           subtitle={
             parcel
@@ -3854,6 +3929,9 @@ export default function Gis({ tiles, basemaps, slug }: { tiles: TileConfig; base
           )}
         </ParcelPanel>
       )}
+      </>
+      )}
+      </GisSide>
     </div>
   )
 }
