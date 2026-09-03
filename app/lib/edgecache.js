@@ -68,7 +68,18 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
   try {
     const held = await cache.match(key)
     if (held) {
-      const answer = new Response(held.body, held)
+      /*
+       * A byte range comes back as the 200 it was stored as and is turned
+       * back into the 206 it was: the edge refuses to keep a partial
+       * response, so the range's bytes are kept whole under a key that
+       * names the range, with the content-range set aside in a header of
+       * our own.
+       */
+      const span = held.headers.get('x-edge-range')
+      const headers = new Headers(held.headers)
+      headers.delete('x-edge-range')
+      if (span) headers.set('content-range', span)
+      const answer = new Response(held.body, { status: span ? 206 : held.status, headers })
       answer.headers.set('x-edge-cache', 'hit')
       return answer
     }
@@ -80,16 +91,30 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
   const keep = cacheable ? cacheable(fresh) : status === 200 || status === 206
   if (!keep) return fresh
   const [toUser, toCache] = fresh.body ? fresh.body.tee() : [null, null]
-  const stored = new Response(toCache, { status, headers: new Headers(fresh.headers) })
+  const stored = new Response(toCache, { status: 200, headers: new Headers(fresh.headers) })
   stored.headers.set('cache-control', cacheControl(ttl))
   stored.headers.delete('set-cookie')
+  if (status === 206) {
+    const span = fresh.headers.get('content-range')
+    if (span) stored.headers.set('x-edge-range', span)
+    stored.headers.delete('content-range')
+  }
   const answer = new Response(toUser, { status, headers: new Headers(fresh.headers) })
   answer.headers.set('x-edge-cache', 'miss')
   const put = cache.put(key, stored).catch(() => {})
+  // Handed to the runtime to finish after the answer is sent, where that is
+  // possible; awaited otherwise, since a write nobody waits for is a write
+  // the runtime may drop when the request ends.
+  let handed = false
   try {
-    c.executionCtx?.waitUntil?.(put)
+    const ctx = c.executionCtx
+    if (ctx && typeof ctx.waitUntil === 'function') {
+      ctx.waitUntil(put)
+      handed = true
+    }
   } catch {
-    /* no execution context to hand the write to; it still completes on its own */
+    /* no execution context here */
   }
+  if (!handed) await put
   return answer
 }

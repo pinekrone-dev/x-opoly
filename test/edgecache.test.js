@@ -90,7 +90,15 @@ describe('answers kept at the edge', () => {
     const stored = caches.held.get('https://x.test/__edge/catalog/austin-tx/parcels.pmtiles?range=bytes%3D0-4')
     assert.ok(stored, 'stored under the range')
     assert.equal(stored.headers.get('set-cookie'), null)
-    assert.equal(stored.status, 206)
+    assert.equal(stored.status, 200, 'the edge refuses a partial response, so the bytes are kept as a whole one')
+    assert.equal(stored.headers.get('x-edge-range'), 'bytes 0-4/100')
+    assert.equal(stored.headers.get('content-range'), null)
+    const again = await edgeCached(c, 'catalog/austin-tx/parcels.pmtiles', 60, produce, { params: { range: 'bytes=0-4' } })
+    assert.equal(again.status, 206, 'and handed back as the range it was')
+    assert.equal(again.headers.get('content-range'), 'bytes 0-4/100')
+    assert.equal(again.headers.get('x-edge-range'), null)
+    assert.equal(again.headers.get('x-edge-cache'), 'hit')
+    assert.equal(await again.text(), 'bytes')
   })
 
   test('without a cache, every call produces', async () => {
