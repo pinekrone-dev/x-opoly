@@ -27,7 +27,8 @@ export default function WorkspaceNav({
   onAccountChange,
   onSignedOut,
 }: {
-  current: 'gis' | 'crm' | 'surveys'
+  /** Which tab is lit; `settings` lights none, the page being off the tab row. */
+  current: 'gis' | 'crm' | 'surveys' | 'settings'
   /** Live counts per CRM segment, when the caller has them. */
   counts?: Record<string, number>
   surveyCount?: number
