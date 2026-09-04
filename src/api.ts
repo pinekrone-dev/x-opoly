@@ -172,6 +172,12 @@ export const api = {
     /** Copies a known building into a survey and onto that survey's tour. */
     sendPlace: (placeId: string, input: { surveyId: string }) =>
       request<{ property: Property }>(`/api/crm/places/${placeId}/send`, json(input)),
+    /**
+     * Several buildings into one survey, each onto its tour. `missing` names
+     * any id that was not one of the team's places.
+     */
+    sendPlaces: (surveyId: string, placeIds: string[]) =>
+      request<{ properties: Property[]; missing: string[] }>(`/api/surveys/${surveyId}/places`, json({ placeIds })),
   },
 
   /** A parcel hunt in plain English, answered as the GIS view's own filters. */
