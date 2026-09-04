@@ -137,7 +137,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
             <BrandMark />
           </button>
           <button type="button" className="btn-secondary text-xs" onClick={() => navigate(`/${spec.segment}`)}>
-            All {spec.label.toLowerCase()}
+            Return to CRM
           </button>
         </div>
       </header>
