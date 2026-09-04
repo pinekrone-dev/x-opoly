@@ -331,6 +331,39 @@ const CATEGORY_COLORS = [
 /** How many distinct values are still worth their own colour. */
 const CATEGORY_LIMIT = 12
 
+/**
+ * The legend's rows: value, colour, count.
+ *
+ * A legend describes what is drawn. With the layer narrowed by its pivot,
+ * the rows are only the values still on the map, and the counts are the
+ * districts still on it, whichever field is doing the colouring: the
+ * codes ticked, the categories those codes fall in, or the cities they
+ * were ticked under.
+ */
+function legendRows(
+  layer: PublishedLayer,
+  paint: { field: string; colors: Record<string, string>; counts: Record<string, number> },
+  picked: string[] | undefined,
+): [string, string, number | undefined][] {
+  if (!picked || !layer.pivot?.length) {
+    return Object.entries(paint.colors).map(([value, hue]) => [value, hue, paint.counts[value]])
+  }
+  const keep = new Set(picked)
+  const counts: Record<string, number> = {}
+  for (const city of layer.pivot) {
+    for (const cat of city.categories) {
+      for (const [code, count] of cat.codes) {
+        if (!keep.has(`${city.city}\u001f${code}`)) continue
+        const value = paint.field === 'City' ? city.city : paint.field === 'Category' ? cat.category : code
+        counts[value] = (counts[value] ?? 0) + count
+      }
+    }
+  }
+  return Object.entries(paint.colors)
+    .filter(([value]) => value in counts)
+    .map(([value, hue]) => [value, hue, counts[value]])
+}
+
 const rampOf = (id: string) => RAMPS.find((r) => r.id === id)?.colors ?? VALUE_RAMP
 
 /** A percentage slider for a layer's opacity. The one control every layer has. */
@@ -3302,22 +3335,45 @@ export default function Gis({
                           }
                         >
                           <option value="">One colour</option>
-                          {(layerCategories[layer.id] ?? []).map((option) => (
-                            <option key={option.field} value={option.field}>
-                              {option.field} ({option.values.length})
-                            </option>
-                          ))}
+                          {(layerCategories[layer.id] ?? [])
+                            // A layer with a pivot narrows by city in its
+                            // filter; a colour per city on top of that is
+                            // a second answer to the same question.
+                            .filter((option) => !(layer.pivot?.length && option.field === 'City'))
+                            .map((option) => (
+                              <option key={option.field} value={option.field}>
+                                {option.field} ({option.values.length})
+                              </option>
+                            ))}
                         </select>
                       </div>
                     )}
 
                     {categoryPaint[layer.id] ? (
                       <div>
-                        <p className="mb-1 text-[11px] font-medium text-body">
-                          {categoryPaint[layer.id].field}
-                        </p>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium text-body">
+                            {categoryPaint[layer.id].field}
+                          </p>
+                          {layer.pivot?.length ? (
+                            <button
+                              type="button"
+                              onClick={() => setFiltering(layer.id)}
+                              className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] ${
+                                picked ? 'border-brand/40 bg-brand/5 text-ink' : 'border-line text-muted hover:text-ink'
+                              }`}
+                              aria-label={`Narrow ${layer.label.toLowerCase()} by city, category and code`}
+                              title="Narrow by city, category and code"
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                                <path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" />
+                              </svg>
+                              {picked ? 'Narrowed' : 'Narrow'}
+                            </button>
+                          ) : null}
+                        </div>
                         <ul className="max-h-64 space-y-0.5 overflow-y-auto pr-1">
-                          {Object.entries(categoryPaint[layer.id].colors).map(([value, hue]) => (
+                          {legendRows(layer, categoryPaint[layer.id], picked).map(([value, hue, count]) => (
                             <li key={value} className="flex items-center gap-1.5">
                               <span
                                 className="h-2.5 w-2.5 shrink-0 rounded-sm"
@@ -3325,7 +3381,7 @@ export default function Gis({
                               />
                               <span className="min-w-0 flex-1 truncate text-[11px] text-body">{value}</span>
                               <span className="shrink-0 text-[10px] tabular-nums text-faint">
-                                {categoryPaint[layer.id].counts[value]?.toLocaleString()}
+                                {count?.toLocaleString()}
                               </span>
                             </li>
                           ))}
