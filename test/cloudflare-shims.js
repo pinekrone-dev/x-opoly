@@ -66,16 +66,46 @@ export class R2Shim {
   }
 
   async put(key, bytes, options = {}) {
-    this.objects.set(key, { bytes: new Uint8Array(bytes), contentType: options.httpMetadata?.contentType })
+    // The etag changes with the bytes, as R2's does: a rebuilt archive is a
+    // new version, which is what the catalogue keys its ranges by.
+    const stored = new Uint8Array(bytes)
+    let hash = 0
+    for (const byte of stored) hash = (hash * 31 + byte) >>> 0
+    this.objects.set(key, {
+      bytes: stored,
+      contentType: options.httpMetadata?.contentType,
+      etag: `"${stored.byteLength}-${hash.toString(16)}"`,
+    })
   }
 
-  async get(key) {
+  async head(key) {
     const object = this.objects.get(key)
     if (!object) return null
+    return { key, size: object.bytes.byteLength, etag: object.etag, httpEtag: object.etag }
+  }
+
+  async get(key, options = {}) {
+    const object = this.objects.get(key)
+    if (!object) return null
+    const whole = object.bytes
+    let slice = whole
+    let range
+    if (options.range) {
+      const offset = options.range.offset ?? 0
+      const length = options.range.length ?? whole.byteLength - offset
+      slice = whole.subarray(offset, offset + length)
+      range = { offset, length: slice.byteLength }
+    }
     return {
+      key,
+      size: whole.byteLength,
+      etag: object.etag,
+      httpEtag: object.etag,
+      range,
       httpMetadata: { contentType: object.contentType },
+      body: new Blob([slice]).stream(),
       async arrayBuffer() {
-        return object.bytes.buffer.slice(object.bytes.byteOffset, object.bytes.byteOffset + object.bytes.byteLength)
+        return slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength)
       },
     }
   }
