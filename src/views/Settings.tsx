@@ -46,7 +46,9 @@ export default function Settings({
   // The same catalogue the map reads, filtered the same way: a market that
   // is not live cannot be chosen as the one to open on.
   useEffect(() => {
-    fetch(`${CATALOG}/markets.json`)
+    // Revalidated on every open, as the map does: a day-old copy hides a
+    // market that published this morning.
+    fetch(`${CATALOG}/markets.json`, { cache: 'no-cache' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d: { markets?: MarketEntry[] }) => setMarkets((d.markets ?? []).filter((m) => m.status === 'live')))
       .catch(() => setMarketsError(true))
