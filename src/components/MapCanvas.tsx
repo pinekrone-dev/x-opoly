@@ -331,6 +331,14 @@ export interface ExtraLayer {
    * this only paints what it is handed.
    */
   categories?: { field: string; colors: Record<string, string> } | null
+  /**
+   * Which features to draw, as a style filter, or null for all of them.
+   *
+   * Set on the layer rather than on the data so a tiled layer narrows
+   * without refetching: the tiles hold every district, and the filter
+   * decides which reach the screen.
+   */
+  filter?: maplibregl.FilterSpecification | null
 }
 
 /** Values come from other people's databases, so they are never markup. */
@@ -1441,6 +1449,9 @@ export default function MapCanvas({
         instance.setPaintProperty(line, 'line-color', paintColor as string)
         instance.setPaintProperty(line, 'line-width', layer.kind === 'line' ? 2.5 : 1)
         instance.setPaintProperty(line, 'line-opacity', Math.min(1, layer.opacity + 0.2))
+      }
+      for (const id of [fill, line, point]) {
+        if (instance.getLayer(id)) instance.setFilter(id, layer.filter ?? null)
       }
       if (instance.getLayer(point)) {
         instance.setPaintProperty(point, 'circle-color', paintColor as string)

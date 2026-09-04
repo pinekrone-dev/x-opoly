@@ -3,6 +3,8 @@ import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
+import LayerFilter, { type PivotCity } from '../components/LayerFilter'
+import type { FilterSpecification } from 'maplibre-gl'
 import GisRail, {
   CheckList,
   LAYER_ICONS,
@@ -232,6 +234,8 @@ interface PublishedLayer {
    * browser, every session.
    */
   categories?: CategoryOption[]
+  /** A zoning layer's city → category → code tree, for its filter. */
+  pivot?: PivotCity[]
   minzoom?: number
   maxzoom?: number
   count?: number
@@ -1013,6 +1017,13 @@ export default function Gis({
   const [layerData, setLayerData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
   const [layerStyle, setLayerStyle] = useState<Record<string, { color: string; opacity: number }>>({})
   const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
+  /*
+   * Which of a zoning layer's codes are drawn, per layer: the keys of the
+   * city-and-code pairs ticked in its filter, or nothing set for all of
+   * them. Kept as a list so a saved view can carry it.
+   */
+  const [layerFilter, setLayerFilter] = useState<Record<string, string[]>>({})
+  const [filtering, setFiltering] = useState<string | null>(null)
   /** Which field, if any, each layer is coloured by. '' means one colour. */
   const [layerColorBy, setLayerColorBy] = useState<Record<string, string>>({})
   /**
@@ -1141,6 +1152,8 @@ export default function Gis({
     setLayerOn({})
     setLayerData({})
     setLayerStyle({})
+    setLayerFilter({})
+    setFiltering(null)
     setLayerColorBy({})
     setError(null)
     catalogue(`${active}/meta.json`)
@@ -1620,8 +1633,17 @@ export default function Gis({
           categories: categoryPaint[layer.id]
             ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
             : null,
+          // The city and the code together: C-2 in Phoenix is not C-2 in
+          // Mesa, and the filter was ticked under one city.
+          filter: layerFilter[layer.id]
+            ? ([
+                'in',
+                ['concat', ['coalesce', ['get', 'City'], ''], '\u001f', ['coalesce', ['to-string', ['get', 'Zoning']], '']],
+                ['literal', layerFilter[layer.id]],
+              ] as FilterSpecification)
+            : null,
         })),
-    [shownLayers, layerOn, shownData, layerStyle, categoryPaint, active],
+    [shownLayers, layerOn, shownData, layerStyle, categoryPaint, layerFilter, active],
   )
 
   /*
@@ -2418,6 +2440,7 @@ export default function Gis({
       layerOn,
       layerStyle,
       layerColorBy,
+      layerFilter,
       // The filters are as much a part of a view as the colours: "industrial
       // over five acres" is the view, and the shading is how it reads.
       query,
@@ -2463,6 +2486,9 @@ export default function Gis({
     if (st.layerOn && typeof st.layerOn === 'object') setLayerOn(st.layerOn as Record<string, boolean>)
     if (st.layerStyle && typeof st.layerStyle === 'object') {
       setLayerStyle(st.layerStyle as Record<string, { color: string; opacity: number }>)
+    }
+    if (st.layerFilter && typeof st.layerFilter === 'object') {
+      setLayerFilter(st.layerFilter as Record<string, string[]>)
     }
     if (st.layerColorBy && typeof st.layerColorBy === 'object') {
       setLayerColorBy(st.layerColorBy as Record<string, string>)
@@ -3032,6 +3058,28 @@ export default function Gis({
         the new one.
       */}
       <Coachmarks steps={GIS_TIPS} storageKey="lq.gis.tips.v1" enabled={markets.length > 0} />
+      {(() => {
+        const layer = filtering ? shownLayers.find((l) => l.id === filtering) : null
+        if (!layer?.pivot?.length) return null
+        const paint = categoryPaint[layer.id]
+        return (
+          <LayerFilter
+            label={layer.label}
+            pivot={layer.pivot}
+            selected={layerFilter[layer.id] ? new Set(layerFilter[layer.id]) : null}
+            colors={paint?.field === 'Zoning' ? paint.colors : undefined}
+            onChange={(next) =>
+              setLayerFilter((current) => {
+                const out = { ...current }
+                if (next === null) delete out[layer.id]
+                else out[layer.id] = [...next]
+                return out
+              })
+            }
+            onClose={() => setFiltering(null)}
+          />
+        )
+      })()}
 
       <GisRail
         open={rail !== null}
@@ -3183,11 +3231,51 @@ export default function Gis({
                     ...current,
                     [layer.id]: { ...style, ...next },
                   }))
+                const picked = layerFilter[layer.id]
+                const codesInAll = layer.pivot
+                  ? layer.pivot.reduce((n, city) => n + city.categories.reduce((m, cat) => m + cat.codes.length, 0), 0)
+                  : 0
                 return (
                   <div key={layer.id} className="space-y-2">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                      {layer.label}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+                        {layer.label}
+                      </p>
+                      {layer.pivot?.length ? (
+                        <button
+                          type="button"
+                          onClick={() => setFiltering(layer.id)}
+                          className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] ${
+                            picked ? 'border-brand/40 bg-brand/5 text-ink' : 'border-line text-muted hover:text-ink'
+                          }`}
+                          aria-label={`Filter ${layer.label.toLowerCase()} by city, category and code`}
+                          title="Filter by city, category and code"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                            <path d="M3 5h18l-7 8v6l-4 2v-8L3 5z" />
+                          </svg>
+                          {picked ? `${picked.length} of ${codesInAll} codes` : 'Filter'}
+                        </button>
+                      ) : null}
+                    </div>
+                    {picked ? (
+                      <p className="text-[11px] text-muted">
+                        Drawing {picked.length.toLocaleString()} of {codesInAll.toLocaleString()} codes.{' '}
+                        <button
+                          type="button"
+                          className="text-accent underline"
+                          onClick={() =>
+                            setLayerFilter((current) => {
+                              const next = { ...current }
+                              delete next[layer.id]
+                              return next
+                            })
+                          }
+                        >
+                          Show everything
+                        </button>
+                      </p>
+                    ) : null}
                     <OpacityRow
                       id={`gis-layer-${layer.id}-opacity`}
                       label="Opacity"
