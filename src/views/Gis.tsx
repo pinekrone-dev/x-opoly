@@ -85,14 +85,22 @@ const asJson = (r: Response) => {
  * fallback rather than the first choice: the direct fetch is the one that can
  * be refused cross-origin, and the whole point is not to depend on it.
  */
-async function catalogue(path: string) {
+async function catalogue(path: string, init?: RequestInit) {
   try {
-    return await asJson(await fetch(`${CATALOG}/${path}`))
+    return await asJson(await fetch(`${CATALOG}/${path}`, init))
   } catch (first) {
     if (CATALOG === CATALOG_DEFAULT) throw first
-    return asJson(await fetch(`${CATALOG_DEFAULT}/${path}`))
+    return asJson(await fetch(`${CATALOG_DEFAULT}/${path}`, init))
   }
 }
+
+/*
+ * The two lists that change between county builds are asked for afresh on
+ * every open: a browser that trusted its day-old copy of the market list
+ * showed no new market for a day after it published. The edge still answers
+ * from its own copy, so this costs a revalidation, not a bucket read.
+ */
+const FRESH: RequestInit = { cache: 'no-cache' }
 
 /*
  * Is this tab running an older build than the server is serving?
@@ -1080,7 +1088,7 @@ export default function Gis({
   const [huntNote, setHuntNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
 
   useEffect(() => {
-    catalogue('markets.json')
+    catalogue('markets.json', FRESH)
       .then((d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
@@ -1231,7 +1239,7 @@ export default function Gis({
   useEffect(() => {
     if (!active) return undefined
     let cancelled = false
-    fetch(`${CATALOG}/${active}/layers.json`)
+    fetch(`${CATALOG}/${active}/layers.json`, FRESH)
       .then(asJson)
       .then((doc: { layers?: PublishedLayer[] }) => {
         if (cancelled) return

@@ -1510,6 +1510,41 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     return c.json({ property }, 201)
   })
 
+  /*
+   * Several places into one survey at once: a list checked in the CRM, or
+   * picked from the survey's own Add site dialog. Same copy as the single
+   * send, each appended to the tour in the order given. Ids that are not
+   * this team's places are reported back rather than failing the batch, so
+   * a stale list still lands what it can.
+   */
+  app.post('/api/surveys/:id/places', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const { survey, error } = await requireSurvey(c)
+    if (error) return error
+
+    const body = await c.req.json().catch(() => ({}))
+    const ids = Array.isArray(body?.placeIds) ? [...new Set(body.placeIds.map(String))] : []
+    if (ids.length === 0) return c.json({ error: 'Choose at least one place.' }, 400)
+    if (ids.length > 100) return c.json({ error: 'At most 100 places at a time.' }, 400)
+
+    let onTour = Number(
+      (await db.get('SELECT COUNT(*) AS n FROM properties WHERE survey_id = ? AND tour_order IS NOT NULL', [survey.id]))?.n ?? 0,
+    )
+    const properties = []
+    const missing = []
+    for (const id of ids) {
+      const place = await getRecord(db, 'place', user.teamId, id)
+      if (!place) {
+        missing.push(id)
+        continue
+      }
+      properties.push(await createProperty(db, survey.id, { ...propertyFromPlace(place), tourOrder: onTour }))
+      onTour += 1
+    }
+    return c.json({ properties, missing }, properties.length ? 201 : 404)
+  })
+
   // --- collaborators -------------------------------------------------------
 
   app.get('/api/invites', async (c) => c.json({ invites: await listInvites(db, c.get('user')?.teamId ?? null) }))
@@ -1867,11 +1902,16 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     }
     if (!key) return c.json({ error: 'No such catalogue file.' }, 404)
 
-    // A day in the browser. The catalogue changes when a county is rebuilt,
-    // which is monthly, and a tile archive not at all within a build.
+    // A day in the browser for a market's own files: they change when the
+    // county is rebuilt, which is monthly, and a tile archive not at all
+    // within a build. Minutes for the two lists that change between builds,
+    // the markets and a market's layers: a browser that kept the old list
+    // for a day showed no Jersey City for a day after it published, whatever
+    // the edge held.
+    const browserTtl = key === 'markets.json' || /\/layers\.json$/.test(key) ? 300 : 86400
     const headers = {
       'content-type': contentType,
-      'cache-control': 'public, max-age=86400',
+      'cache-control': `public, max-age=${browserTtl}`,
       // Harmless here and useful everywhere: this is public county data, and
       // saying so means a preview deployment on another hostname can read it
       // too rather than rediscovering this same failure.
