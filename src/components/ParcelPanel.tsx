@@ -25,6 +25,21 @@ export interface PanelGroup {
 
 type Cell = string | number | null | undefined
 
+/**
+ * A cell by key. A dotted key reaches into a nested bag: the values the
+ * daily harvest folds onto a row ride under `x`, so a market's panel spec
+ * names them `x.bp`, `x.hpd`, and a bag that is not there reads as empty.
+ */
+function pick(bag: Record<string, unknown>, key: string): Cell {
+  if (!key.includes('.')) return bag[key] as Cell
+  let at: unknown = bag
+  for (const step of key.split('.')) {
+    if (at === null || typeof at !== 'object') return undefined
+    at = (at as Record<string, unknown>)[step]
+  }
+  return at !== null && typeof at === 'object' ? undefined : (at as Cell)
+}
+
 /** Formats one cell, or returns null when there is nothing worth a row. */
 function format(row: PanelRow, value: Cell, codes: Record<string, { d?: string }>, code?: string): string | null {
   if (row.f === 'code') {
@@ -99,9 +114,9 @@ export default function ParcelPanel({
   extra?: React.ReactNode
 }) {
   const read = (key: string): Cell => {
-    const own = attributes[key]
+    const own = pick(attributes, key)
     if (own !== null && own !== undefined) return own
-    return details?.[key]
+    return details ? pick(details, key) : undefined
   }
 
   return (
