@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { GeocodeResult, Property } from '../types'
+import { subtitleOf, titleOf } from '../lib/crm'
+import type { GeocodeResult, Place, Property } from '../types'
 
 interface Props {
   surveyId: string
@@ -8,17 +9,20 @@ interface Props {
   /** Where the map is looking, so a flyer with no address still lands in view. */
   mapCenter?: { lat: number; lng: number } | null
   onAdded: (property: Property, message?: string) => void
+  /** Several at once, from the CRM; falls back to `onAdded` one by one. */
+  onAddedMany?: (properties: Property[], message?: string) => void
   onClose: () => void
   onDropPinMode: () => void
 }
 
-type Mode = 'search' | 'paste' | 'flyer' | 'manual'
+type Mode = 'search' | 'paste' | 'flyer' | 'manual' | 'crm'
 
 export default function AddPropertyDialog({
   surveyId,
   flyerExtractionEnabled,
   mapCenter,
   onAdded,
+  onAddedMany,
   onClose,
   onDropPinMode,
 }: Props) {
@@ -29,6 +33,63 @@ export default function AddPropertyDialog({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+
+  /*
+   * The CRM tab: the team's places, searched the way the Places list is,
+   * with a check beside each. A building the team already knows should
+   * never be retyped into a survey.
+   */
+  const [placeQuery, setPlaceQuery] = useState('')
+  const [places, setPlaces] = useState<Place[] | null>(null)
+  const [placesTruncated, setPlacesTruncated] = useState(false)
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (mode !== 'crm') return undefined
+    let cancelled = false
+    // A short pause on typing: one request per name, not per keystroke.
+    const timer = setTimeout(() => {
+      api.crm
+        .list<Place>('places', placeQuery.trim())
+        .then(({ records, truncated }) => {
+          if (cancelled) return
+          setPlaces(records)
+          setPlacesTruncated(truncated)
+        })
+        .catch((cause) => {
+          if (!cancelled) setError(cause instanceof Error ? cause.message : 'The CRM could not be read.')
+        })
+    }, placeQuery ? 220 : 0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [mode, placeQuery])
+
+  const togglePicked = (id: string) =>
+    setPicked((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const addFromCrm = async () => {
+    const ids = [...picked]
+    if (ids.length === 0) return
+    setBusy(true)
+    setError(null)
+    try {
+      const { properties, missing } = await api.crm.sendPlaces(surveyId, ids)
+      const note = missing.length ? `${missing.length} of them could not be found in the CRM.` : undefined
+      if (onAddedMany) onAddedMany(properties, note)
+      else for (const property of properties) onAdded(property, note)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Those could not be added.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const search = async () => {
     setBusy(true)
@@ -151,6 +212,7 @@ export default function AddPropertyDialog({
             ['paste', 'Paste details'],
             ['flyer', 'Drop a flyer'],
             ['manual', 'Enter by hand'],
+            ['crm', 'From CRM'],
           ] as [Mode, string][]).map(([id, label]) => (
             <button
               key={id}
@@ -311,6 +373,70 @@ export default function AddPropertyDialog({
                 Or click a spot on the map instead
               </button>
             </form>
+          )}
+
+          {mode === 'crm' && (
+            <div>
+              <input
+                className="field"
+                type="search"
+                placeholder="Search the team's places"
+                aria-label="Search places"
+                autoFocus
+                value={placeQuery}
+                onChange={(event) => setPlaceQuery(event.target.value)}
+              />
+
+              {places === null ? (
+                <p className="py-6 text-center text-xs text-muted">Loading…</p>
+              ) : places.length === 0 ? (
+                <p className="py-6 text-center text-xs text-muted">
+                  {placeQuery ? `Nothing in the CRM matches “${placeQuery}”.` : 'No places in the CRM yet. Buildings worked on any survey are filed there.'}
+                </p>
+              ) : (
+                <ul className="mt-3 max-h-64 overflow-y-auto" aria-label="Places">
+                  {places.map((place) => {
+                    const checked = picked.has(place.id)
+                    return (
+                      <li key={place.id}>
+                        <label
+                          className={`flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-sunken ${
+                            checked ? 'bg-brand/10' : ''
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={checked}
+                            onChange={() => togglePicked(place.id)}
+                            aria-label={titleOf('place', place)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-semibold text-ink">{titleOf('place', place)}</span>
+                            <span className="block truncate text-[11px] text-muted">{subtitleOf('place', place) || 'No address'}</span>
+                          </span>
+                        </label>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+              {placesTruncated ? (
+                <p className="mt-1 text-[11px] text-faint">More exist than are shown. Search to narrow the list.</p>
+              ) : null}
+
+              <button
+                type="button"
+                className="btn-primary mt-3 w-full"
+                disabled={busy || picked.size === 0}
+                onClick={() => void addFromCrm()}
+              >
+                {busy ? 'Adding…' : picked.size <= 1 ? 'Add site' : `Add ${picked.size} sites`}
+              </button>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted">
+                Each arrives as a copy, on the map and on the tour. Working it here never changes the CRM record.
+              </p>
+            </div>
           )}
 
           {error && <p className="mt-3 rounded-lg border border-rose-500/25 bg-rose-500/10 p-3 text-xs text-rose-200">{error}</p>}

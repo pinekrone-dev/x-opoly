@@ -207,6 +207,55 @@ describe('sending a place into a survey', () => {
     const sent = await alice(`/api/crm/places/${place.id}/send`, asJson({ surveyId: body.survey.id }))
     assert.equal(sent.status, 404)
   })
+
+  test('a checked list lands together, in order, each on the tour', async () => {
+    const second = await alice('/api/crm/places', asJson({ name: 'Bristol & 17th', address: '1700 Bristol St', lat: 33.68, lng: -117.88 }))
+    const { body: fresh } = await alice('/api/surveys', asJson({ name: 'List search' }))
+
+    const sent = await alice(`/api/surveys/${fresh.survey.id}/places`, asJson({ placeIds: [place.id, second.body.record.id] }))
+    assert.equal(sent.status, 201)
+    assert.equal(sent.body.properties.length, 2)
+    assert.deepEqual(sent.body.missing, [])
+    assert.deepEqual(
+      sent.body.properties.map((property) => property.name),
+      ['Harbor & 21st', 'Bristol & 17th'],
+      'the order given is the order they arrive in',
+    )
+    assert.deepEqual(sent.body.properties.map((property) => property.tourOrder), [0, 1])
+    // The profile travels with each, as it does one at a time.
+    assert.equal(sent.body.properties[0].fields[0].label, 'Drive-thru')
+
+    // A second batch appends to the tour rather than restarting it.
+    const again = await alice(`/api/surveys/${fresh.survey.id}/places`, asJson({ placeIds: [second.body.record.id] }))
+    assert.equal(again.body.properties[0].tourOrder, 2)
+
+    // The tests below count the team's places; leave them as they were.
+    await alice(`/api/crm/places/${second.body.record.id}`, { method: 'DELETE' })
+  })
+
+  test('ids that are not the team\'s places are reported, not fatal', async () => {
+    const { body: fresh } = await alice('/api/surveys', asJson({ name: 'Mixed list' }))
+    const { body: theirs } = await mallory('/api/crm/places', asJson({ name: 'Mallory tower', address: '1 Main St' }))
+
+    const sent = await alice(`/api/surveys/${fresh.survey.id}/places`, asJson({ placeIds: [place.id, theirs.record.id, 'nope'] }))
+    assert.equal(sent.status, 201)
+    assert.equal(sent.body.properties.length, 1, 'only the caller\'s own place lands')
+    assert.deepEqual(sent.body.missing.sort(), [theirs.record.id, 'nope'].sort())
+
+    const none = await alice(`/api/surveys/${fresh.survey.id}/places`, asJson({ placeIds: [theirs.record.id] }))
+    assert.equal(none.status, 404, 'nothing landed')
+    const empty = await alice(`/api/surveys/${fresh.survey.id}/places`, asJson({ placeIds: [] }))
+    assert.equal(empty.status, 400)
+
+    // The boundary tests below expect Mallory's team to hold no places.
+    await mallory(`/api/crm/places/${theirs.record.id}`, { method: 'DELETE' })
+  })
+
+  test('a list cannot be sent into another team\'s survey', async () => {
+    const { body } = await mallory('/api/surveys', asJson({ name: 'Mallory list' }))
+    const sent = await alice(`/api/surveys/${body.survey.id}/places`, asJson({ placeIds: [place.id] }))
+    assert.equal(sent.status, 404)
+  })
 })
 
 describe('a survey informs the CRM back', () => {

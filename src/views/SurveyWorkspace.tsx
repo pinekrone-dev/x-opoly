@@ -690,6 +690,16 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
           flyerExtractionEnabled={features.flyerExtraction}
           onClose={() => setAdding(false)}
           onDropPinMode={() => setDropPin(true)}
+          onAddedMany={(added, message) => {
+            for (const property of added) upsert(property)
+            if (added[0]) setSelectedId(added[0].id)
+            setAdding(false)
+            setFitKey((key) => key + 1)
+            setNotice(
+              message ??
+                (added.length === 1 ? 'Added from the CRM, and onto the tour.' : `${added.length} sites added from the CRM, and onto the tour.`),
+            )
+          }}
           onAdded={(property, message) => {
             upsert(property)
             setSelectedId(property.id)

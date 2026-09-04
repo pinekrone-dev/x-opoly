@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import SurveyList from './SurveyList'
 import { api } from '../api'
+import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
 import { OBJECTS, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
@@ -39,6 +40,25 @@ export default function Home({
   const [creating, setCreating] = useState(false)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+
+  /*
+   * Places can be checked and sent into a survey together: the inverse of
+   * the survey's own "From CRM" tab. Selection is a mode, so an ordinary
+   * click still opens the record; the checks clear when the tab changes.
+   */
+  const [selecting, setSelecting] = useState(false)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  useEffect(() => {
+    setSelecting(false)
+    setChecked(new Set())
+  }, [tab])
+  const toggleChecked = (id: string) =>
+    setChecked((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   // Counts on the tabs, so an empty workspace still says what lives where.
   // One request: this used to download all four lists, and every survey,
@@ -137,6 +157,45 @@ export default function Home({
               <button type="button" className="btn-primary text-sm" onClick={() => setCreating((open) => !open)}>
                 New {spec.singular.toLowerCase()}
               </button>
+              {spec.type === 'place' && records.length > 0 ? (
+                <div className="ml-auto flex items-center gap-2">
+                  {selecting ? (
+                    <>
+                      <span className="text-xs text-muted">
+                        {checked.size === 0 ? 'Check the buildings to send' : `${checked.size} checked`}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn-ghost text-xs"
+                        onClick={() =>
+                          setChecked((current) =>
+                            current.size === records.length
+                              ? new Set()
+                              : new Set(records.map((record) => (record as { id: string }).id)),
+                          )
+                        }
+                      >
+                        {checked.size === records.length ? 'Clear' : 'All'}
+                      </button>
+                      <SendPlaceToSurvey placeIds={[...checked]} onSent={() => setChecked(new Set())} />
+                      <button
+                        type="button"
+                        className="btn-secondary text-xs"
+                        onClick={() => {
+                          setSelecting(false)
+                          setChecked(new Set())
+                        }}
+                      >
+                        Done
+                      </button>
+                    </>
+                  ) : (
+                    <button type="button" className="btn-secondary text-sm" onClick={() => setSelecting(true)}>
+                      Send to survey
+                    </button>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             {creating ? (
@@ -185,14 +244,23 @@ export default function Home({
                 {records.map((record) => {
                   const id = (record as { id: string }).id
                   const subtitle = subtitleOf(spec.type, record)
+                  const isChecked = selecting && checked.has(id)
                   return (
                     <li key={id}>
                       <button
                         type="button"
-                        className="panel w-full p-4 text-left hover:border-brand/40 hover:shadow-sm"
-                        onClick={() => navigate(`/${spec.segment}/${id}`)}
+                        className={`panel w-full p-4 text-left hover:border-brand/40 hover:shadow-sm ${
+                          isChecked ? 'border-brand bg-brand/5' : ''
+                        }`}
+                        aria-pressed={selecting ? isChecked : undefined}
+                        onClick={() => (selecting ? toggleChecked(id) : navigate(`/${spec.segment}/${id}`))}
                       >
-                        <p className="truncate text-sm font-semibold text-ink">{titleOf(spec.type, record)}</p>
+                        <p className="flex items-center gap-2 truncate text-sm font-semibold text-ink">
+                          {selecting ? (
+                            <input type="checkbox" readOnly tabIndex={-1} checked={isChecked} aria-hidden className="pointer-events-none" />
+                          ) : null}
+                          <span className="truncate">{titleOf(spec.type, record)}</span>
+                        </p>
                         {subtitle ? <p className="mt-0.5 truncate text-xs text-muted">{subtitle}</p> : null}
                         {record.fields?.length ? (
                           <p className="mt-2 truncate text-[11px] text-faint">

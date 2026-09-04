@@ -150,7 +150,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
             <p className="mt-0.5 text-sm text-muted">{subtitleOf(recordType, record) || '—'}</p>
           </div>
           <div className="flex gap-2">
-            {recordType === 'place' ? <SendPlaceToSurvey placeId={id} /> : null}
+            {recordType === 'place' ? <SendPlaceToSurvey placeIds={[id]} /> : null}
             <button type="button" className="btn-secondary text-xs" onClick={() => void remove()}>
               Delete
             </button>
