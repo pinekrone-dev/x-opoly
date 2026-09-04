@@ -185,6 +185,21 @@ interface OwnerGroup {
  * and which file holds it. Everything the catalog says, the app obeys, which
  * is what lets a market gain a layer without this file changing.
  */
+/**
+ * One field a layer can be coloured by, with its values counted.
+ *
+ * `colors` is the pipeline's own palette for the field, when it made one:
+ * a zoning layer names every code it carries, a few hundred across a
+ * metro, and the pipeline shades each by the category it falls in so reds
+ * are commercial and yellows residential from one city to the next. A field
+ * without one gets the dozen colours below and "other" past them.
+ */
+interface CategoryOption {
+  field: string
+  values: [string, number][]
+  colors?: Record<string, string>
+}
+
 interface PublishedLayer {
   id: string
   label: string
@@ -216,7 +231,7 @@ interface PublishedLayer {
    * the count belongs there: done once on a server rather than in every
    * browser, every session.
    */
-  categories?: { field: string; values: [string, number][] }[]
+  categories?: CategoryOption[]
   minzoom?: number
   maxzoom?: number
   count?: number
@@ -1490,7 +1505,7 @@ export default function Gis({
    * twenty thousand colours nobody can tell apart.
    */
   const layerCategories = useMemo(() => {
-    const out: Record<string, { field: string; values: [string, number][] }[]> = {}
+    const out: Record<string, CategoryOption[]> = {}
     for (const layer of shownLayers) {
       // Counted upstream where every feature was in hand. Preferred over
       // sampling even when both are available: this one saw the whole county
@@ -1502,7 +1517,7 @@ export default function Gis({
       const data = shownData[layer.id]
       if (!data?.features?.length) continue
       const sample = data.features.slice(0, 4000)
-      const options: { field: string; values: [string, number][] }[] = []
+      const options: CategoryOption[] = []
       const names = new Set<string>()
       for (const f of sample.slice(0, 50)) {
         for (const key of Object.keys(f.properties ?? {})) names.add(key)
@@ -1535,22 +1550,48 @@ export default function Gis({
     return out
   }, [shownLayers, shownData])
 
+  /*
+   * Which field each layer is coloured by.
+   *
+   * Chosen in the panel; until it is, a layer whose pipeline shipped a
+   * palette opens coloured by that field, because a zoning map in one pink
+   * is not the map anyone switched zoning on for. An explicit "One colour"
+   * is kept as the empty string, so it is a choice and not an absence.
+   */
+  const layerColorField = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const [id, options] of Object.entries(layerCategories)) {
+      out[id] = layerColorBy[id] ?? options.find((o) => o.colors)?.field ?? ''
+    }
+    return out
+  }, [layerCategories, layerColorBy])
+
   /** The colour each category gets, for the map and the legend alike. */
   const categoryPaint = useMemo(() => {
-    const out: Record<string, { field: string; colors: Record<string, string>; rest: number }> = {}
+    const out: Record<string, { field: string; colors: Record<string, string>; rest: number; counts: Record<string, number> }> = {}
     for (const [id, options] of Object.entries(layerCategories)) {
-      const field = layerColorBy[id]
+      const field = layerColorField[id]
       if (!field) continue
       const option = options.find((o) => o.field === field)
       if (!option) continue
+      const counts = Object.fromEntries(option.values)
+      if (option.colors) {
+        // Every value has its own colour; the legend runs in count order.
+        const colors: Record<string, string> = {}
+        for (const [value] of option.values) {
+          if (option.colors[value]) colors[value] = option.colors[value]
+        }
+        out[id] = { field, colors, rest: 0, counts }
+        continue
+      }
       const colors: Record<string, string> = {}
       option.values.slice(0, CATEGORY_LIMIT).forEach(([value], i) => {
         colors[value] = CATEGORY_COLORS[i % CATEGORY_COLORS.length]
       })
-      out[id] = { field, colors, rest: Math.max(0, option.values.length - CATEGORY_LIMIT) }
+      out[id] = { field, colors, rest: Math.max(0, option.values.length - CATEGORY_LIMIT), counts }
     }
     return out
-  }, [layerCategories, layerColorBy])
+  }, [layerCategories, layerColorField])
 
   /**
    * What the map should draw: every layer switched on, with its geometry.
@@ -3164,7 +3205,7 @@ export default function Gis({
                         <select
                           id={`gis-layer-${layer.id}-colorby`}
                           className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
-                          value={layerColorBy[layer.id] ?? ''}
+                          value={layerColorField[layer.id] ?? ''}
                           onChange={(event) =>
                             setLayerColorBy((current) => ({
                               ...current,
@@ -3187,14 +3228,17 @@ export default function Gis({
                         <p className="mb-1 text-[11px] font-medium text-body">
                           {categoryPaint[layer.id].field}
                         </p>
-                        <ul className="max-h-40 space-y-0.5 overflow-y-auto pr-1">
+                        <ul className="max-h-64 space-y-0.5 overflow-y-auto pr-1">
                           {Object.entries(categoryPaint[layer.id].colors).map(([value, hue]) => (
                             <li key={value} className="flex items-center gap-1.5">
                               <span
                                 className="h-2.5 w-2.5 shrink-0 rounded-sm"
                                 style={{ backgroundColor: hue }}
                               />
-                              <span className="truncate text-[11px] text-body">{value}</span>
+                              <span className="min-w-0 flex-1 truncate text-[11px] text-body">{value}</span>
+                              <span className="shrink-0 text-[10px] tabular-nums text-faint">
+                                {categoryPaint[layer.id].counts[value]?.toLocaleString()}
+                              </span>
                             </li>
                           ))}
                         </ul>
