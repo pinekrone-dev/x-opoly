@@ -1210,10 +1210,11 @@ export default function Gis({
     // summary card in between, with the panel a second click behind it;
     // every layer that is on now adds its section to the one panel instead.
     setExpanded(true)
-    // A selected parcel is drawn selected. Chosen from the address search
-    // with the outlines switched off, it used to be highlighted on a layer
-    // that was not there, so nothing on the map changed.
-    setShowParcels(true)
+    // The assessor shading stays as the broker left it. Selecting used to
+    // switch it on, so a map of plain outlines burst into land-use colour
+    // on the first click; the outlines are always drawn and the selected
+    // parcel is highlighted on them, so nothing needs switching on to see
+    // what was picked.
     let cancelled = false
     setKnown(null)
     api.crm
@@ -2195,9 +2196,12 @@ export default function Gis({
     return [
       {
         id: 'parcels',
-        label: 'Assessor parcels',
+        // The outlines are always drawn; this card is the colour on them,
+        // land use or value off the assessor roll, and it stays where it is
+        // put — a click on a parcel selects it and changes nothing else.
+        label: 'Assessor shading',
         state: showParcels ? 'on' : 'off',
-        note: meta?.count ? `${meta.count.toLocaleString()} parcels` : undefined,
+        note: meta?.count ? `Land use and values, ${meta.count.toLocaleString()} parcels` : 'Land use and values',
         icon: LAYER_ICONS.parcels,
       },
       {
@@ -2811,7 +2815,7 @@ export default function Gis({
       const frame = await captureMap.current?.()
       if (!frame) throw new Error('The map is not ready to photograph yet.')
       const legend = [
-        ...(showParcels ? [{ color: '#01A3A8', label: 'Assessor parcels' }] : []),
+        ...(showParcels ? [{ color: '#01A3A8', label: 'Assessor shading' }] : []),
         ...extras.map((layer) => ({
           color: layer.color,
           label: shownLayers.find((l) => l.id === layer.id)?.label ?? layer.id,
@@ -3326,7 +3330,7 @@ export default function Gis({
             {showParcels && (
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                  Assessor parcels
+                  Assessor shading
                 </p>
                 <OpacityRow
                   id="gis-parcel-opacity"
