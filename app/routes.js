@@ -1927,7 +1927,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     // the markets and a market's layers: a browser that kept the old list
     // for a day showed no Jersey City for a day after it published, whatever
     // the edge held.
-    const browserTtl = key === 'markets.json' || /\/layers\.json$/.test(key) ? 300 : 86400
+    // Minutes for a tile archive as well: its bytes are read by range, and
+    // a browser that kept a range for a day went on pairing the old
+    // directory with the new tiles after a county was rebuilt, which the
+    // map reported as "county parcels could not be loaded".
+    const browserTtl = key === 'markets.json' || /\/layers\.json$/.test(key) || /\.pmtiles$/.test(key) ? 300 : 86400
     const headers = {
       'content-type': contentType,
       'cache-control': `public, max-age=${browserTtl}`,
@@ -1969,6 +1973,28 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       // a county published an hour ago that the picker still does not show
       // reads as "not added". Five minutes, at one bucket read per colo.
       const ttl = key === 'markets.json' ? 300 : /\.(pmtiles|geojson)$/.test(key) ? 86400 : 3600
+      /*
+       * A tile archive's ranges are kept under the archive's version.
+       *
+       * The archive is read a few kilobytes at a time: a header, a
+       * directory, then the tiles. Kept a day under the file name alone,
+       * the ranges of an archive rebuilt in between were served mixed —
+       * yesterday's directory pointing into today's tiles — and the map
+       * gave up on the county. The version is the object's etag, asked of
+       * the bucket once a minute per data centre rather than per tile, so
+       * a rebuild is seen within a minute and the old ranges are simply
+       * never asked for again.
+       */
+      let version = ''
+      if (/\.pmtiles$/.test(key) && typeof bucket.head === 'function') {
+        const known = await edgeCached(c, `catalog/${key}#version`, 60, async () => {
+          const found = await bucket.head(key)
+          return c.json({ etag: found ? found.httpEtag || found.etag || '' : null })
+        })
+        const info = await known.json().catch(() => ({ etag: null }))
+        if (info.etag == null) return c.json({ error: 'No such catalogue file.' }, 404)
+        version = info.etag
+      }
       return edgeCached(
         c,
         `catalog/${key}`,
@@ -1979,22 +2005,26 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
             wants ? { range: last == null ? { offset } : { offset, length: last - offset + 1 } } : undefined,
           )
           if (!object) return c.json({ error: 'No such catalogue file.' }, 404)
+          // The archive's version travels with every answer, so a reader
+          // that pairs a directory with a tile can tell the two archives
+          // apart and start over on its own.
+          const tagged = object.httpEtag || object.etag ? { ...headers, etag: object.httpEtag || object.etag } : headers
           // The length is known here and nowhere downstream: the browser
           // gets a progress bar, and the edge gets told what it is keeping.
-          if (!wants) return new Response(object.body, { headers: { ...headers, 'content-length': String(object.size) } })
+          if (!wants) return new Response(object.body, { headers: { ...tagged, 'content-length': String(object.size) } })
           const served = object.range?.length ?? object.size - offset
           const end = offset + served - 1
           return new Response(object.body, {
             status: 206,
             headers: {
-              ...headers,
+              ...tagged,
               'content-length': String(served),
               'content-range': `bytes ${offset}-${end}/${object.size}`,
             },
           })
         },
         {
-          params: { range: asked || '' },
+          params: { range: asked || '', v: version },
           // Whole archives and whole indexes are tens or hundreds of
           // megabytes; the edge keeps ranges and the small files, not a
           // county in one piece. (A copy is held in memory while it is
