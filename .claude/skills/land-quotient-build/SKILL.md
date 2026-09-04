@@ -87,7 +87,7 @@ run with the GitHub Actions tools rather than polling.
 ### The GIS data contract (what the map reads from `/catalog`)
 
 - `markets.json` — every market: slug, name, region, centre, sources.
-- `<slug>/meta.json` — panel spec, labels, counts, `colorBy`, `tiles` and `heavyBase`.
+- `<slug>/meta.json` — panel spec, labels, counts, `colorBy`, `tiles` and `heavyBase`. A panel row's key may be dotted (`x.bp`): `ParcelPanel` reads into the bag the daily harvest folds onto a row under `x` (North Jersey permit count and latest date, New York violations), and a row with no bag shows no line.
 - `<slug>/parcels.pmtiles` — the county, `source-layer` `parcels`, feature id = parcel id; properties `gp` (group), `mv` (value), `po`/`bo` (portfolio / back office ids).
 - `<slug>/tracts.geojson`, `census.json`, `owners.json`.
 - `<slug>/layers.json` — the published layers. Each entry: `id, label, note, kind (polygon|line|point), color, file, tiles, sourceLayer, minzoom, maxzoom, count, total, filter, attribution, fields, categories, pivot`.
