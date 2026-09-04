@@ -116,6 +116,24 @@ describe('the CRM objects', () => {
     assert.equal(place.sizeSqft, 4200)
   })
 
+  test('one search finds a contact whichever list it is filed under', async () => {
+    const { status, body } = await alice('/api/crm/search?q=vega')
+    assert.equal(status, 200)
+    assert.equal(body.companies.length, 1, 'the company by name')
+    assert.equal(body.people.length, 1, 'the person by her email domain')
+    assert.equal(body.places.length, 0)
+    assert.deepEqual(body.deals, [])
+
+    const harbor = await alice('/api/crm/search?q=harbor')
+    assert.equal(harbor.body.places[0].name, 'Harbor & 21st')
+
+    const blank = await alice('/api/crm/search?q=')
+    assert.deepEqual(blank.body, { people: [], companies: [], places: [], deals: [] })
+
+    const theirs = await mallory('/api/crm/search?q=vega')
+    assert.equal(theirs.body.companies.length + theirs.body.people.length, 0, 'never across the team boundary')
+  })
+
   test('editing replaces the custom profile wholesale', async () => {
     const patched = await alice(
       `/api/crm/places/${place.id}`,

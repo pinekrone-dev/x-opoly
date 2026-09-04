@@ -1401,6 +1401,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     return c.json({ counts, surveys })
   })
 
+  /*
+   * One search across everything the team keeps. The top of the CRM is
+   * "find this contact", and asking which tab they live on first is the
+   * wrong question. A short page of each kind: the table is for finding
+   * one record, and the lists are there for browsing.
+   */
+  app.get('/api/crm/search', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const q = String(c.req.query('q') ?? '').trim()
+    const empty = { people: [], companies: [], places: [], deals: [] }
+    if (!q) return c.json(empty)
+    const kinds = [['people', 'person'], ['companies', 'company'], ['places', 'place'], ['deals', 'deal']]
+    const found = await Promise.all(
+      kinds.map(([, kind]) => listRecords(db, kind, user.teamId, { search: q, limit: 8 })),
+    )
+    return c.json(Object.fromEntries(kinds.map(([key], i) => [key, found[i].records])))
+  })
+
   for (const [segment, recordType] of Object.entries(RECORD_ROUTES)) {
     app.get(`/api/crm/${segment}`, async (c) => {
       const user = c.get('user')

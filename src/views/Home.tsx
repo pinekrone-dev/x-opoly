@@ -4,8 +4,8 @@ import { api } from '../api'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
-import { OBJECTS, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
-import type { Account, BillingStatus, CrmRecord } from '../types'
+import { OBJECTS, objectFor, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
+import type { Account, BillingStatus, CrmRecord, RecordType } from '../types'
 
 /**
  * The workspace home.
@@ -34,12 +34,28 @@ export default function Home({
   const [records, setRecords] = useState<CrmRecord[]>([])
   const [surveyCount, setSurveyCount] = useState(0)
   const [counts, setCounts] = useState<Record<string, number>>({})
-  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+
+  /*
+   * The search at the top looks across everything the team keeps, not
+   * only the tab that happens to be open: "find this contact" is the
+   * question, and which list they are filed under is not. Its answer is a
+   * table, one row per record, typed.
+   */
+  const [search, setSearch] = useState('')
+  const [hits, setHits] = useState<Hit[] | null>(null)
+  const [searching, setSearching] = useState(false)
+
+  /*
+   * New person and New place stand at the top of every CRM tab, because
+   * those two are made in the middle of other work: a card handed over, a
+   * building driven past. A deal or a company is made from its own list.
+   */
+  const [creating, setCreating] = useState<RecordType | null>(null)
+  const createSpec = creating ? objectFor(creating) : null
 
   /*
    * Places can be checked and sent into a survey together: the inverse of
@@ -51,6 +67,8 @@ export default function Home({
   useEffect(() => {
     setSelecting(false)
     setChecked(new Set())
+    setCreating(null)
+    setDraft({})
   }, [tab])
   const toggleChecked = (id: string) =>
     setChecked((current) => {
@@ -78,6 +96,7 @@ export default function Home({
     }
   }, [tab])
 
+  // The tab's own list, for browsing.
   useEffect(() => {
     if (!spec) {
       setLoading(false)
@@ -85,47 +104,86 @@ export default function Home({
     }
     let cancelled = false
     setLoading(true)
-    // A short debounce: typing a name should not fire a request per keystroke.
+    api.crm
+      .list(spec.segment)
+      .then(({ records: list }) => {
+        if (!cancelled) setRecords(list)
+      })
+      .catch((cause) => {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not load these records.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [spec?.segment])
+
+  // The search, across every kind. A short pause on typing: one request
+  // per name, not per keystroke.
+  useEffect(() => {
+    const needle = search.trim()
+    if (!needle) {
+      setHits(null)
+      setSearching(false)
+      return undefined
+    }
+    let cancelled = false
+    setSearching(true)
     const timer = setTimeout(() => {
       api.crm
-        .list(spec.segment, search)
-        .then(({ records: list }) => {
-          if (!cancelled) setRecords(list)
+        .search(needle)
+        .then((found) => {
+          if (cancelled) return
+          setHits([
+            ...found.people.map((record) => ({ type: 'person' as const, record })),
+            ...found.companies.map((record) => ({ type: 'company' as const, record })),
+            ...found.places.map((record) => ({ type: 'place' as const, record })),
+            ...found.deals.map((record) => ({ type: 'deal' as const, record })),
+          ])
         })
         .catch((cause) => {
-          if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not load these records.')
+          if (!cancelled) setError(cause instanceof Error ? cause.message : 'The search failed.')
         })
         .finally(() => {
-          if (!cancelled) setLoading(false)
+          if (!cancelled) setSearching(false)
         })
-    }, search ? 220 : 0)
+    }, 220)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [spec?.segment, search])
+  }, [search])
 
   const create = async () => {
-    if (!spec) return
+    if (!createSpec) return
     setBusy(true)
     setError(null)
     try {
       const payload: Record<string, unknown> = {}
-      for (const field of spec.create) {
+      for (const field of createSpec.create) {
         const value = (draft[field.key] ?? '').trim()
         if (!value) continue
         payload[field.key] = field.type === 'number' ? Number(value) : value
       }
-      const { record } = await api.crm.create(spec.segment, payload)
-      setCreating(false)
+      const { record } = await api.crm.create(createSpec.segment, payload)
+      setCreating(null)
       setDraft({})
-      navigate(`/${spec.segment}/${(record as { id: string }).id}`)
+      navigate(`/${createSpec.segment}/${(record as { id: string }).id}`)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'That could not be created.')
     } finally {
       setBusy(false)
     }
   }
+
+  const startCreating = (type: RecordType) => {
+    setDraft({})
+    setCreating((current) => (current === type ? null : type))
+  }
+
+  const ownButton = spec && spec.type !== 'person' && spec.type !== 'place' ? spec : null
 
   return (
     <div className="min-h-full bg-paper">
@@ -147,17 +205,25 @@ export default function Home({
           <>
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
-                className="field max-w-xs flex-1"
+                className="field max-w-sm flex-1"
                 type="search"
-                placeholder={`Search ${spec.label.toLowerCase()}`}
-                aria-label={`Search ${spec.label.toLowerCase()}`}
+                placeholder="Search people, companies, places and deals"
+                aria-label="Search the CRM"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
-              <button type="button" className="btn-primary text-sm" onClick={() => setCreating((open) => !open)}>
-                New {spec.singular.toLowerCase()}
+              <button type="button" className="btn-primary text-sm" onClick={() => startCreating('person')}>
+                New person
               </button>
-              {spec.type === 'place' && records.length > 0 ? (
+              <button type="button" className="btn-primary text-sm" onClick={() => startCreating('place')}>
+                New place
+              </button>
+              {ownButton ? (
+                <button type="button" className="btn-secondary text-sm" onClick={() => startCreating(ownButton.type)}>
+                  New {ownButton.singular.toLowerCase()}
+                </button>
+              ) : null}
+              {spec.type === 'place' && records.length > 0 && !search ? (
                 <div className="ml-auto flex items-center gap-2">
                   {selecting ? (
                     <>
@@ -198,11 +264,11 @@ export default function Home({
               ) : null}
             </div>
 
-            {creating ? (
+            {createSpec ? (
               <div className="panel mb-4 p-4">
-                <p className="label mb-2">New {spec.singular.toLowerCase()}</p>
+                <p className="label mb-2">New {createSpec.singular.toLowerCase()}</p>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {spec.create.map((field) => (
+                  {createSpec.create.map((field) => (
                     <label key={field.key} className="block">
                       <span className="mb-1 block text-xs text-muted">{field.label}</span>
                       <input
@@ -217,9 +283,9 @@ export default function Home({
                 </div>
                 <div className="mt-3 flex gap-2">
                   <button type="button" className="btn-primary text-sm" disabled={busy} onClick={() => void create()}>
-                    {busy ? 'Saving…' : `Create ${spec.singular.toLowerCase()}`}
+                    {busy ? 'Saving…' : `Create ${createSpec.singular.toLowerCase()}`}
                   </button>
-                  <button type="button" className="btn-secondary text-sm" onClick={() => setCreating(false)}>
+                  <button type="button" className="btn-secondary text-sm" onClick={() => setCreating(null)}>
                     Cancel
                   </button>
                 </div>
@@ -230,14 +296,14 @@ export default function Home({
               <p className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>
             ) : null}
 
-            {loading ? (
+            {search.trim() ? (
+              <SearchTable hits={hits} searching={searching} needle={search.trim()} />
+            ) : loading ? (
               <p className="py-10 text-center text-sm text-muted">Loading…</p>
             ) : records.length === 0 ? (
               <div className="panel p-10 text-center">
-                <p className="text-sm font-semibold text-ink">
-                  {search ? `Nothing matches “${search}”` : `No ${spec.label.toLowerCase()} yet`}
-                </p>
-                <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">{search ? 'Try a shorter search.' : spec.empty}</p>
+                <p className="text-sm font-semibold text-ink">No {spec.label.toLowerCase()} yet</p>
+                <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">{spec.empty}</p>
               </div>
             ) : (
               <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -276,6 +342,66 @@ export default function Home({
           </>
         ) : null}
       </main>
+    </div>
+  )
+}
+
+interface Hit {
+  type: RecordType
+  record: CrmRecord
+}
+
+/**
+ * The search's answer: every matching record of every kind, one row each,
+ * typed so a person and a company of the same name are told apart. A row
+ * opens the record.
+ */
+function SearchTable({ hits, searching, needle }: { hits: Hit[] | null; searching: boolean; needle: string }) {
+  const rows = useMemo(() => hits ?? [], [hits])
+
+  if (searching && hits === null) return <p className="py-10 text-center text-sm text-muted">Searching…</p>
+  if (rows.length === 0) {
+    return (
+      <div className="panel p-10 text-center">
+        <p className="text-sm font-semibold text-ink">Nothing matches “{needle}”</p>
+        <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">Try a shorter search, or a different spelling.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="panel overflow-x-auto">
+      <table className="w-full text-left text-sm" aria-label="Search results">
+        <thead>
+          <tr className="border-b border-line text-[11px] uppercase tracking-wide text-faint">
+            <th className="px-4 py-2 font-medium">Type</th>
+            <th className="px-4 py-2 font-medium">Name</th>
+            <th className="px-4 py-2 font-medium">Details</th>
+            <th className="px-4 py-2 font-medium">Profile</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ type, record }) => {
+            const object = objectFor(type)
+            const id = (record as { id: string }).id
+            return (
+              <tr
+                key={`${type}-${id}`}
+                className="cursor-pointer border-b border-line last:border-0 hover:bg-sunken"
+                onClick={() => navigate(`/${object.segment}/${id}`)}
+              >
+                <td className="whitespace-nowrap px-4 py-2 text-xs text-muted">{object.singular}</td>
+                <td className="px-4 py-2 font-semibold text-ink">{titleOf(type, record)}</td>
+                <td className="px-4 py-2 text-xs text-muted">{subtitleOf(type, record) || '—'}</td>
+                <td className="px-4 py-2 text-[11px] text-faint">
+                  {record.fields?.length ? record.fields.map((field) => `${field.label}: ${field.value ?? '—'}`).join(' · ') : ''}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p className="px-4 py-2 text-[11px] text-faint">Up to eight of each kind. Narrow the search to see the rest.</p>
     </div>
   )
 }

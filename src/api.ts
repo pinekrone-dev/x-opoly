@@ -148,6 +148,11 @@ export const api = {
     },
     /** How many of each record type the team holds, and how many surveys. One request. */
     counts: () => request<{ counts: Record<string, number>; surveys: number }>('/api/crm/counts'),
+    /** One search across people, companies, places and deals: a short page of each. */
+    search: (q: string) =>
+      request<{ people: CrmRecord[]; companies: CrmRecord[]; places: CrmRecord[]; deals: CrmRecord[] }>(
+        `/api/crm/search?q=${encodeURIComponent(q)}`,
+      ),
     get: <T = CrmRecord>(segment: string, id: string) => request<{ record: T }>(`/api/crm/${segment}/${id}`),
     create: <T = CrmRecord>(segment: string, input: Record<string, unknown>) =>
       request<{ record: T }>(`/api/crm/${segment}`, json(input)),
