@@ -30,7 +30,11 @@ jobs:
       fail-fast: false
       matrix:
         url:
-          - https://survey.realestateaistudio.com
+          # landquotient.com replaced survey.realestateaistudio.com on
+          # 2026-09-11 (wrangler.toml). The old hostname was left here for a
+          # day and every push spent twelve minutes waiting for a commit it
+          # would never serve, then reported the run cancelled.
+          - https://landquotient.com
           - https://x-opoly.shiny-butterfly-2b90.workers.dev
 
     env:
