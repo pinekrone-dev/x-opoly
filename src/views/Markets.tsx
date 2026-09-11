@@ -27,6 +27,10 @@ const OVERLAYS: Record<string, string[]> = {
   'denver-co': ['Existing land use', 'Zoning', 'Permits', 'Entitlements', 'Landmark districts', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
   'tampa-fl': ['Zoning', 'Permits', 'Zoning hearings', 'Redevelopment areas', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
   'minneapolis-mn': ['Zoning', 'Built form', 'Permits', 'Existing land use', 'Small area plans', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'detroit-mi': ['Zoning', 'Permits', 'Demolitions', 'Plan review', 'Historic districts', 'NEZ districts', 'Future land use', 'City land for sale', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'miami-fl': ['Zoning', 'Permits', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'dallas-tx': ['Zoning', 'Historic overlays', 'Road projects', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'philadelphia-pa': ['Zoning', 'Zoning overlays', 'Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
 }
 
 /** The number of markets, written out while it is small enough to read as a word. */
@@ -40,6 +44,10 @@ const ORDER = [
   'denver-co',
   'tampa-fl',
   'minneapolis-mn',
+  'miami-fl',
+  'dallas-tx',
+  'philadelphia-pa',
+  'detroit-mi',
   'jersey-city-nj',
   'orange-county-ca',
   'new-york-ny',
