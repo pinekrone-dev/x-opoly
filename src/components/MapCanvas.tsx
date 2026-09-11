@@ -213,6 +213,7 @@ const OVERLAY_ORDER = [
   // the tour line, the zones and the pins, and above the area shading.
   'parcel-fill',
   'parcel-line',
+  'parcel-selected',
   'zone-fill',
   'zone-line',
   'ring-fill',
@@ -1806,6 +1807,7 @@ export default function MapCanvas({
     if (!instance || !loaded) return
 
     if (!parcels) {
+      if (instance.getLayer('parcel-selected')) instance.removeLayer('parcel-selected')
       if (instance.getLayer('parcel-line')) instance.removeLayer('parcel-line')
       if (instance.getLayer('parcel-fill')) instance.removeLayer('parcel-fill')
       if (instance.getSource(PARCEL_SOURCE)) instance.removeSource(PARCEL_SOURCE)
@@ -1815,6 +1817,7 @@ export default function MapCanvas({
     registerPmtiles()
     const sourceLayer = parcels.sourceLayer || 'parcels'
 
+    if (instance.getLayer('parcel-selected')) instance.removeLayer('parcel-selected')
     if (instance.getLayer('parcel-line')) instance.removeLayer('parcel-line')
     if (instance.getLayer('parcel-fill')) instance.removeLayer('parcel-fill')
     if (instance.getSource(PARCEL_SOURCE)) instance.removeSource(PARCEL_SOURCE)
@@ -1854,6 +1857,34 @@ export default function MapCanvas({
         },
       },
       insertBefore('parcel-line'),
+    )
+    /*
+     * The selected parcel's outline, as its own layer above every other lot
+     * line.
+     *
+     * Feature-state alone tinted the parcel's line, but at the width the
+     * county's lines are drawn — under a pixel at most zooms — a tinted
+     * thread between two neighbours' threads did not read as "this one".
+     * A filter to one id draws that one lot again, wide, on top, so a
+     * parcel chosen from the search or by a click is the thing you see.
+     * Filtered to nothing until something is selected.
+     */
+    instance.addLayer(
+      {
+        id: 'parcel-selected',
+        type: 'line',
+        source: PARCEL_SOURCE,
+        'source-layer': sourceLayer,
+        minzoom: PARCEL_MIN_ZOOM,
+        filter: ['==', ['id'], ''],
+        paint: {
+          'line-color': '#7C3AED',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 13, 2, 16, 3.5, 19, 5],
+          'line-opacity': 1,
+        },
+        layout: { 'line-join': 'round' },
+      },
+      insertBefore('parcel-selected'),
     )
 
     /*
@@ -2018,11 +2049,25 @@ export default function MapCanvas({
     if (!instance || !loaded || !parcels) return undefined
     const sourceLayer = parcels.sourceLayer || 'parcels'
     const id = parcels.selectedParcelId
-    if (id == null) return undefined
+    if (id == null) {
+      if (instance.getLayer('parcel-selected')) instance.setFilter('parcel-selected', ['==', ['id'], ''])
+      return undefined
+    }
     try {
       instance.setFeatureState({ source: PARCEL_SOURCE, sourceLayer, id }, { sel: true })
     } catch {
       /* the parcel is not in a loaded tile yet */
+    }
+    // `['id']`, not `['get','id']`: the id is on the feature, not in its
+    // properties (see the filter effect above). Ids in the tiles are numbers
+    // where the county's are, so a string id from the panel is compared as
+    // both.
+    const asNumber = typeof id === 'string' && id !== '' && Number.isFinite(Number(id)) ? Number(id) : null
+    if (instance.getLayer('parcel-selected')) {
+      instance.setFilter(
+        'parcel-selected',
+        asNumber != null ? ['any', ['==', ['id'], id], ['==', ['id'], asNumber]] : ['==', ['id'], id],
+      )
     }
     return () => {
       try {

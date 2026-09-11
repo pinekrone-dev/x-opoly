@@ -222,8 +222,8 @@ export default function LiteMap({
             const id = (feature?.id ?? feature?.properties?.id) as string | number | undefined
             const picked = id != null && String(id) === String(selectedRef.current ?? '')
             return {
-              color: picked ? '#0d9488' : '#0f172a',
-              weight: picked ? 2.5 : 0.8,
+              color: picked ? '#7C3AED' : '#0f172a',
+              weight: picked ? 3.5 : 0.8,
               opacity: 0.85,
               fillColor: picked ? '#14b8a6' : '#0f172a',
               fillOpacity: picked ? 0.25 : 0.04,

@@ -1070,6 +1070,17 @@ export default function Gis({
   const [layerPick, setLayerPick] = useState<{ layer: string; index: number } | null>(null)
   const [layerView, setLayerView] = useState<{ center: [number, number]; zoom: number; key: number } | null>(null)
   /*
+   * Whether the next selection should take the camera with it.
+   *
+   * A parcel clicked on the map is already under the pointer, so moving the
+   * map would only pull it out from under the click. One chosen from the
+   * search list, or found by typing an address, is somewhere else entirely,
+   * and a highlight the map is not looking at is no highlight.
+   */
+  const cameraOnSelect = useRef(false)
+  /** The query whose lone match was already selected, so clearing it stays cleared. */
+  const autoPicked = useRef<string | null>(null)
+  /*
    * Sale comps this workspace collected.
    *
    * They live in the same layer machinery as anything the county publishes —
@@ -2399,7 +2410,11 @@ export default function Gis({
   const selectedBox = useMemo<[number, number, number, number] | null>(() => {
     if (selected == null) return null
     if (server?.ready) {
-      const box = serverParcel?.bb
+      // The fetched row lags the selection by one request, and for that
+      // moment it is the previous parcel's box. The camera below flies to
+      // whatever box it is handed, so a box has to be the selected parcel's.
+      if (serverParcel == null || String(serverParcel.id) !== String(selected)) return null
+      const box = serverParcel.bb
       if (!Array.isArray(box) || box.length !== 4) return null
       const [bw, bs, be, bn] = box as number[]
       return [bw, bs, be, bn]
@@ -2418,6 +2433,55 @@ export default function Gis({
     const [w, s, e, n] = selectedBox
     return { lat: (s + n) / 2, lng: (w + e) / 2 }
   }, [selectedBox])
+
+  /*
+   * Go to a parcel chosen from the search.
+   *
+   * The box arrives with the record — at once from the index, one request
+   * later from the store — so this waits on the box rather than the click,
+   * and fits the lot rather than jumping to a fixed zoom: a ranch and a
+   * condo pad are both "the parcel", and one zoom shows neither.
+   */
+  useEffect(() => {
+    if (!cameraOnSelect.current || !selectedBox || selected == null) return
+    cameraOnSelect.current = false
+    const [w, s, e, n] = selectedBox
+    const lat = (s + n) / 2
+    const spanLng = Math.max(e - w, 1e-5)
+    const spanLat = Math.max((n - s) / Math.max(Math.cos((lat * Math.PI) / 180), 0.2), 1e-5)
+    // Zoom at which the lot's longer side fills about a third of a viewport
+    // (240 px of 512 px tiles), never wider than the block or closer than
+    // the roof.
+    const zoom = Math.log2((240 * 360) / (512 * Math.max(spanLng, spanLat)))
+    setLayerView({
+      center: [(w + e) / 2, lat],
+      zoom: Math.min(18, Math.max(PARCEL_MIN_ZOOM + 2, zoom)),
+      key: Date.now(),
+    })
+  }, [selectedBox, selected])
+
+  /** A parcel picked from the search: selected, outlined and brought into view. */
+  const pickFromSearch = useCallback((id: number | string) => {
+    setFeaturePick(null)
+    cameraOnSelect.current = true
+    setSelected(id)
+  }, [])
+
+  /*
+   * An address typed in full is a parcel, not a list.
+   *
+   * When what was typed matches exactly one record in the whole market, that
+   * record is selected as if it had been clicked — the map goes there and
+   * outlines it. Once per query: clearing the selection afterwards leaves it
+   * cleared, and the next keystroke is a new query.
+   */
+  useEffect(() => {
+    if (searching || query.trim() === '' || !filtered || filtered.length !== 1 || summary.count !== 1) return
+    if (autoPicked.current === queryKey) return
+    autoPicked.current = queryKey
+    const id = filtered[0].id as number | string
+    if (id != null && String(id) !== String(selected ?? '')) pickFromSearch(id)
+  }, [searching, query, filtered, summary.count, queryKey, selected, pickFromSearch])
 
   /*
    * What each switched-on layer holds at the selected parcel.
@@ -3582,6 +3646,14 @@ export default function Gis({
               placeholder="Address, owner or parcel id"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                // Enter goes to the best match rather than waiting for a
+                // click on it: typing an address and pressing Enter is how
+                // people expect to arrive at a parcel.
+                if (event.key !== 'Enter' || !filtered?.length) return
+                event.preventDefault()
+                pickFromSearch(filtered[0].id as number | string)
+              }}
             />
             {!(server?.ready || index) && (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
@@ -3604,7 +3676,7 @@ export default function Gis({
                       <button
                         type="button"
                         className="w-full py-1.5 text-left hover:bg-sunken"
-                        onClick={() => setSelected(row.id as number | string)}
+                        onClick={() => pickFromSearch(row.id as number | string)}
                       >
                         <span className="block truncate text-xs font-medium text-ink">
                           {String(row.ad || `Parcel ${row.gid ?? row.id}`)}
