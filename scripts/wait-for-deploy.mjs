@@ -26,9 +26,15 @@ if (!BASE) {
 const TIMEOUT_MS = Number(process.env.DEPLOY_WAIT_MS || 8 * 60 * 1000)
 const INTERVAL_MS = 5000
 
-/** The hashed main bundle Vite emitted, e.g. "index-B-bp-im6.js". */
+/**
+ * The hashed main bundle Vite emitted, e.g. "index-B-bp-im6.js".
+ *
+ * With one HTML entry the bundle took the page's name; since the public
+ * pages became entries of their own, the one shared bundle is named after
+ * the module they all load, src/main.tsx, so either name is the bundle.
+ */
 function mainBundle(html) {
-  const match = html.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/)
+  const match = html.match(/assets\/((?:index|main)-[A-Za-z0-9_-]+\.js)/)
   return match ? match[1] : null
 }
 

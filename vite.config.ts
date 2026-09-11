@@ -23,8 +23,8 @@ export default defineConfig({
     // by path. The asset host serves /investors from investors.html.
     rollupOptions: {
       input: {
-        // Named `index` so the bundle stays index-<hash>.js, which is what
-        // scripts/wait-for-deploy.mjs looks for when it checks a rollout.
+        // The pages all load src/main.tsx, so Vite emits one shared bundle
+        // named main-<hash>.js; scripts/wait-for-deploy.mjs knows that name.
         index: 'index.html',
         investors: 'investors.html',
         developers: 'developers.html',
