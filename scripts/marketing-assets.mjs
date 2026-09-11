@@ -49,6 +49,13 @@ async function crops(source) {
 const CARDS = [
   {
     file: 'og.png',
+    layout: 'trio',
+    eyebrow: 'CRM + GIS + Market surveys',
+    title: 'One tool for the whole deal',
+    sub: 'The parcel map, the market survey and the CRM in one workspace. Ten markets, $29/month, teammates included.',
+  },
+  {
+    file: 'og-brokers.png',
     eyebrow: 'For tenant rep brokers',
     title: 'Market surveys your clients actually open',
     sub: 'Map the sites, shade the demographics, plan the tour and send one live link. $29/month, teammates included.',
@@ -135,13 +142,58 @@ function fontFaces() {
     .join('\n')
 }
 
+/*
+ * The root card shows the three halves of the product side by side: the CRM
+ * as a small table in the app's own columns (the smoke test takes no CRM
+ * screenshot, and a real workspace's CRM is someone's private data), the
+ * parcel map and the survey map as real screenshots.
+ */
+function trioPanels() {
+  const gis = dataUri(path.join(PUBLIC, 'shots/gis-map.jpg'))
+  const survey = dataUri(path.join(PUBLIC, 'shots/map.jpg'))
+  const rows = [
+    ['Deal', 'Harbor Blvd pad site', 'LOI out · 1.2 ac', 'Retail'],
+    ['Person', 'M. Alvarez', 'Owner, 3 parcels', 'Investor'],
+    ['Company', 'Northline Holdings', '14 parcels · $41M', 'Portfolio'],
+    ['Place', '2101 Harbor Blvd', 'APN 425-071-12', 'Site'],
+  ]
+  const crm = `<table>
+    <thead><tr><th>Type</th><th>Name</th><th>Details</th><th>Profile</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`
+  return `
+  <div class="panel p1"><span class="tag">Market surveys</span><img src="${survey}" alt=""></div>
+  <div class="panel p2"><span class="tag">GIS</span><img src="${gis}" alt=""></div>
+  <div class="panel p3"><span class="tag">CRM</span><div class="crm">
+    <div class="bar"><b>CRM</b><span>Deals</span><span>People</span><span>Companies</span><span>Places</span></div>${crm}</div></div>`
+}
+
+const TRIO_CSS = `
+  .panel{position:absolute;border-radius:12px;overflow:hidden;background:#fff;box-shadow:0 24px 50px rgba(0,0,0,.45);border:1px solid #22406f}
+  .panel img{display:block;width:100%}
+  .tag{position:absolute;left:12px;top:12px;z-index:2;padding:5px 10px;border-radius:999px;background:#0c1f42;color:#7fd9db;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
+  .p1{left:650px;top:290px;width:520px;transform:rotate(-2deg)}
+  .p2{left:720px;top:130px;width:420px;height:230px;transform:rotate(2deg)}
+  .p3{left:600px;top:430px;width:560px;transform:rotate(-1deg)}
+  .crm{background:#fff;font-size:13px;color:#0f172a}
+  .bar{display:flex;gap:14px;align-items:center;padding:10px 14px;border-bottom:1px solid #e2e8f0;color:#64748b}
+  .bar b{color:#143366;font-size:14px;margin-right:6px}
+  .bar span:first-of-type{color:#01A3A8;font-weight:600}
+  table{border-collapse:collapse;width:100%}
+  th{text-align:left;padding:7px 14px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#64748b;background:#f6f8fa;border-bottom:1px solid #e2e8f0}
+  td{padding:9px 14px;border-bottom:1px solid #eef2f6;white-space:nowrap}
+  td:first-child{color:#64748b}
+  td:nth-child(2){font-weight:600}`
+
 function cardHtml(card) {
   const mark = dataUri(path.join(PUBLIC, 'brand', 'lq-mark-inverse.png'))
-  const shot = dataUri(path.join(PUBLIC, card.shot))
+  const trio = card.layout === 'trio'
+  const shot = trio ? '' : dataUri(path.join(PUBLIC, card.shot))
   const titleSize = card.title.length > 44 ? 54 : 64
   return `<!doctype html><html><head><meta charset="utf-8">
 <style>
 ${fontFaces()}
+${trio ? TRIO_CSS : ''}
   html,body{margin:0;width:1200px;height:630px;overflow:hidden;background:#0c1f42;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif}
   .grid{position:absolute;inset:0;background-image:
     repeating-linear-gradient(0deg,rgba(122,170,225,.07) 0 1px,transparent 1px 46px),
@@ -153,9 +205,9 @@ ${fontFaces()}
   .brand span{color:#fff;font-weight:800;font-size:30px;letter-spacing:-.02em}
   .site{position:absolute;right:64px;top:62px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:20px;color:#8ea0bd}
   .eyebrow{position:absolute;left:64px;top:170px;padding:9px 16px;border:1px solid #22406f;border-radius:999px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:17px;letter-spacing:.16em;text-transform:uppercase;color:#7fd9db}
-  h1{position:absolute;left:64px;top:222px;width:620px;margin:0;color:#fff;font-weight:800;font-size:${titleSize}px;line-height:1.05;letter-spacing:-.025em}
-  p{position:absolute;left:64px;bottom:60px;width:600px;margin:0;color:#c8d3e6;font-size:24px;line-height:1.35;font-weight:500}
-  .shot{position:absolute;left:${1200 - card.shotWidth}px;top:250px;width:${card.shotWidth + 80}px;border-radius:14px 0 0 0;overflow:hidden;background:#fff;box-shadow:0 30px 60px rgba(0,0,0,.45);border:1px solid #22406f;border-right:0}
+  h1{position:absolute;left:64px;top:222px;width:${trio ? 520 : 620}px;margin:0;color:#fff;font-weight:800;font-size:${titleSize}px;line-height:1.05;letter-spacing:-.025em}
+  p{position:absolute;left:64px;bottom:60px;width:${trio ? 500 : 600}px;margin:0;color:#c8d3e6;font-size:24px;line-height:1.35;font-weight:500}
+  .shot{position:absolute;left:${1200 - (card.shotWidth || 0)}px;top:250px;width:${(card.shotWidth || 0) + 80}px;border-radius:14px 0 0 0;overflow:hidden;background:#fff;box-shadow:0 30px 60px rgba(0,0,0,.45);border:1px solid #22406f;border-right:0}
   .shot img{display:block;width:100%}
 </style></head><body>
 <div class="grid"></div><div class="rings"></div>
@@ -164,7 +216,7 @@ ${fontFaces()}
 <div class="eyebrow">${card.eyebrow}</div>
 <h1>${card.title}</h1>
 <p>${card.sub}</p>
-<div class="shot"><img src="${shot}" alt=""></div>
+${trio ? trioPanels() : `<div class="shot"><img src="${shot}" alt=""></div>`}
 </body></html>`
 }
 
