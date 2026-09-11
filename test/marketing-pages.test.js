@@ -24,9 +24,13 @@ describe('public pages', () => {
       assert.ok(!seen.has(title), `${file} title is its own`)
       seen.add(title)
       const image = meta(html, 'property', 'og:image')
-      assert.match(image ?? '', /^https:\/\/landquotient\.com\/og[\w-]*\.png$/, `${file} preview image`)
+      // A version may follow the file (og.png?v=...), so a crawler that
+      // cached an empty card fetches the image afresh; the file itself has
+      // no version in its name.
+      assert.match(image ?? '', /^https:\/\/landquotient\.com\/og[\w-]*\.png(\?v=\w+)?$/, `${file} preview image`)
       assert.equal(meta(html, 'name', 'twitter:image'), image, `${file} twitter image matches`)
-      assert.ok(fs.existsSync(`public/${image.split('/').pop()}`), `${file} preview image exists in public/`)
+      const imageFile = image.split('/').pop().split('?')[0]
+      assert.ok(fs.existsSync(`public/${imageFile}`), `${file} preview image exists in public/`)
       assert.match(meta(html, 'property', 'og:url') ?? '', /^https:\/\/landquotient\.com\//, `${file} og:url`)
       assert.ok(html.includes('src="/src/main.tsx"'), `${file} loads the app`)
     }

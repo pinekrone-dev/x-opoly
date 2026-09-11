@@ -7,7 +7,7 @@ import { PLACEHOLDER_ORIGIN, isHtml, withPreviewOrigin } from '../app/lib/previe
 describe('link previews', () => {
   test('index.html ships absolute preview URLs a crawler can follow', () => {
     const html = fs.readFileSync('index.html', 'utf8')
-    assert.match(html, /property="og:image" content="https:\/\/[^"]+\/og\.png"/)
+    assert.match(html, /property="og:image" content="https:\/\/[^"]+\/og\.png(\?v=\w+)?"/)
     assert.match(html, /name="twitter:card" content="summary_large_image"/)
     // Relative URLs are the classic mistake here: a crawler has no page
     // context to resolve them against, so the card renders without an image.
