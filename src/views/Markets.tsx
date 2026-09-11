@@ -32,6 +32,7 @@ const OVERLAYS: Record<string, string[]> = {
   'dallas-tx': ['Zoning', 'Historic overlays', 'Road projects', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
   'philadelphia-pa': ['Zoning', 'Zoning overlays', 'Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
   'los-angeles-ca': ['Zoning', 'Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'san-diego-ca': ['Zoning', 'Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
 }
 
 /** The number of markets, written out while it is small enough to read as a word. */
@@ -43,6 +44,7 @@ const COUNT_WORDS: Record<number, string> = {
 const ORDER = [
   'phoenix-az',
   'los-angeles-ca',
+  'san-diego-ca',
   'denver-co',
   'tampa-fl',
   'minneapolis-mn',
