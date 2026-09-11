@@ -472,5 +472,5 @@ export const ALSO_ON = [
   { href: '/developers', name: 'Developers', body: 'Zoning, entitlements and the permit pipeline.' },
   { href: '/investors', name: 'Investors', body: 'Owner of record, portfolios and mailing addresses.' },
   { href: '/investment-sales', name: 'Investment sales brokers', body: 'Owner lookup and comps.' },
-  { href: '/markets', name: 'Markets', body: 'Ten counties, 6.2 million parcels.' },
+  { href: '/markets', name: 'Markets', body: 'Every parcel on the roll, county by county.' },
 ]

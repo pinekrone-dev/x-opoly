@@ -24,10 +24,18 @@ const OVERLAYS: Record<string, string[]> = {
   'phoenix-az': ['Zoning', 'Existing land use', 'Permits', 'Entitlements', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
   'new-york-ny': ['Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
   'jersey-city-nj': ['Zoning', 'Redevelopment areas', 'Traffic counts', 'Rail stations', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'denver-co': ['Existing land use', 'Zoning', 'Permits', 'Entitlements', 'Landmark districts', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+}
+
+/** The number of markets, written out while it is small enough to read as a word. */
+const COUNT_WORDS: Record<number, string> = {
+  10: 'Ten', 11: 'Eleven', 12: 'Twelve', 13: 'Thirteen', 14: 'Fourteen', 15: 'Fifteen',
+  16: 'Sixteen', 17: 'Seventeen', 18: 'Eighteen', 19: 'Nineteen', 20: 'Twenty',
 }
 
 const ORDER = [
   'phoenix-az',
+  'denver-co',
   'jersey-city-nj',
   'orange-county-ca',
   'new-york-ny',
@@ -52,12 +60,13 @@ export default function Markets({
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
-    document.title = 'Land Quotient markets — ten counties, every parcel on the roll'
+    document.title = 'Land Quotient markets — every parcel on the roll, county by county'
     let live = true
     fetchMarkets()
       .then((list) => {
         if (!live) return
-        list.sort((a, b) => ORDER.indexOf(a.slug) - ORDER.indexOf(b.slug))
+        const rank = (m: Market) => (ORDER.includes(m.slug) ? ORDER.indexOf(m.slug) : ORDER.length)
+        list.sort((a, b) => rank(a) - rank(b))
         setMarkets(list)
       })
       .catch(() => live && setFailed(true))
@@ -86,7 +95,7 @@ export default function Markets({
           <div className="relative mx-auto max-w-5xl px-5 py-16 sm:py-20">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand-soft">Markets</p>
             <h1 className="mt-3 max-w-2xl text-3xl font-bold leading-tight tracking-tight text-white sm:text-[2.6rem]">
-              Ten counties, every parcel on the roll
+              {sums ? `${COUNT_WORDS[sums.markets] ?? sums.markets} counties` : 'Every county'}, every parcel on the roll
             </h1>
             <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-slate-300">
               Each market is one county’s own appraisal or assessment roll, loaded whole: every parcel, its
