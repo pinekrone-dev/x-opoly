@@ -10,7 +10,7 @@ tool. Two repositories make it, and they are not copies of each other:
 
 | Repository | Role | Where it runs |
 |---|---|---|
-| `pinekrone-dev/x-opoly` | **The product.** Hono API + React/MapLibre UI on a Cloudflare Worker. CRM, surveys, tours, the GIS map, billing. | Worker `x-opoly`, `survey.realestateaistudio.com` (future `landquotient.com`) |
+| `pinekrone-dev/x-opoly` | **The product.** Hono API + React/MapLibre UI on a Cloudflare Worker. CRM, surveys, tours, the GIS map, billing. | Worker `x-opoly`, `landquotient.com` (`survey.realestateaistudio.com` retired 2026-09-11) |
 | `pinekrone-dev/prospector` | **The data factory.** Python pipeline that pulls county parcel rolls and city/state layers, cuts tiles, writes a catalogue, and publishes to R2 and D1. | GitHub Actions runners; output on `data.realestateaistudio.com` (R2 bucket `prospector-data`) |
 
 The product never fetches from a county. The pipeline never renders a page the
