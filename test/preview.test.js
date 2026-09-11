@@ -20,9 +20,11 @@ describe('link previews', () => {
   })
 
   test('the served origin replaces the one baked in at build time', () => {
+    // The placeholder is the real origin now, so the rewrite is exercised
+    // against a different host; on the live domain it is a no-op.
     const html = `<meta property="og:image" content="${PLACEHOLDER_ORIGIN}/og.png" />`
-    const rewritten = withPreviewOrigin(html, 'https://landquotient.com')
-    assert.match(rewritten, /content="https:\/\/landquotient\.com\/og\.png"/)
+    const rewritten = withPreviewOrigin(html, 'https://preview.example.com')
+    assert.match(rewritten, /content="https:\/\/preview\.example\.com\/og\.png"/)
     assert.ok(!rewritten.includes(PLACEHOLDER_ORIGIN))
   })
 
