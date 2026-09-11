@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /survey/
+Disallow: /s/
+Disallow: /settings
+Sitemap: https://landquotient.com/sitemap.xml

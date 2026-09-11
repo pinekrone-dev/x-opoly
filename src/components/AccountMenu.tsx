@@ -33,26 +33,6 @@ export default function AccountMenu({
   const [notice, setNotice] = useState<string | null>(null)
   const [enrolment, setEnrolment] = useState<{ secret: string; uri: string; qr: string } | null>(null)
   const [totpCode, setTotpCode] = useState('')
-  const [emailCheck, setEmailCheck] = useState<string | null>(null)
-
-  /**
-   * The operator's proof that verification emails can leave: one test
-   * message to their own inbox, with the provider's answer shown here.
-   */
-  const runEmailCheck = async () => {
-    setBusy(true)
-    setError(null)
-    setEmailCheck(null)
-    try {
-      const result = await api.emailCheck()
-      setEmailCheck(`${result.provider} accepted it (${result.id ?? 'no id'}). Check ${result.to} for it now.`)
-    } catch (cause) {
-      setEmailCheck(null)
-      setError(cause instanceof Error ? cause.message : 'The test email could not be sent.')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   /** Mints a secret and renders it as a QR for the authenticator to scan. */
   const startTotp = async () => {
@@ -340,22 +320,6 @@ export default function AccountMenu({
                       }.`
                     : 'Not active.'}
               </p>
-              {/* Instance owner only: no minting here — free codes are made
-                  in Stripe, off the site — but the email path can be proven
-                  from this menu. */}
-              {billing.canMintCodes ? (
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className="btn-secondary w-full text-xs"
-                    disabled={busy}
-                    onClick={() => void runEmailCheck()}
-                  >
-                    {busy ? 'Working…' : 'Send me a test email'}
-                  </button>
-                  {emailCheck ? <p className="mt-2 text-xs text-brand-deep">{emailCheck}</p> : null}
-                </div>
-              ) : null}
               {billing.portalAvailable ? (
                 <button
                   type="button"

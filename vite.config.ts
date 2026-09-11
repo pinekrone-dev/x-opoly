@@ -15,5 +15,20 @@ export default defineConfig({
     port: 5173,
     proxy: { '/api': { target: apiTarget, changeOrigin: true } },
   },
-  build: { outDir: 'dist', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    sourcemap: false,
+    // One HTML entry per public page, so each carries its own title and
+    // link preview for crawlers; they all load the same app, which routes
+    // by path. The asset host serves /investors from investors.html.
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        investors: 'investors.html',
+        developers: 'developers.html',
+        'investment-sales': 'investment-sales.html',
+        markets: 'markets.html',
+      },
+    },
+  },
 })

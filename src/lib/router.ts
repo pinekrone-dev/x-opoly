@@ -22,7 +22,9 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings' | 'audience' | 'markets'
+  /** Which public page an `audience` route is showing. */
+  audience?: 'investors' | 'developers' | 'investment-sales'
   id?: string
   token?: string
   /** Which CRM object a `record` route is showing. */
@@ -39,6 +41,9 @@ export function matchRoute(path: string): Route {
 
   // Public, and matched before anything that needs a session.
   if (/^\/faq\/?$/.test(path)) return { view: 'faq' }
+  if (/^\/markets\/?$/.test(path)) return { view: 'markets' }
+  const audience = path.match(/^\/(investors|developers|investment-sales)\/?$/)
+  if (audience) return { view: 'audience', audience: audience[1] as Route['audience'] }
 
   // Where Stripe sends the buyer back; the session id rides the query string.
   if (/^\/billing\/return\/?$/.test(path)) return { view: 'billingReturn' }
