@@ -108,7 +108,10 @@ bucket_name = "prospector-data"
 [vars]
 # Which further parcel store each market lives in, "slug=BINDING" pairs
 # separated by commas. Empty until a market is published to a second store.
-PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2"
+# The second store takes the next nine counties, about 4.6 million parcels;
+# the ones after those (Los Angeles, Chicago, San Diego, the Inland Empire)
+# need a third.
+PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2,minneapolis-mn=PARCELS_2,baltimore-md=PARCELS_2,detroit-mi=PARCELS_2,philadelphia-pa=PARCELS_2,dallas-tx=PARCELS_2,fort-worth-tx=PARCELS_2,miami-fl=PARCELS_2"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
