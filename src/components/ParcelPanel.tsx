@@ -16,6 +16,10 @@ export interface PanelRow {
   always?: boolean
   yes?: string
   no?: string
+  /** What an always-shown row says when the county publishes nothing: Los
+   *  Angeles withholds every owner name under AB 1785, and a dash there
+   *  would read as "unknown" when the truth is "not published". */
+  empty?: string
 }
 
 export interface PanelGroup {
@@ -51,7 +55,7 @@ function format(row: PanelRow, value: Cell, codes: Record<string, { d?: string }
 
   const empty = value === undefined || value === null || value === '' || value === 0
   if (empty && !row.always) return null
-  if (empty) return '—'
+  if (empty) return row.empty || '—'
 
   switch (row.f) {
     case 'money':
