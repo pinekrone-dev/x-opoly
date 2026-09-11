@@ -23,7 +23,9 @@ export default defineConfig({
     // by path. The asset host serves /investors from investors.html.
     rollupOptions: {
       input: {
-        main: 'index.html',
+        // Named `index` so the bundle stays index-<hash>.js, which is what
+        // scripts/wait-for-deploy.mjs looks for when it checks a rollout.
+        index: 'index.html',
         investors: 'investors.html',
         developers: 'developers.html',
         'investment-sales': 'investment-sales.html',
