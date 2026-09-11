@@ -87,6 +87,22 @@ const CARDS = [
     shot: 'shots/gis.jpg',
     shotWidth: 500,
   },
+  {
+    file: 'og-faq.png',
+    eyebrow: 'Questions',
+    title: 'What people ask before they move a live requirement',
+    sub: 'What it is, what it costs, where the data comes from, and what a client sees. Ten markets, $29/month.',
+    shot: 'shots/map.jpg',
+    shotWidth: 440,
+  },
+  {
+    file: 'og-gis.png',
+    eyebrow: 'The parcel map',
+    title: 'Zoning, permits and owners on every parcel',
+    sub: 'Every parcel on the county roll, shaded by use or value, with the city’s layers on top and the owner of record behind each one.',
+    shot: 'shots/gis-map.jpg',
+    shotWidth: 440,
+  },
 ]
 
 const dataUri = (file) => {

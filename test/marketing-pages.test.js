@@ -7,7 +7,7 @@ import fs from 'node:fs'
  * own title and preview. These checks are the ones a broken card would fail.
  */
 
-const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html']
+const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html', 'faq.html', 'gis.html']
 
 const meta = (html, attr, name) => {
   const m = html.match(new RegExp(`<meta\\s+${attr}="${name}"\\s+content="([^"]*)"`, 's'))
