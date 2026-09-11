@@ -14,7 +14,7 @@
  */
 
 /** The origin baked into index.html at build time. */
-export const PLACEHOLDER_ORIGIN = 'https://survey.realestateaistudio.com'
+export const PLACEHOLDER_ORIGIN = 'https://landquotient.com'
 
 /** Rewrites preview URLs in `html` to `origin`. A no-op when they match. */
 export function withPreviewOrigin(html, origin) {
