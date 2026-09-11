@@ -72,6 +72,17 @@ function appFor(env) {
        * rebuild fills the store.
        */
       parcelDb: env.PARCELS ? d1Adapter(env.PARCELS) : null,
+      /*
+       * The further stores, when there are any: every binding named
+       * PARCELS_2, PARCELS_3 and so on, which PARCEL_SHARDS assigns markets to.
+       * One D1 fills at about twelve million parcels, and the ten markets
+       * before this held six.
+       */
+      parcelShards: Object.fromEntries(
+        Object.keys(env)
+          .filter((name) => /^PARCELS_\d+$/.test(name) && env[name])
+          .map((name) => [name, d1Adapter(env[name])]),
+      ),
       storage: r2Storage(env.BUCKET),
       env,
     })

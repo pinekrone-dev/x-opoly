@@ -85,6 +85,17 @@ binding = "PARCELS"
 database_name = "landquotient-parcels"
 database_id = "4e2fa3cb-c04c-4350-bdce-598b3ca3f891"
 
+# One D1 holds ten gigabytes, which is about twelve million parcels once the
+# text index is counted, and the first store was half full with ten markets in
+# it. Further stores are bound as PARCELS_2, PARCELS_3 and so on, and the
+# PARCEL_SHARDS var below names the one each new market lives in. A market the
+# var does not name lives in PARCELS, so nothing already published moves.
+#
+# [[d1_databases]]
+# binding = "PARCELS_2"
+# database_name = "landquotient-parcels-2"
+# database_id = "<id from wrangler d1 create landquotient-parcels-2>"
+
 # The Prospector parcel data, served publicly at data.realestateaistudio.com.
 # Bound here so the pipeline's GitHub Actions run can publish county rebuilds
 # through /api/gis/ingest — authenticated by the run's own OIDC token, so no
@@ -95,6 +106,9 @@ binding = "PROSPECTOR_DATA"
 bucket_name = "prospector-data"
 
 [vars]
+# Which further parcel store each market lives in, "slug=BINDING" pairs
+# separated by commas. Empty until a market is published to a second store.
+PARCEL_SHARDS = ""
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
