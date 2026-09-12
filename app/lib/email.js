@@ -19,20 +19,65 @@ export class EmailError extends Error {
   }
 }
 
+/*
+ * Who transactional mail may come from, and who it may never come from.
+ *
+ * Never a person. This mail is sent by the product to a stranger who just
+ * typed their address into a signup form. A personal sender puts a human
+ * inbox behind an automated message: replies land somewhere nobody is
+ * watching, the address is handed to everyone who ever signs up, and the
+ * domain's reputation for this mail gets tied to mail that person also
+ * sends by hand.
+ *
+ * So the sender is not simply trusted from configuration. EMAIL_FROM may
+ * choose any non-personal address on the product's own domain, and anything
+ * else is refused and replaced with the no-reply default. A deployment
+ * misconfigured with an owner's address therefore sends from no-reply; it
+ * never sends as a person.
+ *
+ * EMAIL_DOMAIN overrides the domain for a deployment that sends from
+ * somewhere else. Whatever it is, the provider must have it authenticated —
+ * a SendGrid authenticated domain or a Resend verified domain — or the send
+ * bounces at the provider.
+ */
+export const DEFAULT_SENDER = 'noreply@landquotient.com'
+const DEFAULT_SENDER_NAME = 'Land Quotient'
+
+/*
+ * Local parts that name a human rather than a function.
+ *
+ * Matched on the local part alone, so it holds whatever the domain is, and
+ * it catches the decorated forms a config edit tends to produce: kevin,
+ * kevin.krone, kevin-krone, kevinkrone, kkrone. Function addresses that
+ * happen to contain a name are not the risk here; a bare first name is.
+ */
+const PERSONAL = /^(kevin|kkrone|krone|pinekrone)([._+-]?[a-z]*)*$/i
+
+/** Whether an address is one this product may send transactional mail as. */
+export function allowedSender(email, env = {}) {
+  const at = String(email || '').trim().toLowerCase()
+  const parts = at.split('@')
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return false
+  const domain = String(env.EMAIL_DOMAIN || DEFAULT_SENDER.split('@')[1]).toLowerCase()
+  if (parts[1] !== domain) return false
+  return !PERSONAL.test(parts[0])
+}
+
 /**
  * The sender, split into address and display name.
  *
- * EMAIL_FROM accepts either `Name <address>` or a bare address, and must be
- * a sender the provider has verified — a SendGrid single sender or
- * authenticated domain, or a Resend-verified domain. The fallback address
- * will bounce on SendGrid until one is verified, so set EMAIL_FROM before
- * opening signup.
+ * EMAIL_FROM accepts either `Name <address>` or a bare address. An address
+ * the rule above refuses is dropped for the no-reply default rather than
+ * used, because sending as a person is worse than sending as the wrong
+ * mailbox.
  */
 function sender(env) {
-  const raw = String(env.EMAIL_FROM || 'Land Quotient <noreply@landquotient.com>')
+  const raw = String(env.EMAIL_FROM || `${DEFAULT_SENDER_NAME} <${DEFAULT_SENDER}>`)
   const match = raw.match(/^\s*(.*?)\s*<([^>]+)>\s*$/)
-  if (match) return { name: match[1] || 'Land Quotient', email: match[2].trim() }
-  return { name: 'Land Quotient', email: raw.trim() }
+  const email = (match ? match[2] : raw).trim()
+  const name = (match && match[1]) || DEFAULT_SENDER_NAME
+  if (!allowedSender(email, env)) return { name: DEFAULT_SENDER_NAME, email: DEFAULT_SENDER }
+  return { name, email }
 }
 
 /** One fetch, with a network failure translated into the survivable error. */
