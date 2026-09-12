@@ -109,6 +109,13 @@ does not follow automatically, in the order it has to happen:
    records it prints, then set the `EMAIL_FROM` secret to
    `Land Quotient <support@landquotient.com>`. Until the domain is authenticated, sends are
    refused and signup reports that the email could not be sent.
+
+   The sender is never a person. `EMAIL_FROM` may name any non-personal address on
+   landquotient.com, and `app/lib/email.js` refuses anything else, falling back to
+   `noreply@landquotient.com` rather than sending as someone's own mailbox. That covers a
+   personal address typed into the secret by mistake, a decorated form of one, and any
+   address on another domain. Set `EMAIL_DOMAIN` if a deployment sends from elsewhere; the
+   provider must have whatever it names authenticated either way.
 4. **Google Maps key.** Add `https://landquotient.com/*` to the key's website restrictions,
    and set the `GOOGLE_REFERER` secret to `https://landquotient.com/`. The Worker sends that
    header on every Google call because a server-side request carries no referer of its own;
