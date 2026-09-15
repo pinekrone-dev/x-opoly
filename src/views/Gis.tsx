@@ -900,6 +900,15 @@ const CSV_COLUMNS: [string, string][] = [
 export const CSV_LIMIT = 5000
 
 /**
+ * The most parcels one holder's list shows.
+ *
+ * Enough to walk a real portfolio, small enough that opening the list is
+ * one quick request. Beyond it the list says how many it is showing, and
+ * the highlight action puts the whole set on the map and into the report.
+ */
+const HOLDINGS_SHOWN = 200
+
+/**
  * A CSV of what is on screen.
  *
  * Quoted and doubled rather than escaped: an owner of record is a legal name
@@ -2460,6 +2469,29 @@ export default function Gis({
     })
   }, [selectedBox, selected])
 
+  /**
+   * One holder's parcels, fetched when their list is opened.
+   *
+   * Capped: a county holder can own thousands, and this is a panel, not a
+   * report. The Report tab carries the whole set once the map is filtered to
+   * them, which is what the highlight action below is for.
+   */
+  const loadHoldings = useCallback(
+    async (kind: 'p' | 'b', id: string) => {
+      if (server?.ready && active) {
+        const page = await api.parcels.search(active, { owner: { kind, id } }, { limit: HOLDINGS_SHOWN })
+        return (page.rows ?? []) as Record<string, string | number | null>[]
+      }
+      // The downloaded-index path already holds every row, so the same
+      // question is a filter rather than a request.
+      const key = kind === 'p' ? 'po' : 'bo'
+      return rows
+        .filter((row) => String(row[key] ?? '') === id)
+        .slice(0, HOLDINGS_SHOWN) as Record<string, string | number | null>[]
+    },
+    [server, active, rows],
+  )
+
   /** A parcel picked from the search: selected, outlined and brought into view. */
   const pickFromSearch = useCallback((id: number | string) => {
     setFeaturePick(null)
@@ -3262,7 +3294,16 @@ export default function Gis({
               />
             </div>
 
-            {showOwners && (
+            {/*
+              * Shown while the layer is on, and always while a holder is
+              * picked. The pick can be made from a parcel panel, which stays
+              * available once the owner names have loaded even if the layer
+              * is later switched off — and this block holds the only label
+              * for what the map is filtered to and the only way to clear it.
+              * Gated on the layer alone, that left the map filtered to one
+              * holder with nothing on screen saying so.
+              */}
+            {(showOwners || ownerPick) && (
               <div>
                 <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
                   Owner groups
@@ -4063,13 +4104,14 @@ export default function Gis({
                           <p className="text-muted">
                             Portfolio · {portfolio.c.toLocaleString()} parcels · {money(portfolio.v)}
                           </p>
-                          <button
-                            type="button"
-                            className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
-                            onClick={() => setOwnerPick({ kind: 'p', id: String(parcel.po) })}
-                          >
-                            Show all holdings on the map
-                          </button>
+                          <Holdings
+                            key={`p:${parcel.po}`}
+                            total={portfolio.c}
+                            currentId={String(selected)}
+                            load={() => loadHoldings('p', String(parcel.po))}
+                            onPick={pickFromSearch}
+                            onHighlightAll={() => setOwnerPick({ kind: 'p', id: String(parcel.po) })}
+                          />
                         </div>
                       ) : null}
                       {office ? (
@@ -4078,13 +4120,14 @@ export default function Gis({
                           <p className="text-muted">
                             Back office · {office.c.toLocaleString()} parcels · {money(office.v)}
                           </p>
-                          <button
-                            type="button"
-                            className="mt-0.5 text-[11px] font-medium text-brand hover:underline"
-                            onClick={() => setOwnerPick({ kind: 'b', id: String(parcel.bo) })}
-                          >
-                            Show all holdings on the map
-                          </button>
+                          <Holdings
+                            key={`b:${parcel.bo}`}
+                            total={office.c}
+                            currentId={String(selected)}
+                            load={() => loadHoldings('b', String(parcel.bo))}
+                            onPick={pickFromSearch}
+                            onHighlightAll={() => setOwnerPick({ kind: 'b', id: String(parcel.bo) })}
+                          />
                         </div>
                       ) : null}
                     </PanelSection>
@@ -4218,6 +4261,125 @@ export default function Gis({
       </>
       )}
       </GisSide>
+    </div>
+  )
+}
+
+/**
+ * The rest of what one holder owns here, as a list you can walk.
+ *
+ * This used to be a single "show all holdings on the map" button, which
+ * filtered the map and told you nothing else: no addresses, no way to step
+ * through them, and the only label for what had just happened sat in a
+ * different panel. A holder's other parcels are a list, so this is a list.
+ *
+ * Picking one selects it, which flies the map there and outlines it, and the
+ * panel around this redraws for the parcel just picked. The list survives
+ * that redraw, so stepping through a portfolio is one click per parcel
+ * rather than a click and a hunt.
+ *
+ * Nothing is fetched until it is opened. A holder with four thousand parcels
+ * is a real thing in a county, and nobody opening a parcel panel asked for
+ * that list by opening it.
+ */
+function Holdings({
+  total,
+  currentId,
+  load,
+  onPick,
+  onHighlightAll,
+}: {
+  /** Every parcel this holder owns here, the current one included. */
+  total: number
+  currentId: string
+  load: () => Promise<Record<string, string | number | null>[]>
+  onPick: (id: number | string) => void
+  onHighlightAll: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [rows, setRows] = useState<Record<string, string | number | null>[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    if (!open || rows || busy) return
+    setBusy(true)
+    setFailed(false)
+    load()
+      .then(setRows)
+      .catch(() => setFailed(true))
+      .finally(() => setBusy(false))
+    // `load` is rebuilt on every render of the panel above; re-running on its
+    // identity would refetch the county forever.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
+
+  // One parcel means there is nothing else to see, and a disclosure promising
+  // otherwise is worse than no control at all.
+  const others = Math.max(0, total - 1)
+  if (others === 0) return null
+
+  const listed = (rows ?? []).filter((row) => String(row.id) !== currentId)
+
+  return (
+    <div className="mt-1">
+      <button
+        type="button"
+        className="flex w-full items-center gap-1 text-[11px] font-medium text-brand hover:underline"
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}
+      >
+        <span aria-hidden className={`transition-transform ${open ? 'rotate-90' : ''}`}>
+          ›
+        </span>
+        See other holdings ({others.toLocaleString()})
+      </button>
+
+      {open ? (
+        <div className="mt-1.5 rounded-md border border-line bg-sunken/40 p-1">
+          {busy ? (
+            <p className="px-1 py-1.5 text-[11px] text-muted">Looking up the rest…</p>
+          ) : failed ? (
+            <p className="px-1 py-1.5 text-[11px] text-rose-700">Could not load the other parcels.</p>
+          ) : listed.length === 0 ? (
+            <p className="px-1 py-1.5 text-[11px] text-muted">No other parcels came back.</p>
+          ) : (
+            <>
+              <ul className="max-h-56 divide-y divide-line overflow-y-auto">
+                {listed.map((row) => (
+                  <li key={String(row.id)}>
+                    <button
+                      type="button"
+                      className="w-full rounded px-1 py-1.5 text-left hover:bg-surface"
+                      onClick={() => onPick(row.id as number | string)}
+                    >
+                      <span className="block truncate text-xs font-medium text-ink">
+                        {String(row.ad || `Parcel ${row.gid ?? row.id}`)}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted">
+                        {money(Number(row.mv) || 0)}
+                        {row.at ? ` · ${String(row.at)}` : ''}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {others > listed.length ? (
+                <p className="px-1 pt-1.5 text-[11px] text-muted">
+                  Showing {listed.length.toLocaleString()} of {others.toLocaleString()}.
+                </p>
+              ) : null}
+            </>
+          )}
+          <button
+            type="button"
+            className="mt-1 w-full rounded px-1 py-1 text-left text-[11px] font-medium text-accent hover:underline"
+            onClick={onHighlightAll}
+          >
+            Highlight all {total.toLocaleString()} on the map
+          </button>
+        </div>
+      ) : null}
     </div>
   )
 }
