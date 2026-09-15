@@ -25,6 +25,17 @@ import { generateSecret, otpauthUri, verifyTotp } from './totp.js'
 /** Sessions last a fortnight; a broker should not log in every morning. */
 const SESSION_DAYS = 14
 
+/**
+ * A password reset link lasts an hour, not the day a verification link gets.
+ *
+ * The two are not the same risk. A verification link proves an address at
+ * leisure and grants nothing but the account it just created. A reset link
+ * takes an existing account away from whoever holds the password, so it
+ * lives only as long as someone actually needs to walk from the form to
+ * their inbox.
+ */
+const RESET_TTL_MINUTES = 60
+
 /** Long enough that guessing is hopeless, short enough to be typed from a text. */
 const CODE_TTL_MINUTES = 10
 const MAX_CODE_ATTEMPTS = 5
@@ -177,6 +188,81 @@ export async function verifyEmailToken(db, token) {
   }
   await db.run('UPDATE users SET verified = 1, verify_digest = NULL, verify_expires = NULL WHERE id = ?', [row.id])
   return { userId: row.id, user: await getUser(db, row.id) }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Password reset                                                              */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Issues a reset link, returning the raw token; only its digest is stored.
+ *
+ * Issuing one does not change the password or lock the account. Someone who
+ * asks for a link and then remembers their password must still be able to
+ * sign in with it, because otherwise anyone who knows an address could deny
+ * its owner access just by pressing the button.
+ */
+export async function createPasswordReset(db, userId) {
+  const token = randomToken(32)
+  await db.run('UPDATE users SET reset_digest = ?, reset_expires = ? WHERE id = ?', [
+    await hashToken(token),
+    minutesFromNow(RESET_TTL_MINUTES),
+    userId,
+  ])
+  return token
+}
+
+/**
+ * Redeems a reset link and sets the new password.
+ *
+ * Four things happen together, and each one matters:
+ *
+ *   * The link is spent. The digest is cleared, so a link forwarded, logged
+ *     by a mail scanner or left in a browser history works exactly once.
+ *   * Every existing session is destroyed. The usual reason for resetting a
+ *     password is that someone else may have it, and leaving their session
+ *     alive would make the reset theatre.
+ *   * The lockout is cleared. Whoever just proved they own the inbox should
+ *     not be held out by failed guesses, theirs or an attacker's.
+ *   * The address counts as verified. Reading mail sent to it is the same
+ *     proof the verification link asks for, so an unverified account that
+ *     completes a reset is no longer in limbo.
+ */
+export async function resetPassword(db, token, password) {
+  if (!token) return { error: 'This reset link is not valid.' }
+  const next = String(password ?? '')
+  if (next.length < MIN_PASSWORD_LENGTH) {
+    return { error: `Use at least ${MIN_PASSWORD_LENGTH} characters.` }
+  }
+
+  const row = await db.get('SELECT * FROM users WHERE reset_digest = ?', [await hashToken(String(token))])
+  if (!row) {
+    return { error: 'This reset link is not valid. It may have been used already, or replaced by a newer email.' }
+  }
+  if (isPast(row.reset_expires)) {
+    return { error: 'This reset link has expired. Ask for a new one.' }
+  }
+
+  await db.run(
+    `UPDATE users
+        SET password_hash = ?, reset_digest = NULL, reset_expires = NULL,
+            failed_logins = 0, locked_until = NULL, verified = 1
+      WHERE id = ?`,
+    [await hashPassword(next), row.id],
+  )
+  await destroyAllSessions(db, row.id)
+
+  /*
+   * Whether a session may be handed out here.
+   *
+   * An account with a second factor must not get one. The reset link proves
+   * control of the inbox and nothing else, so signing the browser straight
+   * in would turn "I can read their email" into a way round the second
+   * factor the account is paying for. They set a new password here and then
+   * sign in with it, which asks for the factor as usual.
+   */
+  const secondFactor = Boolean(row.totp_enabled) || Boolean(row.sms_2fa && row.phone)
+  return { userId: row.id, user: await getUser(db, row.id), secondFactor }
 }
 
 function minutesFromNow(minutes) {

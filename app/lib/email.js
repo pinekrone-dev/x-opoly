@@ -157,3 +157,28 @@ export function verificationEmail({ name, url }) {
 </div>`,
   }
 }
+
+/**
+ * The password reset email.
+ *
+ * It says plainly that ignoring it leaves the password alone, because the
+ * person most likely to receive one they did not ask for is someone whose
+ * address a stranger typed into the form. That sentence is the difference
+ * between a worrying email and a harmless one.
+ */
+export function passwordResetEmail({ name, url }) {
+  const greeting = name ? `Hi ${name},` : 'Hi,'
+  return {
+    subject: 'Reset your password — Land Quotient',
+    text: `${greeting}\n\nSomeone asked to reset the password on your Land Quotient account. Choose a new one here:\n\n${url}\n\nThe link works once and expires in an hour. If you did not ask for this, ignore this email: your password stays as it is and nobody can use the link without your inbox.`,
+    html: `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
+  <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
+  <h2 style="margin:0 0 12px;font-size:18px">Reset your password</h2>
+  <p style="margin:0 0 16px;line-height:1.5">${greeting} Someone asked to reset the password on your Land Quotient account. Choose a new one:</p>
+  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Choose a new password</a></p>
+  <p style="margin:0 0 6px;font-size:13px;color:#475569">Or paste this link into your browser:</p>
+  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${url}" style="color:#12AEB6">${url}</a></p>
+  <p style="margin:0;font-size:12px;color:#64748b">The link works once and expires in an hour. If you did not ask for this, ignore this email: your password stays as it is.</p>
+</div>`,
+  }
+}

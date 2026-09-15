@@ -68,6 +68,20 @@ export const api = {
   verifyEmail: (token: string) => request<{ user: Account }>('/api/auth/verify-email', json({ token })),
   resendVerification: (email: string) =>
     request<{ ok: true; message: string }>('/api/auth/resend-verification', json({ email })),
+
+  /**
+   * Asks for a password reset link. The answer is the same whether or not
+   * the address has an account, so nothing here can be used to find out.
+   */
+  forgotPassword: (email: string) =>
+    request<{ ok: true; message: string }>('/api/auth/forgot-password', json({ email })),
+  /**
+   * Spends the emailed reset link and sets the new password. Signs the
+   * browser in, unless the account has a second factor, which the link
+   * cannot stand in for.
+   */
+  resetPassword: (input: { token: string; password: string }) =>
+    request<{ ok: true; secondFactor: boolean; user?: Account }>('/api/auth/reset-password', json(input)),
   /** Operator only: sends a test email to the operator and reports the provider's verdict. */
   emailCheck: () =>
     request<{ ok: boolean; provider: string; id?: string | null; to?: string; sentAt?: string; error?: string }>(

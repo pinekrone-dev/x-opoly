@@ -89,6 +89,8 @@ export const SCHEMA_STATEMENTS = [
     verify_expires TEXT,
     verify_sent_at TEXT,
     verify_error   TEXT,
+    reset_digest   TEXT,
+    reset_expires  TEXT,
     default_market TEXT,
     failed_logins  INTEGER NOT NULL DEFAULT 0,
     locked_until   TEXT,
@@ -431,6 +433,11 @@ export const COLUMN_ADDITIONS = [
   // accepted, and the operator can read this off the row.
   ['users', 'verify_sent_at', 'TEXT'],
   ['users', 'verify_error', 'TEXT'],
+  // A password reset link in flight. Kept apart from the verify_* pair on
+  // purpose: a reset must not cancel a verification the person is part way
+  // through, and a verification must not hand out a password change.
+  ['users', 'reset_digest', 'TEXT'],
+  ['users', 'reset_expires', 'TEXT'],
   // The market the parcel map opens on for this person, chosen on the
   // settings page. NULL means the first live market, as before.
   ['users', 'default_market', 'TEXT'],
