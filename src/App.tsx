@@ -177,12 +177,18 @@ export default function App() {
   /*
    * Anyone without a session sees the public face of the instance: the
    * landing page with pricing when billing is configured, or the sign-in
-   * screen on a private deployment. Invite and verification links, and an
-   * unclaimed workspace, always go straight to the form that handles them.
+   * screen on a private deployment. Invite, verification and password reset
+   * links, and an unclaimed workspace, always go straight to the form that
+   * handles them.
+   *
+   * Every emailed link has to be named here. Only SignIn reads these tokens
+   * out of the query, so a link whose name is missing lands on the landing
+   * page and looks broken: the reset link did exactly that until `reset`
+   * was added, arriving as a home page with no explanation.
    */
   if (!session.user) {
     const params = new URLSearchParams(window.location.search)
-    const hasLinkToken = params.has('invite') || params.has('verify')
+    const hasLinkToken = params.has('invite') || params.has('verify') || params.has('reset')
     const showLanding =
       session.billing.configured && !session.setupRequired && !hasLinkToken && door === 'landing' && route.view !== 'billingReturn'
 
