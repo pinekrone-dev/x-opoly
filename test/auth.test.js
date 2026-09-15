@@ -633,3 +633,217 @@ describe('the second factor', () => {
     assert.ok(stale.error, 'an older code must not still work')
   })
 })
+
+describe('forgotten passwords', () => {
+  /*
+   * The reset flow, end to end, on its own instance so the shared one's
+   * lockouts and closed registration stay out of the way.
+   *
+   * The properties worth asserting are again mostly negative: that the
+   * request cannot be used to find out who has an account, that a link works
+   * exactly once, that it cannot stand in for a second factor, and that
+   * completing one does not leave the thief's session alive.
+   */
+  const setup = async (name, extra = {}) => {
+    const scratch = useTempData()
+    const sent = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes('sendgrid.com')) {
+        sent.push(JSON.parse(String(init?.body ?? '{}')))
+        return new Response('{}', { status: 202 })
+      }
+      // The 2FA case turns on texted codes, and an unanswered Twilio call
+      // fails that request with a 503 that has nothing to do with resets.
+      if (String(url).includes('twilio.com')) {
+        return new Response(JSON.stringify({ sid: 'SM-test' }), { status: 201 })
+      }
+      return realFetch(url, init)
+    }
+    const server = await createServer({
+      DATA_DIR: scratch.directory,
+      DB_FILE: `${scratch.directory}/${name}.db`,
+      SENDGRID_API_KEY: 'SG.test',
+      ...extra,
+    })
+    let jar = null
+    /*
+     * Its own caller address per test.
+     *
+     * The rate limiter's counters live in module scope, so every server
+     * built in this process shares them, and registration allows ten an
+     * hour per address. Without this the later tests here were throttled by
+     * the earlier ones and failed on assertions that had nothing to do with
+     * what they were checking.
+     */
+    const hit = async (path, init = {}) => {
+      const headers = { 'cf-connecting-ip': `203.0.113.${name.length}.${name}`, ...(init.headers || {}) }
+      // The jar stands in for the browser, but a caller that names a cookie
+      // outright means it: that is how a test checks an old session.
+      if (jar && !headers.cookie) headers.cookie = jar
+      const response = await server.fetch(new Request(BASE + path, { ...init, headers }))
+      const setCookie = response.headers.get('set-cookie')
+      if (setCookie) jar = setCookie.split(';')[0]
+      const text = await response.text()
+      return { status: response.status, body: text ? JSON.parse(text) : null, setCookie }
+    }
+    const done = () => {
+      globalThis.fetch = realFetch
+      scratch.cleanup()
+    }
+    /** The reset token out of the most recent email. */
+    const lastToken = () => {
+      const body = sent.at(-1)
+      const match = /[?&]reset=([A-Za-z0-9_-]+)/.exec(JSON.stringify(body ?? {}))
+      return match ? match[1] : null
+    }
+    return { hit, sent, lastToken, done, jar: () => jar, clearJar: () => (jar = null) }
+  }
+
+  test('an unknown address gets the same answer as a real one, and no email', async () => {
+    const s = await setup('unknown')
+    try {
+      await s.hit('/api/auth/register', asJson({ email: 'real@example.com', password: 'a-long-enough-secret' }))
+      s.sent.length = 0
+
+      const known = await s.hit('/api/auth/forgot-password', asJson({ email: 'real@example.com' }))
+      const unknown = await s.hit('/api/auth/forgot-password', asJson({ email: 'nobody@example.com' }))
+
+      assert.equal(known.status, unknown.status)
+      assert.deepEqual(known.body, unknown.body)
+      // Only the real address is written to, so the reply cannot be checked
+      // against an inbox either.
+      assert.equal(s.sent.length, 1)
+      assert.equal(s.sent[0].personalizations[0].to[0].email, 'real@example.com')
+    } finally {
+      s.done()
+    }
+  })
+
+  test('the link sets a new password, signs in, and cannot be used twice', async () => {
+    const s = await setup('once')
+    try {
+      await s.hit('/api/auth/register', asJson({ email: 'once@example.com', password: 'a-long-enough-secret' }))
+      await s.hit('/api/auth/logout', { method: 'POST' })
+      s.clearJar()
+
+      await s.hit('/api/auth/forgot-password', asJson({ email: 'once@example.com' }))
+      const token = s.lastToken()
+      assert.ok(token, 'the email carries a reset token')
+
+      const first = await s.hit('/api/auth/reset-password', asJson({ token, password: 'a-brand-new-secret' }))
+      assert.equal(first.status, 200)
+      assert.equal(first.body.secondFactor, false)
+      assert.equal(first.body.user.email, 'once@example.com')
+      assert.ok(first.setCookie, 'the reset signs this browser in')
+
+      const again = await s.hit('/api/auth/reset-password', asJson({ token, password: 'yet-another-secret' }))
+      assert.equal(again.status, 410)
+
+      s.clearJar()
+      const old = await s.hit('/api/auth/login', asJson({ email: 'once@example.com', password: 'a-long-enough-secret' }))
+      assert.equal(old.status, 401, 'the old password is dead')
+      const fresh = await s.hit('/api/auth/login', asJson({ email: 'once@example.com', password: 'a-brand-new-secret' }))
+      assert.equal(fresh.status, 200)
+    } finally {
+      s.done()
+    }
+  })
+
+  test('a short password is refused and the link survives to be used properly', async () => {
+    const s = await setup('short')
+    try {
+      await s.hit('/api/auth/register', asJson({ email: 'short@example.com', password: 'a-long-enough-secret' }))
+      await s.hit('/api/auth/forgot-password', asJson({ email: 'short@example.com' }))
+      const token = s.lastToken()
+
+      const tooShort = await s.hit('/api/auth/reset-password', asJson({ token, password: 'nope' }))
+      assert.equal(tooShort.status, 410)
+      assert.match(tooShort.body.error, /at least/i)
+
+      const ok = await s.hit('/api/auth/reset-password', asJson({ token, password: 'a-brand-new-secret' }))
+      assert.equal(ok.status, 200, 'a rejected attempt must not burn the link')
+    } finally {
+      s.done()
+    }
+  })
+
+  test('a made-up or empty token is refused', async () => {
+    const s = await setup('bogus')
+    try {
+      for (const token of ['', 'not-a-real-token', 'x'.repeat(64)]) {
+        const result = await s.hit('/api/auth/reset-password', asJson({ token, password: 'a-brand-new-secret' }))
+        assert.equal(result.status, 410, `${token || 'empty'} must be refused`)
+      }
+    } finally {
+      s.done()
+    }
+  })
+
+  test('every other session is signed out by a reset', async () => {
+    const s = await setup('sessions')
+    try {
+      await s.hit('/api/auth/register', asJson({ email: 'kick@example.com', password: 'a-long-enough-secret' }))
+      // The session the registration left behind stands in for the one an
+      // attacker is holding.
+      const stolen = s.jar()
+      assert.ok(stolen)
+
+      await s.hit('/api/auth/forgot-password', asJson({ email: 'kick@example.com' }))
+      await s.hit('/api/auth/reset-password', asJson({ token: s.lastToken(), password: 'a-brand-new-secret' }))
+
+      const stale = await s.hit('/api/auth/me', { headers: { cookie: stolen } })
+      assert.equal(stale.body?.user ?? null, null, 'the old session must be dead')
+    } finally {
+      s.done()
+    }
+  })
+
+  test('a reset link cannot stand in for the second factor', async () => {
+    const s = await setup('factor', {
+      TWILIO_ACCOUNT_SID: 'AC-test',
+      TWILIO_AUTH_TOKEN: 'token',
+      TWILIO_FROM_NUMBER: '+15125550000',
+    })
+    try {
+      await s.hit(
+        '/api/auth/register',
+        asJson({ email: 'factor@example.com', password: 'a-long-enough-secret', phone: '2145550199' }),
+      )
+      const enabled = await s.hit('/api/auth/2fa', asJson({ enabled: true, password: 'a-long-enough-secret' }))
+      assert.equal(enabled.status, 200)
+      await s.hit('/api/auth/logout', { method: 'POST' })
+      s.clearJar()
+
+      await s.hit('/api/auth/forgot-password', asJson({ email: 'factor@example.com' }))
+      const done = await s.hit('/api/auth/reset-password', asJson({ token: s.lastToken(), password: 'a-brand-new-secret' }))
+
+      assert.equal(done.status, 200)
+      assert.equal(done.body.secondFactor, true)
+      assert.equal(done.body.user ?? null, null, 'no account is handed back')
+      assert.equal(done.setCookie ?? null, null, 'and no session cookie')
+
+      // The password did change, and signing in with it still asks for the code.
+      const login = await s.hit('/api/auth/login', asJson({ email: 'factor@example.com', password: 'a-brand-new-secret' }))
+      assert.equal(login.status, 200)
+      assert.equal(login.body.twoFactor, true)
+    } finally {
+      s.done()
+    }
+  })
+
+  test('asking for a link does not disturb the password that still works', async () => {
+    const s = await setup('harmless')
+    try {
+      await s.hit('/api/auth/register', asJson({ email: 'calm@example.com', password: 'a-long-enough-secret' }))
+      await s.hit('/api/auth/logout', { method: 'POST' })
+      s.clearJar()
+
+      await s.hit('/api/auth/forgot-password', asJson({ email: 'calm@example.com' }))
+      const login = await s.hit('/api/auth/login', asJson({ email: 'calm@example.com', password: 'a-long-enough-secret' }))
+      assert.equal(login.status, 200, 'anyone could otherwise lock an address out by asking')
+    } finally {
+      s.done()
+    }
+  })
+})

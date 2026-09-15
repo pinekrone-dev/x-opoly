@@ -10,10 +10,12 @@ import type { Account } from '../types'
  * States rather than screens: they share a frame so the flow never feels like
  * being bounced between pages. A self-serve signup detours through email
  * verification (`checkEmail`), and the emailed link lands back here with
- * `?verify=` in the query, which signs the browser in.
+ * `?verify=` in the query, which signs the browser in. A forgotten password
+ * takes the same shape: `forgot` asks for the address, and the emailed link
+ * lands on `?reset=`, which is the `reset` state.
  */
 
-type Mode = 'signIn' | 'setup' | 'invited' | 'signUp' | 'code' | 'checkEmail'
+type Mode = 'signIn' | 'setup' | 'invited' | 'signUp' | 'code' | 'checkEmail' | 'forgot' | 'reset'
 
 export default function SignIn({
   setupRequired,
@@ -47,6 +49,7 @@ export default function SignIn({
   const [notice, setNotice] = useState<string | null>(null)
   const [inviteToken, setInviteToken] = useState<string | null>(null)
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
+  const [resetToken, setResetToken] = useState<string | null>(null)
 
   /**
    * An invite link lands here signed out, with the token in the query string.
@@ -73,6 +76,21 @@ export default function SignIn({
           setError(cause instanceof Error ? cause.message : 'This verification link is not valid.')
         })
         .finally(() => setBusy(false))
+      return
+    }
+
+    /*
+     * The emailed reset link. Unlike the verification link this cannot be
+     * redeemed on arrival — there is a new password to choose first — so the
+     * token is held and the form is shown. It leaves the address bar either
+     * way, so a reload or a shared screen does not carry it.
+     */
+    const reset = params.get('reset')
+    if (reset) {
+      window.history.replaceState(null, '', window.location.pathname)
+      setResetToken(reset)
+      setPassword('')
+      setMode('reset')
       return
     }
 
@@ -172,6 +190,53 @@ export default function SignIn({
       setNotice(message)
     })
 
+  const requestReset = () =>
+    run(async () => {
+      const { message } = await api.forgotPassword(email)
+      // The same words whether or not that address has an account: the
+      // server will not say, and neither will this screen.
+      setNotice(message)
+    })
+
+  const submitReset = () =>
+    run(async () => {
+      const result = await api.resetPassword({ token: resetToken ?? '', password })
+      if (result.secondFactor || !result.user) {
+        // The link proved the inbox, not the second factor. New password
+        // set; they sign in with it and get challenged as usual.
+        setMode('signIn')
+        setResetToken(null)
+        setPassword('')
+        setNotice('Password changed. Sign in with it and we will ask for your code.')
+        return
+      }
+      onSignedIn(result.user)
+    })
+
+  /*
+   * What the panel calls itself. A lookup rather than a ternary chain: there
+   * are eight states now, and the chain had grown deep enough that adding
+   * one meant re-reading all of it.
+   */
+  const subtitle =
+    mode === 'setup'
+      ? 'Claim this workspace'
+      : mode === 'invited'
+        ? 'Join this workspace'
+        : mode === 'signUp'
+          ? 'Create your workspace'
+          : mode === 'forgot'
+            ? 'Reset your password'
+            : mode === 'reset'
+              ? 'Choose a new password'
+              : mode === 'code'
+                ? 'Confirm it is you'
+                : mode === 'checkEmail'
+                  ? unverifiedEmail || email
+                    ? 'Check your email'
+                    : 'Get a new link'
+                  : 'Sign in to your surveys'
+
   return (
     <div className="grid min-h-full place-items-center bg-paper p-6">
       <div className="panel w-full max-w-sm p-7">
@@ -179,21 +244,7 @@ export default function SignIn({
           <BrandPin size={36} />
           <div>
             <p className="text-sm font-semibold text-ink">Land Quotient</p>
-            <p className="text-xs text-muted">
-              {mode === 'setup'
-                ? 'Claim this workspace'
-                : mode === 'invited'
-                  ? 'Join this workspace'
-                  : mode === 'signUp'
-                    ? 'Create your workspace'
-                    : mode === 'code'
-                      ? 'Confirm it is you'
-                      : mode === 'checkEmail'
-                        ? unverifiedEmail || email
-                          ? 'Check your email'
-                          : 'Get a new link'
-                        : 'Sign in to your surveys'}
-            </p>
+            <p className="text-xs text-muted">{subtitle}</p>
           </div>
         </div>
 
@@ -218,7 +269,98 @@ export default function SignIn({
           </p>
         ) : null}
 
-        {mode === 'checkEmail' ? (
+        {mode === 'forgot' ? (
+          <div className="space-y-3">
+            <p className="text-sm leading-relaxed text-body">
+              Type the address you sign in with and we will email a link to choose a new password.
+            </p>
+            <p className="text-xs leading-relaxed text-muted">
+              The link lasts an hour and works once. Your current password keeps working until you
+              use it.
+            </p>
+            <input
+              autoFocus
+              className="field"
+              type="email"
+              autoComplete="email"
+              placeholder="you@company.com"
+              aria-label="Email address"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !busy && email) void requestReset()
+              }}
+            />
+            {error ? (
+              <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
+            ) : null}
+            {notice ? (
+              <p className="rounded-lg border border-brand/30 bg-brand-tint p-2.5 text-xs text-body">{notice}</p>
+            ) : null}
+            <button
+              type="button"
+              className="btn-primary w-full"
+              disabled={busy || !email}
+              onClick={() => void requestReset()}
+            >
+              {busy ? 'Working…' : 'Email me a link'}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost w-full text-xs"
+              onClick={() => {
+                setMode('signIn')
+                setError(null)
+                setNotice(null)
+              }}
+            >
+              Back to sign in
+            </button>
+          </div>
+        ) : mode === 'reset' ? (
+          <form
+            className="space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (!busy) void submitReset()
+            }}
+          >
+            <p className="text-sm leading-relaxed text-body">
+              Choose a new password. Everywhere you are currently signed in will be signed out.
+            </p>
+            <label className="block">
+              <span className="label">New password</span>
+              <input
+                autoFocus
+                className="field"
+                type="password"
+                autoComplete="new-password"
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              <span className="mt-1 block text-[11px] text-muted">At least 10 characters.</span>
+            </label>
+            {error ? (
+              <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
+            ) : null}
+            <button type="submit" className="btn-primary w-full" disabled={busy || password.length < 10}>
+              {busy ? 'Working…' : 'Set the password'}
+            </button>
+            <button
+              type="button"
+              className="btn-ghost w-full text-xs"
+              onClick={() => {
+                setMode('signIn')
+                setResetToken(null)
+                setPassword('')
+                setError(null)
+              }}
+            >
+              Back to sign in
+            </button>
+          </form>
+        ) : mode === 'checkEmail' ? (
           <div className="space-y-3">
             {/*
               Two different situations share this screen, and they are told
@@ -418,6 +560,20 @@ export default function SignIn({
                 }}
               >
                 Start over
+              </button>
+            ) : null}
+
+            {mode === 'signIn' ? (
+              <button
+                type="button"
+                className="btn-ghost w-full text-xs"
+                onClick={() => {
+                  setMode('forgot')
+                  setError(null)
+                  setNotice(null)
+                }}
+              >
+                Forgot your password?
               </button>
             ) : null}
 

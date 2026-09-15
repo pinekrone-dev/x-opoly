@@ -66,6 +66,7 @@ import {
   destroyAllSessions,
   destroySession,
   createEmailVerification,
+  createPasswordReset,
   recordVerificationSend,
   updateSettings,
   listTeamMembers,
@@ -75,9 +76,16 @@ import {
   normalizePhone,
   sessionUser,
   verifyChallenge,
+  resetPassword,
   verifyEmailToken,
 } from './lib/auth.js'
-import { EmailError, emailConfigured, sendEmail, verificationEmail } from './lib/email.js'
+import {
+  EmailError,
+  emailConfigured,
+  passwordResetEmail,
+  sendEmail,
+  verificationEmail,
+} from './lib/email.js'
 import {
   addParty,
   camel as camelRow,
@@ -776,6 +784,73 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
       }
     }
     return c.json(answer)
+  })
+
+  /**
+   * Starts a password reset.
+   *
+   * Always the same 200, whether or not the address has an account, for the
+   * same reason resend-verification does: the form is otherwise a way to ask
+   * the server which of a list of addresses are customers.
+   *
+   * The throttle is keyed on the address as well as the caller, so one
+   * mailbox cannot be buried under reset mail by someone cycling through
+   * proxies, and a shared office address cannot lock its colleagues out of
+   * the feature.
+   */
+  app.post('/api/auth/forgot-password', async (c) => {
+    const body = await c.req.json().catch(() => ({}))
+    const email = String(body?.email ?? '').trim().toLowerCase()
+    const throttled = limited(c, 'forgot-password', 3, 15 * 60 * 1000, email)
+    if (throttled) return throttled
+
+    const answer = {
+      ok: true,
+      message: 'If that address has an account, a link to choose a new password is on its way.',
+    }
+    if (!emailConfigured(env)) return c.json(answer)
+
+    const row = await findByEmail(db, email)
+    if (row) {
+      const resetToken = await createPasswordReset(db, row.id)
+      const origin = new URL(c.req.url).origin
+      try {
+        await sendEmail(env, {
+          to: row.email,
+          ...passwordResetEmail({ name: row.name, url: `${origin}/?reset=${resetToken}` }),
+        })
+      } catch (error) {
+        if (!(error instanceof EmailError)) throw error
+        // The generic answer stands. The operator gets the refusal in the
+        // log; the caller learns nothing about whose address this is.
+        console.error(`password reset email refused for ${row.email}: ${error.message}`)
+      }
+    }
+    return c.json(answer)
+  })
+
+  /**
+   * Finishes a password reset: spends the link and sets the new password.
+   *
+   * A successful reset signs this browser in, except on an account with a
+   * second factor — there the link proves the inbox and nothing more, so it
+   * answers `secondFactor` and the sign-in form asks for the factor as
+   * usual.
+   */
+  app.post('/api/auth/reset-password', async (c) => {
+    const throttled = limited(c, 'reset-password', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => ({}))
+    const result = await resetPassword(db, String(body?.token ?? ''), String(body?.password ?? ''))
+    if (result.error) return c.json({ error: result.error }, 410)
+
+    if (result.secondFactor) return c.json({ ok: true, secondFactor: true })
+
+    const token = await createSession(db, result.userId)
+    await markLogin(db, result.userId)
+    setSessionCookie(c, token)
+    return c.json({ ok: true, secondFactor: false, user: result.user })
   })
 
   /**
