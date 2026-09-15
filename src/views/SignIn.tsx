@@ -50,6 +50,8 @@ export default function SignIn({
   const [inviteToken, setInviteToken] = useState<string | null>(null)
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null)
   const [resetToken, setResetToken] = useState<string | null>(null)
+  /** The address a reset link was just asked for, which turns the panel into its receipt. */
+  const [resetSentTo, setResetSentTo] = useState<string | null>(null)
 
   /**
    * An invite link lands here signed out, with the token in the query string.
@@ -192,10 +194,20 @@ export default function SignIn({
 
   const requestReset = () =>
     run(async () => {
-      const { message } = await api.forgotPassword(email)
-      // The same words whether or not that address has an account: the
-      // server will not say, and neither will this screen.
-      setNotice(message)
+      await api.forgotPassword(email)
+      /*
+       * Confirm the send, without confirming the account.
+       *
+       * The server answers the same whether or not that address has one, so
+       * this screen cannot say "sent" outright. It can say what it did — the
+       * request went, here is the address it went for, here is how long the
+       * link lasts — which is the reassurance someone is actually looking
+       * for, and it leaves the hedge where it belongs, in one quiet line.
+       */
+      // A second press from the receipt looks identical otherwise, so it
+      // says so; the first press has the panel itself as its answer.
+      setNotice(resetSentTo ? 'Another link is on its way.' : null)
+      setResetSentTo(email)
     })
 
   const submitReset = () =>
@@ -226,7 +238,9 @@ export default function SignIn({
         : mode === 'signUp'
           ? 'Create your workspace'
           : mode === 'forgot'
-            ? 'Reset your password'
+            ? resetSentTo
+              ? 'Check your email'
+              : 'Reset your password'
             : mode === 'reset'
               ? 'Choose a new password'
               : mode === 'code'
@@ -270,53 +284,95 @@ export default function SignIn({
         ) : null}
 
         {mode === 'forgot' ? (
-          <div className="space-y-3">
-            <p className="text-sm leading-relaxed text-body">
-              Type the address you sign in with and we will email a link to choose a new password.
-            </p>
-            <p className="text-xs leading-relaxed text-muted">
-              The link lasts an hour and works once. Your current password keeps working until you
-              use it.
-            </p>
-            <input
-              autoFocus
-              className="field"
-              type="email"
-              autoComplete="email"
-              placeholder="you@company.com"
-              aria-label="Email address"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !busy && email) void requestReset()
-              }}
-            />
-            {error ? (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
-            ) : null}
-            {notice ? (
-              <p className="rounded-lg border border-brand/30 bg-brand-tint p-2.5 text-xs text-body">{notice}</p>
-            ) : null}
-            <button
-              type="button"
-              className="btn-primary w-full"
-              disabled={busy || !email}
-              onClick={() => void requestReset()}
-            >
-              {busy ? 'Working…' : 'Email me a link'}
-            </button>
-            <button
-              type="button"
-              className="btn-ghost w-full text-xs"
-              onClick={() => {
-                setMode('signIn')
-                setError(null)
-                setNotice(null)
-              }}
-            >
-              Back to sign in
-            </button>
-          </div>
+          resetSentTo ? (
+            /*
+             * The receipt. It replaces the form rather than sitting above it,
+             * because a confirmation next to the button that produced it
+             * reads as "press me again" — the thing it is meant to stop.
+             */
+            <div className="space-y-3">
+              <div className="rounded-lg border border-brand/30 bg-brand-tint p-3">
+                <p className="text-sm font-semibold text-ink">Password reset on its way</p>
+                <p className="mt-1 text-xs leading-relaxed text-body">
+                  Check the inbox for <strong className="text-ink">{resetSentTo}</strong> and open the
+                  link to choose a new password.
+                </p>
+              </div>
+              <p className="text-xs leading-relaxed text-muted">
+                The link lasts an hour and works once. Nothing there in a minute or two? Look in spam,
+                then send another. If that address has no account, no email is sent.
+              </p>
+              {error ? (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
+              ) : null}
+              {notice ? <p className="text-xs text-brand-deep">{notice}</p> : null}
+              <button
+                type="button"
+                className="btn-ghost w-full text-xs"
+                disabled={busy}
+                onClick={() => void requestReset()}
+              >
+                {busy ? 'Working…' : 'Send another link'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary w-full"
+                onClick={() => {
+                  setMode('signIn')
+                  setResetSentTo(null)
+                  setError(null)
+                  setNotice(null)
+                }}
+              >
+                Back to sign in
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm leading-relaxed text-body">
+                Type the address you sign in with and we will email a link to choose a new password.
+              </p>
+              <p className="text-xs leading-relaxed text-muted">
+                The link lasts an hour and works once. Your current password keeps working until you
+                use it.
+              </p>
+              <input
+                autoFocus
+                className="field"
+                type="email"
+                autoComplete="email"
+                placeholder="you@company.com"
+                aria-label="Email address"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !busy && email) void requestReset()
+                }}
+              />
+              {error ? (
+                <p className="rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">{error}</p>
+              ) : null}
+              <button
+                type="button"
+                className="btn-primary w-full"
+                disabled={busy || !email}
+                onClick={() => void requestReset()}
+              >
+                {busy ? 'Working…' : 'Email me a link'}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost w-full text-xs"
+                onClick={() => {
+                  setMode('signIn')
+                  setError(null)
+                  setNotice(null)
+                }}
+              >
+                Back to sign in
+              </button>
+            </div>
+          )
         ) : mode === 'reset' ? (
           <form
             className="space-y-3"
@@ -569,6 +625,7 @@ export default function SignIn({
                 className="btn-ghost w-full text-xs"
                 onClick={() => {
                   setMode('forgot')
+                  setResetSentTo(null)
                   setError(null)
                   setNotice(null)
                 }}
