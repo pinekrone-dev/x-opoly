@@ -498,4 +498,17 @@ export const COLUMN_ADDITIONS = [
   ['surveys', 'tour_end_address', 'TEXT'],
   ['surveys', 'tour_end_lat', 'REAL'],
   ['surveys', 'tour_end_lng', 'REAL'],
+
+  /*
+   * A subscription's trial and its cancellation, as Stripe last reported
+   * them. cancel_at is set while a cancellation is scheduled for the end of
+   * the paid or trial period, and cleared if the subscriber resumes: it is
+   * what lets Settings say "ends on" instead of "renews on", and what makes
+   * the gate re-check Stripe the moment that date passes. started_mail_at
+   * claims the one "your trial has started" email per team, so a reloaded
+   * return page or a webhook arriving alongside it cannot send it twice.
+   */
+  ['billing', 'trial_end', 'TEXT'],
+  ['billing', 'cancel_at', 'TEXT'],
+  ['billing', 'started_mail_at', 'TEXT'],
 ]

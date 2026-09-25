@@ -15,6 +15,11 @@ import { DatabaseSync } from 'node:sqlite'
 import {
   applyWebhook,
   billingState,
+  claimStartedMail,
+  periodEndIso,
+  setRenewal,
+  subscriptionTerms,
+  trialDays,
   confirmCheckout,
   createCheckout,
   isExemptEmail,
@@ -25,6 +30,7 @@ import {
   BillingError,
 } from '../app/lib/billing.js'
 import { nodeAdapter } from '../app/lib/sql.js'
+import { cancellationEmail, trialStartedEmail } from '../app/lib/email.js'
 
 const ENV = { STRIPE_SECRET_KEY: 'sk_test_stub', STRIPE_PUBLISHABLE_KEY: 'pk_test_stub' }
 
@@ -106,10 +112,13 @@ describe('creating a checkout', () => {
     assert.ok(body.includes('return_url=https://survey.example.com/billing/return?session_id={CHECKOUT_SESSION_ID}'))
     assert.equal(fetchImpl.calls.length, 1, 'no fallback when the current name is accepted')
     assert.ok(body.includes('allow_promotion_codes=true'), 'dashboard promo codes work at checkout')
+    assert.ok(body.includes('subscription_data[trial_period_days]=14'), 'a new team starts on a 14-day trial')
+    assert.ok(body.includes('payment_method_collection=always'), 'the trial takes a card up front')
     assert.ok(
-      body.includes('payment_method_collection=if_required'),
-      'a 100%-off code needs no card at all',
+      body.includes('subscription_data[trial_settings][end_behavior][missing_payment_method]=cancel'),
+      'a trial that reaches its end with no card is cancelled, not left unpaid',
     )
+    assert.equal(result.trialDays, 14)
   })
 
   test('a secret key under the alias name still reaches Stripe', async () => {
@@ -441,5 +450,193 @@ describe('minting a free code', () => {
     )
     await assert.rejects(() => mintFreeCode({ STRIPE_SECRET_KEY: 'sk_test_stub' }, { fetchImpl }), /live charges/)
     assert.equal(fetchImpl.calls.length, 2)
+  })
+})
+
+describe('the free trial', () => {
+  test('TRIAL_DAYS sets the length, 0 turns it off, and junk falls back to none', () => {
+    assert.equal(trialDays({}), 14)
+    assert.equal(trialDays({ TRIAL_DAYS: '7' }), 7)
+    assert.equal(trialDays({ TRIAL_DAYS: '0' }), 0)
+    assert.equal(trialDays({ TRIAL_DAYS: 'soon' }), 0)
+  })
+
+  test('a team that has had a subscription gets no second trial', async () => {
+    await db.run(
+      "INSERT INTO billing (team_id, customer_id, subscription_id, status, updated_at) VALUES ('team-had', 'cus_had', 'sub_had', 'canceled', 'x')",
+    )
+    const fetchImpl = stubFetch({ body: { client_secret: 'cs' } })
+    const result = await createCheckout(db, ENV, { teamId: 'team-had', email: 'b@example.com', origin: 'https://x', fetchImpl })
+    const body = decodeURIComponent(fetchImpl.calls[0].init.body)
+    assert.ok(!body.includes('trial_period_days'))
+    assert.ok(body.includes('customer=cus_had'))
+    assert.equal(result.trialDays, 0)
+  })
+
+  test('an invite code is applied up front and asks for a card only if something is owed', async () => {
+    const fetchImpl = stubFetch({ body: { data: [{ id: 'promo_1' }] } }, { body: { client_secret: 'cs' } })
+    const result = await createCheckout(db, ENV, {
+      teamId: 'team-invited',
+      email: 'friend@example.com',
+      origin: 'https://x',
+      code: ' FRIEND100 ',
+      fetchImpl,
+    })
+    assert.match(fetchImpl.calls[0].url, /\/promotion_codes\?active=true&limit=1&code=FRIEND100$/)
+    assert.equal(fetchImpl.calls[0].init.method, 'GET')
+    const body = decodeURIComponent(fetchImpl.calls[1].init.body)
+    assert.ok(body.includes('discounts[0][promotion_code]=promo_1'))
+    assert.ok(body.includes('payment_method_collection=if_required'))
+    assert.ok(!body.includes('allow_promotion_codes'), 'Stripe refuses discounts and the promo field together')
+    assert.ok(!body.includes('trial_period_days'))
+    assert.equal(result.trialDays, 0)
+  })
+
+  test('an unknown code is refused in words the buyer can act on, and no session is made', async () => {
+    const fetchImpl = stubFetch({ body: { data: [] } })
+    await assert.rejects(
+      createCheckout(db, ENV, { teamId: 'team-x', email: 'x@example.com', origin: 'https://x', code: 'NOPE', fetchImpl }),
+      /code is not valid/,
+    )
+    assert.equal(fetchImpl.calls.length, 1)
+  })
+
+  test('a trialing subscription is active, and its trial end is stored', async () => {
+    const trialEnd = 1790000000
+    const fetchImpl = stubFetch({
+      body: {
+        status: 'complete',
+        client_reference_id: 'team-trial',
+        customer: 'cus_trial',
+        subscription: { id: 'sub_trial', status: 'trialing', trial_end: trialEnd, items: { data: [{ current_period_end: trialEnd }] } },
+      },
+    })
+    const result = await confirmCheckout(db, ENV, 'cs_trial', { fetchImpl })
+    assert.equal(result.active, true)
+    assert.equal(result.trialEnd, new Date(trialEnd * 1000).toISOString())
+    const row = await db.get("SELECT * FROM billing WHERE team_id = 'team-trial'")
+    assert.equal(row.status, 'trialing')
+    assert.equal(row.trial_end, new Date(trialEnd * 1000).toISOString())
+    assert.equal(row.current_period_end, new Date(trialEnd * 1000).toISOString())
+  })
+
+  test('the trial-started email is claimed exactly once', async () => {
+    assert.equal(await claimStartedMail(db, 'team-trial'), true)
+    assert.equal(await claimStartedMail(db, 'team-trial'), false)
+  })
+})
+
+describe('the period end on current and older Stripe API versions', () => {
+  test('read from the items when the subscription no longer carries it', () => {
+    const at = 1790000000
+    assert.equal(periodEndIso({ items: { data: [{ current_period_end: at }] } }), new Date(at * 1000).toISOString())
+    assert.equal(periodEndIso({ current_period_end: at }), new Date(at * 1000).toISOString())
+    assert.equal(periodEndIso({ status: 'trialing', trial_end: at }), new Date(at * 1000).toISOString())
+    assert.equal(periodEndIso({ status: 'active' }), null)
+  })
+
+  test('a stored period end means a paying team costs no Stripe call and no write', async () => {
+    const at = Math.floor(Date.now() / 1000) + 20 * 86400
+    const refresh = stubFetch({ body: { id: 'sub_items', status: 'active', items: { data: [{ current_period_end: at }] } } })
+    await db.run(
+      "INSERT INTO billing (team_id, customer_id, subscription_id, status, updated_at) VALUES ('team-items', 'cus_i', 'sub_items', 'active', 'x')",
+    )
+    await billingState(db, ENV, 'team-items', { fetchImpl: refresh })
+    assert.equal(refresh.calls.length, 1, 'a row with no period end is refreshed once')
+    const quiet = stubFetch()
+    const state = await billingState(db, ENV, 'team-items', { fetchImpl: quiet })
+    assert.equal(state.active, true)
+    assert.equal(quiet.calls.length, 0, 'and then answered from the row')
+  })
+})
+
+describe('cancelling and resuming', () => {
+  const end = Math.floor(Date.now() / 1000) + 10 * 86400
+
+  test('cancelling stops the renewal at the period end, never at once', async () => {
+    await db.run(
+      "INSERT INTO billing (team_id, customer_id, subscription_id, status, updated_at) VALUES ('team-c', 'cus_c', 'sub_c', 'trialing', 'x')",
+    )
+    const fetchImpl = stubFetch({
+      body: { id: 'sub_c', status: 'trialing', trial_end: end, cancel_at_period_end: true, cancel_at: end, items: { data: [{ current_period_end: end }] } },
+    })
+    const result = await setRenewal(db, ENV, 'team-c', false, { fetchImpl })
+    const { url, init } = fetchImpl.calls[0]
+    assert.equal(url, 'https://api.stripe.com/v1/subscriptions/sub_c')
+    assert.equal(init.method, 'POST')
+    assert.equal(init.body, 'cancel_at_period_end=true')
+    assert.equal(result.cancelAt, new Date(end * 1000).toISOString())
+    assert.equal(result.status, 'trialing')
+    const row = await db.get("SELECT cancel_at FROM billing WHERE team_id = 'team-c'")
+    assert.equal(row.cancel_at, new Date(end * 1000).toISOString())
+  })
+
+  test('a cancelled team keeps access until the date, and Stripe is asked the moment it passes', async () => {
+    const before = stubFetch()
+    const open = await billingState(db, ENV, 'team-c', { fetchImpl: before, now: end * 1000 - 1000 })
+    assert.equal(open.active, true)
+    assert.equal(open.cancelAt, new Date(end * 1000).toISOString())
+    assert.equal(before.calls.length, 0)
+
+    const after = stubFetch({ body: { id: 'sub_c', status: 'canceled', items: { data: [{ current_period_end: end }] } } })
+    const closed = await billingState(db, ENV, 'team-c', { fetchImpl: after, now: end * 1000 + 1000 })
+    assert.equal(after.calls.length, 1, 'no three days of grace after a cancellation')
+    assert.equal(closed.active, false)
+  })
+
+  test('resuming clears the cancellation, including a fixed date set on Stripe\'s page', async () => {
+    await db.run("UPDATE billing SET status = 'active', cancel_at = 'soon' WHERE team_id = 'team-c'")
+    const fetchImpl = stubFetch(
+      { body: { id: 'sub_c', status: 'active', cancel_at: end, items: { data: [{ current_period_end: end }] } } },
+      { body: { id: 'sub_c', status: 'active', cancel_at: null, cancel_at_period_end: false, items: { data: [{ current_period_end: end }] } } },
+    )
+    const result = await setRenewal(db, ENV, 'team-c', true, { fetchImpl })
+    assert.equal(fetchImpl.calls[0].init.body, 'cancel_at_period_end=false')
+    assert.equal(fetchImpl.calls[1].init.body, 'cancel_at=')
+    assert.equal(result.cancelAt, null)
+    const row = await db.get("SELECT cancel_at FROM billing WHERE team_id = 'team-c'")
+    assert.equal(row.cancel_at, null)
+  })
+
+  test('a team with no subscription has nothing to cancel', async () => {
+    await assert.rejects(setRenewal(db, ENV, 'team-none', false, { fetchImpl: stubFetch() }), BillingError)
+  })
+
+  test('the terms read a period-end cancellation even without a fixed date', () => {
+    const terms = subscriptionTerms({ status: 'active', cancel_at_period_end: true, items: { data: [{ current_period_end: end }] } })
+    assert.equal(terms.cancelAt, new Date(end * 1000).toISOString())
+    assert.equal(terms.trialEnd, null)
+  })
+})
+
+describe('the billing emails', () => {
+  const settingsUrl = 'https://landquotient.com/settings'
+
+  test('the cancellation email says when access ends, that nothing more is charged, and how to undo it', () => {
+    const mail = cancellationEmail({ name: 'Pat', endsAt: '2026-10-09T12:00:00.000Z', trial: true, settingsUrl })
+    assert.match(mail.subject, /cancelled/)
+    assert.match(mail.text, /until October 9, 2026/)
+    assert.match(mail.text, /will not be charged/)
+    assert.match(mail.text, /Resume subscription/)
+    assert.ok(mail.html.includes(settingsUrl))
+  })
+
+  test('the trial email says when the card is first charged and where to cancel', () => {
+    const mail = trialStartedEmail({ name: '', trialEnd: '2026-10-09T12:00:00.000Z', days: 14, settingsUrl })
+    assert.match(mail.text, /14-day free trial/)
+    assert.match(mail.text, /not be charged before October 9, 2026/)
+    assert.match(mail.text, /Settings in the app and choose Cancel subscription/)
+  })
+
+  test('neither carries an em dash or a price figure', () => {
+    for (const mail of [
+      cancellationEmail({ name: 'Pat', endsAt: '2026-10-09T00:00:00Z', trial: false, settingsUrl }),
+      trialStartedEmail({ name: 'Pat', trialEnd: '2026-10-09T00:00:00Z', days: 14, settingsUrl }),
+    ]) {
+      for (const part of [mail.subject, mail.text, mail.html]) {
+        assert.ok(!part.includes('\u2014'), 'no em dash')
+        assert.ok(!/\$\s?\d/.test(part), 'no price')
+      }
+    }
   })
 })

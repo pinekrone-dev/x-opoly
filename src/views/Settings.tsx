@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import InviteCollaborators from '../components/InviteCollaborators'
+import SubscriptionSettings from '../components/SubscriptionSettings'
 import WorkspaceNav from '../components/WorkspaceNav'
 import type { Account, BillingStatus, TeamMember } from '../types'
 
@@ -9,7 +10,7 @@ import type { Account, BillingStatus, TeamMember } from '../types'
  *
  * The account menu is for the things done in a moment — a code, a card, a
  * sign-out. This page is for the choices that outlive a session: which
- * market the map opens on, and who is on the team. Reached from the menu's
+ * market the map opens on, who is on the team, and the subscription. Reached from the menu's
  * Settings button, and nothing here floats over a map.
  */
 
@@ -27,12 +28,15 @@ export default function Settings({
   smsConfigured,
   billing,
   onAccountChange,
+  onBillingChange,
   onSignedOut,
 }: {
   account: Account
   smsConfigured: boolean
   billing: BillingStatus | null
   onAccountChange: (account: Account) => void
+  /** Re-reads the subscription after a cancel or resume. */
+  onBillingChange?: () => void
   onSignedOut: () => void
 }) {
   const [markets, setMarkets] = useState<MarketEntry[]>([])
@@ -169,8 +173,12 @@ export default function Settings({
 
         <InviteCollaborators />
 
+        {billing?.configured ? (
+          <SubscriptionSettings billing={billing} email={account.email} onChanged={() => onBillingChange?.()} />
+        ) : null}
+
         <p className="mt-6 text-xs text-muted">
-          Two-factor sign-in, your phone number, password and billing are in the account menu at the top right.
+          Two-factor sign-in, your phone number and password are in the account menu at the top right.
         </p>
       </main>
     </div>

@@ -84,8 +84,12 @@ const GROUPS = [
         a: 'Your workspace and the people you invite into it. A survey is only visible outside that when you create a share link for it, and you can stop sharing at any point.',
       },
       {
+        q: 'Is there a free trial?',
+        a: 'Yes. Every new workspace gets 14 days free. A card is taken at the start so the product carries on without interruption, and nothing is charged until the trial ends. Cancel before then and you are never charged.',
+      },
+      {
         q: 'Can I cancel?',
-        a: 'Any time, from your billing page. No call, no retention flow.',
+        a: 'Any time, in Settings. No call, no retention flow. You keep access to the end of the period you have paid for, or the rest of your trial, and a confirmation email follows.',
       },
       {
         q: 'How do I pay?',
@@ -173,7 +177,7 @@ export default function Faq({
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {selfServe ? (
                 <button type="button" className="btn-primary px-5 py-2.5" onClick={onGetStarted}>
-                  Start for $29/month
+                  Start a 14-day free trial
                 </button>
               ) : null}
               <a className="btn border border-line-strong px-4 py-2.5 text-body hover:border-muted" href="/#how">

@@ -113,7 +113,7 @@ export default function Audience({
                 className="btn rounded-lg bg-brand px-5 py-2.5 text-white hover:bg-brand-soft hover:text-brand-night"
                 onClick={primaryCta}
               >
-                {selfServe ? 'Start for $29/month' : 'Sign in'}
+                {selfServe ? 'Start a 14-day free trial' : 'Sign in'}
               </button>
               <a
                 className="btn rounded-lg border border-brand-edge px-4 py-2.5 text-slate-200 hover:border-brand-soft hover:text-brand-soft"
@@ -244,7 +244,7 @@ export default function Audience({
               <h2 className="mt-3 text-3xl font-bold tracking-tight text-ink">One plan, everything included</h2>
               <p className="mx-auto mt-3 max-w-md text-[15px] text-muted">
                 Every market, every layer and every feature on this page, for one workspace with teammates
-                included. Cancel any time from your billing page.
+                included. Cancel any time in Settings.
               </p>
             </div>
             <PricingCard included={spec.included} selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} />

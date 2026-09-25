@@ -14,6 +14,13 @@
  * owner is named in STRIPE_EXEMPT_EMAILS (the operator, the smoke-test
  * account) never pay; everyone else needs an active subscription once a
  * STRIPE_SECRET_KEY exists. No key, no gate — the app stays free-standing.
+ *
+ * A new team starts on a free trial (TRIAL_DAYS, 14 unless set; 0 turns it
+ * off) and gives a card to start it, so the trial becomes a subscription
+ * without a second decision. A team that has had a subscription before gets
+ * no second trial. Cancelling is one button in Settings: it stops the renewal
+ * at the end of the period already running, so a trial cancelled on day two
+ * is never charged and keeps its remaining days.
  */
 
 import { nowIso } from './ids.js'
@@ -98,30 +105,80 @@ function lineItem(env) {
   }
 }
 
+/** Trial length for a new team, from TRIAL_DAYS; 14 when unset, none at 0. */
+export function trialDays(env = {}) {
+  const raw = env.TRIAL_DAYS
+  if (raw == null || String(raw).trim() === '') return 14
+  const days = Math.floor(Number(raw))
+  return Number.isFinite(days) && days > 0 ? Math.min(days, 730) : 0
+}
+
+/** Whether this team may still start a trial: it has never had a subscription. */
+export async function trialEligible(db, env, teamId) {
+  if (!trialDays(env)) return false
+  const row = await db.get('SELECT subscription_id FROM billing WHERE team_id = ?', [teamId])
+  return !row?.subscription_id
+}
+
+/**
+ * The live promotion code a buyer typed, or a BillingError saying it is not.
+ *
+ * Invite codes are resolved here rather than in Stripe's own promo field
+ * because the trial needs a card and an invite must not: Stripe collects
+ * cards per checkout, not per code, so a checkout that already carries the
+ * code is the only one that can skip the card.
+ */
+async function promotionCode(env, code, fetchImpl) {
+  const found = await stripe(
+    env,
+    `/promotion_codes?active=true&limit=1&code=${encodeURIComponent(String(code).trim())}`,
+    { method: 'GET', fetchImpl },
+  )
+  const promo = found?.data?.[0]
+  if (!promo?.id) throw new BillingError('That code is not valid, or it has already been used.')
+  return promo.id
+}
+
 /**
  * Starts a checkout for the team.
  *
  * Embedded when the frontend can mount it (publishable key set); hosted
  * redirect otherwise. Either way the return path carries the session id so
  * activation is verified server-side, not assumed from a redirect.
+ *
+ * Two shapes. The usual one opens the trial and always takes a card, with
+ * Stripe's promo field left open for partial discounts. The other carries an
+ * invite code the buyer typed before checkout: the discount is applied up
+ * front and the card is asked for only if something is still owed, so a
+ * free-forever invite never touches payment details.
  */
-export async function createCheckout(db, env, { teamId, email, origin, hosted = false, fetchImpl = fetch }) {
-  const existing = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [teamId])
+export async function createCheckout(db, env, { teamId, email, origin, hosted = false, code = null, fetchImpl = fetch }) {
+  const existing = await db.get('SELECT customer_id, subscription_id FROM billing WHERE team_id = ?', [teamId])
   // `hosted` is the client saying the embedded form could not mount — a
   // blocked script, an extension. Stripe gives an embedded session no URL to
   // fall back to, so the redirect version has to be asked for explicitly.
   const embedded = !hosted && Boolean(publishableKey(env))
+  const promotion = code ? await promotionCode(env, code, fetchImpl) : null
+  const trial = !promotion && !existing?.subscription_id ? trialDays(env) : 0
 
   const params = (uiMode) => ({
     mode: 'subscription',
     line_items: [lineItem(env)],
     client_reference_id: teamId,
-    subscription_data: { metadata: { team_id: teamId } },
-    // Promotion codes minted in the Stripe dashboard work at checkout, and a
-    // code that brings the total to zero skips card collection entirely —
-    // which is how a free user is invited without ever touching env vars.
-    allow_promotion_codes: 'true',
-    payment_method_collection: 'if_required',
+    subscription_data: {
+      metadata: { team_id: teamId },
+      ...(trial
+        ? {
+            trial_period_days: trial,
+            // A trial that somehow reaches its end with no card is cancelled,
+            // never left running unpaid.
+            trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+          }
+        : {}),
+    },
+    ...(promotion
+      ? { discounts: [{ promotion_code: promotion }], payment_method_collection: 'if_required' }
+      : { allow_promotion_codes: 'true', payment_method_collection: 'always' }),
     ...(existing?.customer_id ? { customer: existing.customer_id } : { customer_email: email }),
     ...(embedded
       ? { ui_mode: uiMode, return_url: `${origin}/billing/return?session_id={CHECKOUT_SESSION_ID}` }
@@ -144,26 +201,81 @@ export async function createCheckout(db, env, { teamId, email, origin, hosted = 
     if (!(embedded && error instanceof BillingError && /ui_mode|embedded_page/i.test(error.message))) throw error
     session = await stripe(env, '/checkout/sessions', { params: params('embedded'), fetchImpl })
   }
-  return { clientSecret: session.client_secret ?? null, url: session.url ?? null, embedded }
+  return { clientSecret: session.client_secret ?? null, url: session.url ?? null, embedded, trialDays: trial }
 }
 
-async function upsertBilling(db, teamId, { customerId, subscriptionId, status, periodEnd }) {
+/**
+ * Records what Stripe said about a team's subscription.
+ *
+ * `terms` carries the trial end and scheduled cancellation, and is passed
+ * only when a whole subscription object was read: those two are set exactly,
+ * so a resumed subscription clears its cancel date. Callers holding less (a
+ * checkout event with no subscription expanded) leave both as they were.
+ */
+async function upsertBilling(db, teamId, { customerId, subscriptionId, status, periodEnd, terms = null }) {
   await db.run(
-    `INSERT INTO billing (team_id, customer_id, subscription_id, status, current_period_end, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO billing (team_id, customer_id, subscription_id, status, current_period_end, trial_end, cancel_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(team_id) DO UPDATE SET
        customer_id = COALESCE(excluded.customer_id, billing.customer_id),
        subscription_id = COALESCE(excluded.subscription_id, billing.subscription_id),
        status = excluded.status,
        current_period_end = COALESCE(excluded.current_period_end, billing.current_period_end),
+       trial_end = ${terms ? 'excluded.trial_end' : 'billing.trial_end'},
+       cancel_at = ${terms ? 'excluded.cancel_at' : 'billing.cancel_at'},
        updated_at = excluded.updated_at`,
-    [teamId, customerId ?? null, subscriptionId ?? null, status, periodEnd ?? null, nowIso()],
+    [
+      teamId,
+      customerId ?? null,
+      subscriptionId ?? null,
+      status,
+      periodEnd ?? null,
+      terms?.trialEnd ?? null,
+      terms?.cancelAt ?? null,
+      nowIso(),
+    ],
   )
 }
 
-function periodEndIso(subscription) {
-  const seconds = subscription?.current_period_end
-  return Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null
+const iso = (seconds) => (Number.isFinite(seconds) && seconds > 0 ? new Date(seconds * 1000).toISOString() : null)
+
+/**
+ * When the period now running ends.
+ *
+ * Stripe moved the period off the subscription and onto each item in its
+ * recent API versions, and the account has no pinned version, so the old
+ * top-level field reads undefined there. Reading only that one stored every
+ * period end as NULL, and a NULL period end made the gate ask Stripe, and
+ * write a row, on every request a paying team made. Both places are read,
+ * then the trial's end.
+ */
+export function periodEndIso(subscription) {
+  if (!subscription) return null
+  const top = iso(subscription.current_period_end)
+  if (top) return top
+  const items = (subscription.items?.data ?? [])
+    .map((item) => item?.current_period_end)
+    .filter((seconds) => Number.isFinite(seconds))
+  if (items.length) return iso(Math.max(...items))
+  return subscription.status === 'trialing' ? iso(subscription.trial_end) : null
+}
+
+/** The trial end and any scheduled cancellation, from a whole subscription. */
+export function subscriptionTerms(subscription) {
+  const trialEnd = subscription?.status === 'trialing' ? iso(subscription.trial_end) : null
+  const cancelAt =
+    iso(subscription?.cancel_at) ?? (subscription?.cancel_at_period_end ? periodEndIso(subscription) : null)
+  return { trialEnd, cancelAt }
+}
+
+function record(db, teamId, subscription, customerId) {
+  return upsertBilling(db, teamId, {
+    customerId: customerId ?? (typeof subscription.customer === 'string' ? subscription.customer : subscription.customer?.id),
+    subscriptionId: subscription.id,
+    status: subscription.status,
+    periodEnd: periodEndIso(subscription),
+    terms: subscriptionTerms(subscription),
+  })
 }
 
 /**
@@ -186,13 +298,54 @@ export async function confirmCheckout(db, env, sessionId, { fetchImpl = fetch } 
     return { active: false, status: 'incomplete' }
   }
 
-  await upsertBilling(db, teamId, {
-    customerId: typeof session.customer === 'string' ? session.customer : session.customer?.id,
-    subscriptionId: subscription.id,
+  await record(db, teamId, subscription, typeof session.customer === 'string' ? session.customer : session.customer?.id)
+  return {
+    active: ['active', 'trialing'].includes(subscription.status),
+    status: subscription.status,
+    teamId,
+    ...subscriptionTerms(subscription),
+  }
+}
+
+/**
+ * Claims the one "your trial has started" email for a team. True exactly
+ * once, however many times the return page is loaded.
+ */
+export async function claimStartedMail(db, teamId) {
+  const { changes } = await db.run(
+    'UPDATE billing SET started_mail_at = ? WHERE team_id = ? AND started_mail_at IS NULL',
+    [nowIso(), teamId],
+  )
+  return changes === 1
+}
+
+/**
+ * Stops the team's subscription renewing, or starts it renewing again.
+ *
+ * Cancelling sets cancel_at_period_end, never an immediate cancel: the
+ * subscriber keeps what they have paid for, or the trial days they have
+ * left, and nothing further is charged. Resuming clears it, which Stripe
+ * allows until that date passes. Returns the stored state afterwards.
+ */
+export async function setRenewal(db, env, teamId, renew, { fetchImpl = fetch } = {}) {
+  const row = await db.get('SELECT customer_id, subscription_id FROM billing WHERE team_id = ?', [teamId])
+  if (!row?.subscription_id) throw new BillingError('This workspace has no subscription to change.')
+  const path = `/subscriptions/${encodeURIComponent(row.subscription_id)}`
+  let subscription = await stripe(env, path, { params: { cancel_at_period_end: renew ? 'false' : 'true' }, fetchImpl })
+  // A cancellation made on Stripe's own page can be a fixed cancel_at date
+  // rather than the period-end flag; clearing the flag leaves that in place.
+  if (renew && subscription?.cancel_at) {
+    subscription = await stripe(env, path, { params: { cancel_at: '' }, fetchImpl })
+  }
+  if (subscription?.status === 'canceled') {
+    throw new BillingError('This subscription has already ended. Start a new one from the billing page.')
+  }
+  await record(db, teamId, subscription, row.customer_id)
+  return {
     status: subscription.status,
     periodEnd: periodEndIso(subscription),
-  })
-  return { active: ['active', 'trialing'].includes(subscription.status), status: subscription.status, teamId }
+    ...subscriptionTerms(subscription),
+  }
 }
 
 /**
@@ -259,9 +412,13 @@ export async function billingState(db, env, teamId, { fetchImpl = fetch, now = D
   const graceEnd = row.current_period_end
     ? new Date(row.current_period_end).getTime() + GRACE_DAYS * 24 * 60 * 60 * 1000
     : 0
+  // A scheduled cancellation ends access on its date, not three days later:
+  // grace is for a card being retried, and nothing is being retried here.
+  const ending = row.cancel_at ? new Date(row.cancel_at).getTime() : Infinity
+  const stored = { trialEnd: row.trial_end ?? null, cancelAt: row.cancel_at ?? null }
 
-  if (ACTIVE.has(row.status) && now < graceEnd) {
-    return { active: true, status: row.status, periodEnd: row.current_period_end }
+  if (ACTIVE.has(row.status) && now < graceEnd && now < ending) {
+    return { active: true, status: row.status, periodEnd: row.current_period_end, ...stored }
   }
 
   // Stored state is stale or inactive — ask Stripe before turning anyone away.
@@ -270,21 +427,17 @@ export async function billingState(db, env, teamId, { fetchImpl = fetch, now = D
       method: 'GET',
       fetchImpl,
     })
-    await upsertBilling(db, teamId, {
-      customerId: row.customer_id,
-      subscriptionId: subscription.id,
-      status: subscription.status,
-      periodEnd: periodEndIso(subscription),
-    })
+    await record(db, teamId, subscription, row.customer_id)
     return {
       active: ACTIVE.has(subscription.status),
       status: subscription.status,
       periodEnd: periodEndIso(subscription),
+      ...subscriptionTerms(subscription),
     }
   } catch {
     // Stripe unreachable: the stored answer, however stale, beats locking a
     // paying customer out over an outage that is not theirs.
-    return { active: ACTIVE.has(row.status), status: row.status, periodEnd: row.current_period_end }
+    return { active: ACTIVE.has(row.status), status: row.status, periodEnd: row.current_period_end, ...stored }
   }
 }
 
@@ -343,7 +496,7 @@ export async function applyWebhook(db, event) {
     await upsertBilling(db, object.client_reference_id, {
       customerId: typeof object.customer === 'string' ? object.customer : object.customer?.id,
       subscriptionId: typeof object.subscription === 'string' ? object.subscription : subscription?.id,
-      status: 'active',
+      status: subscription?.status ?? 'active',
       periodEnd: subscription ? periodEndIso(subscription) : null,
     })
     return true
@@ -354,12 +507,7 @@ export async function applyWebhook(db, event) {
       object.metadata?.team_id ??
       (await db.get('SELECT team_id FROM billing WHERE subscription_id = ?', [object.id]))?.team_id
     if (!teamId) return false
-    await upsertBilling(db, teamId, {
-      customerId: typeof object.customer === 'string' ? object.customer : object.customer?.id,
-      subscriptionId: object.id,
-      status: kind === 'customer.subscription.deleted' ? 'canceled' : object.status,
-      periodEnd: periodEndIso(object),
-    })
+    await record(db, teamId, { ...object, status: kind === 'customer.subscription.deleted' ? 'canceled' : object.status })
     return true
   }
 

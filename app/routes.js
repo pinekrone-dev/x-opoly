@@ -82,8 +82,10 @@ import {
 import {
   EmailError,
   emailConfigured,
+  cancellationEmail,
   passwordResetEmail,
   sendEmail,
+  trialStartedEmail,
   verificationEmail,
 } from './lib/email.js'
 import {
@@ -112,13 +114,17 @@ import {
   BillingError,
   applyWebhook,
   billingState,
+  claimStartedMail,
   confirmCheckout,
   createCheckout,
   isExemptEmail,
   mintFreeCode,
   publishableKey,
   portalUrl,
+  setRenewal,
   stripeConfigured,
+  trialDays,
+  trialEligible,
   verifyWebhook,
 } from './lib/billing.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
@@ -1333,23 +1339,36 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
   // --- billing -------------------------------------------------------------
 
+  // The subscription belongs to the team, and the team is its owner's: only
+  // the owner can stop or restart what the owner's card pays for.
+  const ownsTeam = (user) => Boolean(user) && user.id === user.teamId
+
   app.get('/api/billing', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     const exempt = await teamIsExempt(user.teamId, user.email)
     const state = stripeConfigured(env) && !exempt ? await billingState(db, env, user.teamId) : { active: true, status: exempt ? 'exempt' : 'unmetered' }
     const row = await db.get('SELECT customer_id FROM billing WHERE team_id = ?', [user.teamId])
+    const eligible = stripeConfigured(env) && !exempt && (await trialEligible(db, env, user.teamId))
     return c.json({
       configured: stripeConfigured(env),
       publishableKey: publishableKey(env),
       active: state.active,
       status: state.status,
       periodEnd: state.periodEnd ?? null,
+      trialEnd: state.trialEnd ?? null,
+      cancelAt: state.cancelAt ?? null,
+      trialDays: eligible ? trialDays(env) : 0,
+      canManage: ownsTeam(user),
       portalAvailable: Boolean(row?.customer_id),
       priceLabel: '$29 / month',
       canMintCodes: stripeConfigured(env) && (await canMintCodes(user)),
     })
   })
+
+  // A code the buyer typed that Stripe does not know is their mistake, not
+  // an outage, and the page should say so rather than show a server error.
+  const code400 = (error) => (/code is not valid/.test(error.message) ? 400 : 502)
 
   app.post('/api/billing/checkout', async (c) => {
     const throttled = limited(c, 'checkout', 10, 10 * 60 * 1000)
@@ -1360,16 +1379,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     try {
       const origin = new URL(c.req.url).origin
       const body = await c.req.json().catch(() => ({}))
+      const code = typeof body?.code === 'string' ? body.code.trim().slice(0, 64) : ''
       return c.json(
         await createCheckout(db, env, {
           teamId: user.teamId,
           email: user.email,
           origin,
           hosted: Boolean(body?.hosted),
+          code: code || null,
         }),
       )
     } catch (error) {
-      if (error instanceof BillingError) return c.json({ error: error.message }, 502)
+      if (error instanceof BillingError) return c.json({ error: error.message }, code400(error))
       throw error
     }
   })
@@ -1380,9 +1401,84 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const sessionId = c.req.query('session_id')
     if (!sessionId) return c.json({ error: 'No checkout session to confirm.' }, 400)
     try {
-      return c.json(await confirmCheckout(db, env, sessionId))
+      const result = await confirmCheckout(db, env, sessionId)
+      // The trial's terms go to the buyer once: when it ends and how to stop
+      // it. A failed send does not undo the subscription; it is logged on
+      // the response for the page to ignore and the operator to see.
+      if (result.status === 'trialing' && result.teamId === user.teamId && emailConfigured(env)) {
+        if (await claimStartedMail(db, user.teamId)) {
+          const origin = new URL(c.req.url).origin
+          await sendEmail(env, {
+            to: user.email,
+            ...trialStartedEmail({
+              name: user.name,
+              trialEnd: result.trialEnd,
+              days: trialDays(env),
+              settingsUrl: `${origin}/settings`,
+            }),
+          }).catch(() => {})
+        }
+      }
+      return c.json(result)
     } catch (error) {
       if (error instanceof BillingError) return c.json({ error: error.message }, 502)
+      throw error
+    }
+  })
+
+  /**
+   * Cancels the team's subscription at the end of the period already
+   * running, and emails the owner a confirmation.
+   *
+   * The button in Settings is the cancellation. The email confirms it and
+   * says how to undo it; it is never a second step the subscriber has to
+   * complete, because a cancellation that waits on an inbox is one that
+   * fails when the mail is late, filtered or never arrives.
+   */
+  app.post('/api/billing/cancel', async (c) => {
+    const throttled = limited(c, 'renewal', 20, 60 * 60 * 1000)
+    if (throttled) return throttled
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
+    if (!ownsTeam(user)) return c.json({ error: 'Only the workspace owner can cancel the subscription.' }, 403)
+    let result
+    try {
+      result = await setRenewal(db, env, user.teamId, false)
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 400)
+      throw error
+    }
+    let emailed = false
+    if (emailConfigured(env)) {
+      const origin = new URL(c.req.url).origin
+      emailed = await sendEmail(env, {
+        to: user.email,
+        ...cancellationEmail({
+          name: user.name,
+          endsAt: result.cancelAt ?? result.periodEnd,
+          trial: result.status === 'trialing',
+          settingsUrl: `${origin}/settings`,
+        }),
+      })
+        .then(() => true)
+        .catch(() => false)
+    }
+    return c.json({ ...result, emailed, emailedTo: emailed ? user.email : null })
+  })
+
+  /** Undoes a scheduled cancellation, while the period it ends has not. */
+  app.post('/api/billing/resume', async (c) => {
+    const throttled = limited(c, 'renewal', 20, 60 * 60 * 1000)
+    if (throttled) return throttled
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
+    if (!ownsTeam(user)) return c.json({ error: 'Only the workspace owner can resume the subscription.' }, 403)
+    try {
+      return c.json(await setRenewal(db, env, user.teamId, true))
+    } catch (error) {
+      if (error instanceof BillingError) return c.json({ error: error.message }, 400)
       throw error
     }
   })
@@ -1414,7 +1510,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     try {
       const origin = new URL(c.req.url).origin
-      return c.json({ url: await portalUrl(db, env, user.teamId, `${origin}/`) })
+      return c.json({ url: await portalUrl(db, env, user.teamId, `${origin}/settings`) })
     } catch (error) {
       if (error instanceof BillingError) return c.json({ error: error.message }, 400)
       throw error
