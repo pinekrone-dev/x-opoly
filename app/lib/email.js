@@ -182,3 +182,74 @@ export function passwordResetEmail({ name, url }) {
 </div>`,
   }
 }
+
+/** A date as a person reads it, in UTC so the server and the email agree. */
+export function longDate(value) {
+  const at = new Date(value)
+  if (Number.isNaN(at.getTime())) return null
+  return at.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })
+}
+
+const escapeHtml = (text) =>
+  String(text).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
+
+function frame(heading, paragraphs, { url, button, footnote }) {
+  return `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
+  <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
+  <h2 style="margin:0 0 12px;font-size:18px">${escapeHtml(heading)}</h2>
+${paragraphs.map((p) => `  <p style="margin:0 0 16px;line-height:1.5">${escapeHtml(p)}</p>`).join('\n')}
+  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">${escapeHtml(button)}</a></p>
+  <p style="margin:0;font-size:12px;color:#64748b">${escapeHtml(footnote)}</p>
+</div>`
+}
+
+/**
+ * Sent once when a trial starts: when it ends, and how to stop it before
+ * then. Someone who gave a card for a trial should never have to hunt for
+ * the way out, so the email says where it is in plain words.
+ */
+export function trialStartedEmail({ name, trialEnd, days, settingsUrl }) {
+  const greeting = name ? `Hi ${name},` : 'Hi,'
+  const ends = longDate(trialEnd)
+  const paragraphs = [
+    `${greeting} your ${days ? `${days}-day ` : ''}free trial of Land Quotient has started.`,
+    ends
+      ? `Your card will not be charged before ${ends}. On that date the subscription starts unless you cancel first.`
+      : 'Your card will not be charged until the trial ends. The subscription starts then unless you cancel first.',
+    'To cancel, open Settings in the app and choose Cancel subscription. It takes effect straight away, you keep the rest of your trial, and you will not be charged.',
+  ]
+  const footnote = 'You are receiving this because a Land Quotient trial was started with this email address.'
+  return {
+    subject: 'Your Land Quotient trial has started',
+    text: `${paragraphs.join('\n\n')}\n\nSettings: ${settingsUrl}\n\n${footnote}`,
+    html: frame('Your trial has started', paragraphs, { url: settingsUrl, button: 'Open Settings', footnote }),
+  }
+}
+
+/**
+ * The confirmation of a cancellation made in Settings.
+ *
+ * The cancellation is already done when this is sent; the email is the
+ * record of it, not a step in it. It says when access ends, that nothing
+ * more will be charged, and how to undo it, and it tells anyone who did not
+ * cancel how to put it back, since the likeliest reason for an unexpected
+ * one is someone else in the account.
+ */
+export function cancellationEmail({ name, endsAt, trial, settingsUrl }) {
+  const greeting = name ? `Hi ${name},` : 'Hi,'
+  const ends = longDate(endsAt)
+  const paragraphs = [
+    `${greeting} your Land Quotient subscription has been cancelled.`,
+    ends
+      ? `You keep full access until ${ends}. ${trial ? 'Your trial ends then and your card will not be charged.' : 'You will not be charged again.'}`
+      : `${trial ? 'Your card will not be charged.' : 'You will not be charged again.'}`,
+    `Changed your mind? Open Settings and choose Resume subscription${ends ? ` any time before ${ends}` : ''}.`,
+  ]
+  const footnote =
+    'If you did not cancel, open Settings to resume the subscription and change your password.'
+  return {
+    subject: 'Your Land Quotient subscription is cancelled',
+    text: `${paragraphs.join('\n\n')}\n\nSettings: ${settingsUrl}\n\n${footnote}`,
+    html: frame('Subscription cancelled', paragraphs, { url: settingsUrl, button: 'Open Settings', footnote }),
+  }
+}

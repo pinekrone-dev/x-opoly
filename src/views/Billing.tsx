@@ -40,21 +40,77 @@ export function Paywall({
   onSignedOut: () => void
 }) {
   const lapsed = billing.status !== 'none' && billing.status !== 'unmetered'
+  const trial = billing.trialDays ?? 0
+  // An invite code applied before checkout: the discount goes on up front, so
+  // a free invite never asks for a card. Changing it remounts the checkout.
+  const [draft, setDraft] = useState('')
+  const [code, setCode] = useState('')
+  const [codeOpen, setCodeOpen] = useState(false)
 
   return (
     <Frame>
       <h1 className="text-lg font-semibold text-ink">
-        {lapsed ? 'Your subscription has lapsed' : 'Start your subscription'}
+        {code
+          ? 'Redeem your invite'
+          : trial
+            ? `Start your ${trial}-day free trial`
+            : lapsed
+              ? 'Your subscription has lapsed'
+              : 'Start your subscription'}
       </h1>
       <p className="mt-1.5 text-sm leading-relaxed text-muted">
-        {lapsed
-          ? `Payments for this workspace stopped going through. Renew for ${billing.priceLabel} and everything is exactly where you left it.`
-          : `One plan — ${billing.priceLabel} — with unlimited surveys, demographics, tours and client links. Cancel any time.`}
+        {code
+          ? `Code ${code} is applied below. If it covers the whole price, no card is needed.`
+          : trial
+            ? `Full access for ${trial} days. Your card is not charged until the trial ends, then ${billing.priceLabel}. Cancel any time before then in Settings and you are not charged.`
+            : lapsed
+              ? `Payments for this workspace stopped going through. Renew for ${billing.priceLabel} and everything is exactly where you left it.`
+              : `One plan, ${billing.priceLabel}, with unlimited surveys, demographics, tours and client links. Cancel any time in Settings.`}
       </p>
-      <p className="mt-1 text-xs text-faint">Have a promo code? There&rsquo;s a field for it at checkout.</p>
+
+      <div className="mt-2 text-xs text-faint">
+        {codeOpen ? (
+          <form
+            className="flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setCode(draft.trim())
+            }}
+          >
+            <input
+              className="field flex-1 text-xs"
+              placeholder="Invite code"
+              aria-label="Invite code"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              autoFocus
+            />
+            <button type="submit" className="btn-secondary text-xs" disabled={!draft.trim()}>
+              Apply
+            </button>
+            {code ? (
+              <button
+                type="button"
+                className="underline hover:text-body"
+                onClick={() => {
+                  setCode('')
+                  setDraft('')
+                  setCodeOpen(false)
+                }}
+              >
+                Remove
+              </button>
+            ) : null}
+          </form>
+        ) : (
+          <button type="button" className="underline hover:text-body" onClick={() => setCodeOpen(true)}>
+            Have an invite code?
+          </button>
+        )}
+      </div>
 
       <div className="mt-5">
-        <CheckoutPanel publishableKey={billing.publishableKey} />
+        <CheckoutPanel key={code || 'standard'} publishableKey={billing.publishableKey} code={code || undefined} />
       </div>
 
       <div className="mt-5 flex items-center justify-between border-t border-line pt-4 text-xs text-muted">
@@ -84,6 +140,7 @@ export function Paywall({
 export function BillingReturn({ onDone }: { onDone: () => void }) {
   const [state, setState] = useState<'checking' | 'active' | 'incomplete' | 'failed'>('checking')
   const [message, setMessage] = useState<string | null>(null)
+  const [trialEnd, setTrialEnd] = useState<string | null>(null)
 
   useEffect(() => {
     const sessionId = new URLSearchParams(window.location.search).get('session_id')
@@ -94,7 +151,10 @@ export function BillingReturn({ onDone }: { onDone: () => void }) {
     }
     api
       .confirmCheckout(sessionId)
-      .then((result) => setState(result.active ? 'active' : 'incomplete'))
+      .then((result) => {
+        setTrialEnd(result.status === 'trialing' ? (result.trialEnd ?? null) : null)
+        setState(result.active ? 'active' : 'incomplete')
+      })
       .catch((cause) => {
         setState('failed')
         setMessage(cause instanceof Error ? cause.message : 'The payment could not be confirmed.')
@@ -113,7 +173,11 @@ export function BillingReturn({ onDone }: { onDone: () => void }) {
             </svg>
           </span>
           <h1 className="text-lg font-semibold text-ink">You&rsquo;re all set</h1>
-          <p className="mt-1.5 text-sm text-muted">The subscription is active. Welcome aboard.</p>
+          <p className="mt-1.5 text-sm text-muted">
+            {trialEnd
+              ? `Your free trial is running. Nothing is charged before ${new Date(trialEnd).toLocaleDateString()}, and you can cancel any time in Settings.`
+              : 'The subscription is active. Welcome aboard.'}
+          </p>
           <button
             type="button"
             className="btn-primary mt-5"

@@ -314,6 +314,7 @@ export default function App() {
         smsConfigured={session.smsConfigured}
         billing={billing}
         onAccountChange={(user) => setSession({ ...session, user })}
+        onBillingChange={() => setBillingVersion((version) => version + 1)}
         onSignedOut={() => {
           setSession({ ...session, user: null, setupRequired: false })
           setDoor('landing')

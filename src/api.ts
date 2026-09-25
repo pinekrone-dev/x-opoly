@@ -6,6 +6,7 @@ import type { BookStyle,
   RecordType,
   BillingConfig,
   BillingStatus,
+  RenewalResult,
   Invite,
   TeamMember,
   Zone,
@@ -91,15 +92,25 @@ export const api = {
 
   // --- billing --------------------------------------------------------------
   billingStatus: () => request<BillingStatus>('/api/billing'),
-  /** `hosted` asks for the redirect flow, for when the embedded form cannot mount. */
-  startCheckout: (options: { hosted?: boolean } = {}) =>
-    request<{ clientSecret: string | null; url: string | null; embedded: boolean }>(
+  /**
+   * `hosted` asks for the redirect flow, for when the embedded form cannot
+   * mount. `code` is an invite code typed before checkout: applied up front,
+   * so a free invite needs no card.
+   */
+  startCheckout: (options: { hosted?: boolean; code?: string } = {}) =>
+    request<{ clientSecret: string | null; url: string | null; embedded: boolean; trialDays: number }>(
       '/api/billing/checkout',
       json(options),
     ),
   confirmCheckout: (sessionId: string) =>
-    request<{ active: boolean; status: string }>(`/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`),
+    request<{ active: boolean; status: string; trialEnd?: string | null }>(
+      `/api/billing/confirm?session_id=${encodeURIComponent(sessionId)}`,
+    ),
   billingPortal: () => request<{ url: string }>('/api/billing/portal', { method: 'POST' }),
+  /** Stops the renewal at the end of the period already running. */
+  cancelSubscription: () =>
+    request<RenewalResult & { emailed: boolean; emailedTo: string | null }>('/api/billing/cancel', { method: 'POST' }),
+  resumeSubscription: () => request<RenewalResult>('/api/billing/resume', { method: 'POST' }),
   signIn: (input: { email: string; password: string }) =>
     request<{
       user?: Account

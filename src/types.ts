@@ -106,12 +106,27 @@ export interface BillingConfig {
 }
 
 /** The signed-in team's subscription, from /api/billing. */
+export interface RenewalResult {
+  status: string
+  periodEnd: string | null
+  trialEnd: string | null
+  cancelAt: string | null
+}
+
 export interface BillingStatus {
   configured: boolean
   publishableKey: string | null
   active: boolean
   status: string
   periodEnd: string | null
+  /** When the trial ends, while one is running. */
+  trialEnd?: string | null
+  /** When a scheduled cancellation takes effect; null while it renews. */
+  cancelAt?: string | null
+  /** Trial length this team would get at checkout; 0 once it has had one. */
+  trialDays?: number
+  /** Whether this account owns the workspace, and so may cancel or resume. */
+  canManage?: boolean
   portalAvailable: boolean
   priceLabel: string
   /**

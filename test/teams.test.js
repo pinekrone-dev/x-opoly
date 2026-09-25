@@ -29,6 +29,9 @@ const ENV = {
 
 /** Every email the app "sends" lands here instead of Resend. */
 const sentEmails = []
+/** Answers Stripe calls for the tests that set it; everything else leaves it null. */
+let stripeStub = null
+const stripeCalls = []
 const realFetch = globalThis.fetch
 
 function client() {
@@ -97,6 +100,10 @@ before(async () => {
     if (String(url).startsWith('https://api.resend.com/')) {
       sentEmails.push(JSON.parse(init.body))
       return new Response(JSON.stringify({ id: `email_${sentEmails.length}` }), { status: 200 })
+    }
+    if (stripeStub && String(url).startsWith('https://api.stripe.com/')) {
+      stripeCalls.push({ url: String(url), init })
+      return new Response(JSON.stringify(stripeStub(String(url), init)), { status: 200 })
     }
     return realFetch(url, init)
   }
@@ -320,5 +327,107 @@ describe('the free-code pen', () => {
     assert.equal((await first('/api/billing')).body.canMintCodes, false, 'claiming first no longer counts')
     assert.equal((await second('/api/billing')).body.canMintCodes, true, 'the named account, case-insensitively')
     assert.equal((await first('/api/billing/free-code', { method: 'POST' })).status, 403)
+  })
+})
+
+describe('the trial and cancelling from Settings', () => {
+  const end = Math.floor(Date.now() / 1000) + 14 * 86400
+  const subscription = (extra = {}) => ({
+    id: 'sub_gina',
+    customer: 'cus_gina',
+    status: 'trialing',
+    trial_end: end,
+    items: { data: [{ current_period_end: end }] },
+    cancel_at: null,
+    cancel_at_period_end: false,
+    ...extra,
+  })
+  let gina
+  let ginaId
+
+  before(async () => {
+    gina = client()
+    await registerVerified(gina, { name: 'Gina', email: 'gina@example.com', password: 'a long enough password' })
+    ginaId = (await gina('/api/auth/me')).body.user.id
+  })
+
+  after(() => {
+    stripeStub = null
+  })
+
+  test('a new team is offered the trial', async () => {
+    const billing = await gina('/api/billing')
+    assert.equal(billing.body.active, false)
+    assert.equal(billing.body.trialDays, 14)
+    assert.equal(billing.body.canManage, true)
+  })
+
+  test('returning from checkout opens the app and sends the trial email once', async () => {
+    stripeStub = () => ({ status: 'complete', client_reference_id: ginaId, customer: 'cus_gina', subscription: subscription() })
+    const before = sentEmails.length
+    const confirmed = await gina('/api/billing/confirm?session_id=cs_gina')
+    assert.equal(confirmed.body.active, true)
+    assert.equal(sentEmails.length, before + 1)
+    const mail = sentEmails[sentEmails.length - 1]
+    assert.deepEqual(mail.to, ['gina@example.com'])
+    assert.match(mail.subject, /trial has started/)
+    assert.match(mail.text, /\/settings/)
+
+    await gina('/api/billing/confirm?session_id=cs_gina')
+    assert.equal(sentEmails.length, before + 1, 'a reloaded return page sends nothing more')
+
+    assert.equal((await gina('/api/surveys')).status, 200, 'the trial opens the app')
+    const billing = await gina('/api/billing')
+    assert.equal(billing.body.status, 'trialing')
+    assert.equal(billing.body.trialEnd, new Date(end * 1000).toISOString())
+    assert.equal(billing.body.trialDays, 0, 'no second trial')
+  })
+
+  test("a teammate cannot cancel the owner's subscription", async () => {
+    const minted = await gina('/api/invites', asJson({ email: 'hal@example.com' }))
+    const token = new URL(minted.body.url).searchParams.get('invite')
+    const hal = client()
+    await hal('/api/auth/register', asJson({ name: 'Hal', email: 'hal@example.com', password: 'a long enough password', inviteToken: token }))
+    assert.equal((await hal('/api/billing')).body.canManage, false)
+    const calls = stripeCalls.length
+    assert.equal((await hal('/api/billing/cancel', { method: 'POST' })).status, 403)
+    assert.equal((await hal('/api/billing/resume', { method: 'POST' })).status, 403)
+    assert.equal(stripeCalls.length, calls, 'and Stripe is never asked')
+  })
+
+  test('the owner cancels in one step and gets a confirmation email', async () => {
+    stripeStub = () => subscription({ cancel_at_period_end: true, cancel_at: end })
+    const before = sentEmails.length
+    const cancelled = await gina('/api/billing/cancel', { method: 'POST' })
+    assert.equal(cancelled.status, 200)
+    assert.equal(cancelled.body.cancelAt, new Date(end * 1000).toISOString())
+    assert.equal(cancelled.body.emailed, true)
+    assert.equal(cancelled.body.emailedTo, 'gina@example.com')
+    const call = stripeCalls[stripeCalls.length - 1]
+    assert.equal(call.url, 'https://api.stripe.com/v1/subscriptions/sub_gina')
+    assert.equal(call.init.body, 'cancel_at_period_end=true')
+
+    assert.equal(sentEmails.length, before + 1)
+    const mail = sentEmails[sentEmails.length - 1]
+    assert.deepEqual(mail.to, ['gina@example.com'])
+    assert.match(mail.subject, /cancelled/)
+    assert.match(mail.text, /will not be charged/)
+
+    const billing = await gina('/api/billing')
+    assert.equal(billing.body.active, true, 'access runs to the end of the trial')
+    assert.equal(billing.body.cancelAt, new Date(end * 1000).toISOString())
+    assert.equal((await gina('/api/surveys')).status, 200)
+  })
+
+  test('the owner can resume before the date', async () => {
+    stripeStub = () => subscription()
+    const resumed = await gina('/api/billing/resume', { method: 'POST' })
+    assert.equal(resumed.status, 200)
+    assert.equal(resumed.body.cancelAt, null)
+    assert.equal((await gina('/api/billing')).body.cancelAt, null)
+  })
+
+  test('cancelling needs a session', async () => {
+    assert.equal((await client()('/api/billing/cancel', { method: 'POST' })).status, 401)
   })
 })

@@ -7,6 +7,9 @@
 
 export const PRICE_LINE = '$29'
 
+/** The trial every new workspace starts on; the server's TRIAL_DAYS default. */
+export const TRIAL_LINE = '14-day free trial'
+
 export default function PricingCard({
   included,
   selfServe,
@@ -52,11 +55,11 @@ export default function PricingCard({
           {selfServe ? (
             <>
               <button type="button" className="btn-primary w-full py-3" onClick={onGetStarted}>
-                Subscribe — {PRICE_LINE}/month
+                Start your {TRIAL_LINE}
               </button>
               <p className="mt-3 text-center text-[11px] leading-relaxed text-faint">
-                Create your account, confirm your email, and pay securely by card. Promo codes are entered at
-                checkout. Powered by Stripe.
+                Create your account, confirm your email, and add a card. Nothing is charged until the trial ends,
+                then {PRICE_LINE}/month. Cancel any time in Settings. Powered by Stripe.
               </p>
             </>
           ) : (

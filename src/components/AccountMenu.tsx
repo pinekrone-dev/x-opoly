@@ -314,32 +314,30 @@ export default function AccountMenu({
               <p className="text-xs text-body">
                 {billing.status === 'exempt'
                   ? 'This workspace is on the house.'
-                  : billing.active
-                    ? `Active — ${billing.priceLabel}${
-                        billing.periodEnd ? `, renews ${new Date(billing.periodEnd).toLocaleDateString()}` : ''
-                      }.`
-                    : 'Not active.'}
+                  : !billing.active
+                    ? 'Not active.'
+                    : billing.cancelAt
+                      ? `Cancelled, access until ${new Date(billing.cancelAt).toLocaleDateString()}.`
+                      : billing.status === 'trialing'
+                        ? `Free trial${
+                            billing.trialEnd ? `, ends ${new Date(billing.trialEnd).toLocaleDateString()}` : ''
+                          }.`
+                        : `Active, ${billing.priceLabel}${
+                            billing.periodEnd ? `, renews ${new Date(billing.periodEnd).toLocaleDateString()}` : ''
+                          }.`}
               </p>
-              {billing.portalAvailable ? (
+              {billing.status !== 'exempt' ? (
                 <button
                   type="button"
                   className="btn-secondary mt-2 w-full text-xs"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true)
-                    setError(null)
-                    try {
-                      // Cards, invoices and cancellation live on Stripe's
-                      // portal; the return link brings them straight back.
-                      const { url } = await api.billingPortal()
-                      window.location.assign(url)
-                    } catch (cause) {
-                      setError(cause instanceof Error ? cause.message : 'The billing page could not be opened.')
-                      setBusy(false)
-                    }
+                  onClick={() => {
+                    // Cancelling, resuming and the card all live on the
+                    // settings page, so there is one place to look.
+                    setOpen(false)
+                    navigate('/settings#subscription')
                   }}
                 >
-                  Manage billing
+                  Manage subscription
                 </button>
               ) : null}
             </div>

@@ -34,7 +34,8 @@ customer uses. The catalogue in R2 is the contract between them.
 - Bindings: `DB` → D1 `sitesurvey-cre` (CRM, surveys, users); `PARCELS` → D1 `landquotient-parcels` (searchable parcel rows, refilled by the pipeline; optional, the GIS falls back to the published index); `BUCKET` → R2 `sitesurvey-cre-uploads`; `PROSPECTOR_DATA` → R2 `prospector-data`, served through the Worker at `/catalog/*` with byte-range support for pmtiles (browser and edge cache 300 s for `markets.json` and `*/layers.json`, a day for everything else); `ASSETS` → `dist/` as a single-page app.
 - `[vars] TILE_PROVIDER` picks the keyless basemap (osm, carto-*, satellite). Keyed providers need the `TILE_KEY` secret.
 - `[env.staging]` is a second Worker with its own D1 and R2 and no routes.
-- Cloudflare secrets (all optional, every feature has a free default): `ANTHROPIC_API_KEY` (flyer reading), `GOOGLE_MAPS_API_KEY`, `CENSUS_API_KEY`, `TILE_KEY`, Stripe and SMS keys. GitHub secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SMOKE_EMAIL`, `SMOKE_PASSWORD`.
+- Cloudflare secrets (all optional, every feature has a free default): `ANTHROPIC_API_KEY` (flyer reading), `GOOGLE_MAPS_API_KEY`, `CENSUS_API_KEY`, `TILE_KEY`, Stripe and SMS keys.
+- Billing (`app/lib/billing.js`): $29/month per team. New teams get a free trial (`TRIAL_DAYS`, default 14, `0` turns it off) and give a card at checkout; one trial per team. Invite codes are typed on the paywall and applied before checkout so a 100%-off code needs no card. The workspace owner cancels in Settings (`POST /api/billing/cancel`, `cancel_at_period_end`), which emails a confirmation; `POST /api/billing/resume` undoes it. The period end is read from the subscription items (current Stripe API); a NULL period end made every request call Stripe and write D1. GitHub secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SMOKE_EMAIL`, `SMOKE_PASSWORD`.
 
 ### Code map
 

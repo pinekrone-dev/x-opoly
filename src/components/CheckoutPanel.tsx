@@ -12,9 +12,12 @@ import { mountEmbeddedCheckout } from '../lib/stripe'
  */
 export default function CheckoutPanel({
   publishableKey,
+  code,
   onBlocked,
 }: {
   publishableKey: string | null
+  /** An invite code applied before checkout; the parent remounts on change. */
+  code?: string
   onBlocked?: (message: string) => void
 }) {
   const frame = useRef<HTMLDivElement>(null)
@@ -34,7 +37,7 @@ export default function CheckoutPanel({
      * session. Without this a blocked Stripe script is a dead end.
      */
     const hostedFallback = async () => {
-      const session = await api.startCheckout({ hosted: true })
+      const session = await api.startCheckout({ hosted: true, code })
       if (cancelled) return
       if (!session.url) throw new Error('Checkout could not be started. Try again in a moment.')
       setHostedUrl(session.url)
@@ -43,7 +46,7 @@ export default function CheckoutPanel({
 
     const start = async () => {
       try {
-        const session = await api.startCheckout()
+        const session = await api.startCheckout({ code })
         if (cancelled) return
 
         if (session.embedded && session.clientSecret && publishableKey && frame.current) {

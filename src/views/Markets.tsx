@@ -220,7 +220,7 @@ export default function Markets({
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {selfServe ? (
                 <button type="button" className="btn-primary px-5 py-2.5" onClick={onGetStarted}>
-                  Start for $29/month
+                  Start a 14-day free trial
                 </button>
               ) : null}
               <a className="btn border border-line-strong px-4 py-2.5 text-body hover:border-muted" href="mailto:kevin@realestateaistudio.com?subject=A%20market%20for%20Land%20Quotient">
