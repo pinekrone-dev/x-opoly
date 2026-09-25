@@ -1,6 +1,6 @@
 // The pictures the public pages use, made from one real screenshot.
 //
-//   node scripts/marketing-assets.mjs [--gis path/to/screenshot.png]
+//   node scripts/marketing-assets.mjs [--gis path/to/screenshot.png] [--only og-x.png,og-y.png]
 //
 // Two jobs. First, the crops: a 1440x900 screenshot of the parcel map becomes
 // public/shots/gis.jpg plus three crops the pages show at different sizes,
@@ -26,6 +26,9 @@ const PUBLIC = path.join(ROOT, 'public')
 
 const args = process.argv.slice(2)
 const gisArg = args.includes('--gis') ? args[args.indexOf('--gis') + 1] : null
+// --only og-a.png,og-b.png draws just those cards, leaving the rest byte for
+// byte as they are, so adding a page does not reissue every other card.
+const only = args.includes('--only') ? new Set(args[args.indexOf('--only') + 1].split(',')) : null
 
 /* ---------- the crops ---------- */
 
@@ -99,6 +102,25 @@ const CARDS = [
     eyebrow: 'Questions',
     title: 'What people ask before they move a live requirement',
     sub: 'What it is, what it costs, where the data comes from, and what a client sees. Ten markets, $29/month.',
+    shot: 'shots/map.jpg',
+    shotWidth: 440,
+  },
+  {
+    file: 'og-pricing.png',
+    eyebrow: 'Pricing',
+    title: '14 days free, then $29 a month',
+    sub: 'One plan per workspace, teammates included. Nothing is charged for 14 days, and you can cancel any time in Settings.',
+    shot: 'shots/gis.jpg',
+    shotWidth: 500,
+  },
+  {
+    // The card behind a client share link. The page's own title and
+    // description are written per survey by the Worker (app/lib/preview.js);
+    // the picture stays generic, because a survey's sites are the broker's.
+    file: 'og-share.png',
+    eyebrow: 'Market survey',
+    title: 'A live market survey, shared with you',
+    sub: 'The shortlisted sites on one map, with the numbers, the tour and the demographics. Opens in the browser, no login.',
     shot: 'shots/map.jpg',
     shotWidth: 440,
   },
@@ -241,7 +263,7 @@ async function cards() {
   const browser = await chromium.launch({ executablePath: chromePath() })
   try {
     const page = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 })
-    for (const card of CARDS) {
+    for (const card of CARDS.filter((c) => !only || only.has(c.file))) {
       await page.setContent(cardHtml(card), { waitUntil: 'networkidle' })
       await page.evaluate(() => document.fonts.ready)
       await page.screenshot({ path: path.join(PUBLIC, card.file), type: 'png' })

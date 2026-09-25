@@ -14,7 +14,7 @@
 import { createApp } from '../app/routes.js'
 import { d1Adapter } from '../app/lib/sql.js'
 import { r2Storage } from '../app/lib/storage.js'
-import { isHtml, withPreviewOrigin } from '../app/lib/preview.js'
+import { isHtml, previewForPath, rewritePreview, sharePreview, withPreviewOrigin } from '../app/lib/preview.js'
 import { sendTrialReminders } from '../app/lib/billing.js'
 import { emailConfigured, sendEmail, trialReminderEmail } from '../app/lib/email.js'
 
@@ -230,7 +230,18 @@ export default {
     // Point the link-preview tags at the host that actually answered, so a
     // shared URL previews as itself whichever domain it was handed out on.
     if (isHtml(response)) {
-      const html = withPreviewOrigin(await response.text(), url.origin)
+      let html = withPreviewOrigin(await response.text(), url.origin)
+      // A path answered with the landing page's HTML gets a preview of its
+      // own: a share link names its survey, a market map its market, and
+      // everything else at least points at itself. The public pages ship
+      // their own entry and card, and are left exactly as built.
+      if (html.includes(`<meta property="og:url" content="${url.origin}/" />`) && url.pathname !== '/') {
+        const db = env.DB ? d1Adapter(env.DB) : null
+        const preview = await previewForPath(url.pathname, url.origin, {
+          lookupShare: db ? (token) => sharePreview(db, token) : null,
+        }).catch(() => null)
+        if (preview) html = rewritePreview(html, preview)
+      }
       return new Response(html, { status: response.status, headers: response.headers })
     }
 

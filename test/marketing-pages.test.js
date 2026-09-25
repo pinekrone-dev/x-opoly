@@ -7,7 +7,7 @@ import fs from 'node:fs'
  * own title and preview. These checks are the ones a broken card would fail.
  */
 
-const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html', 'faq.html', 'gis.html']
+const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html', 'faq.html', 'gis.html', 'pricing.html']
 
 const meta = (html, attr, name) => {
   const m = html.match(new RegExp(`<meta\\s+${attr}="${name}"\\s+content="([^"]*)"`, 's'))
@@ -38,12 +38,26 @@ describe('public pages', () => {
 
   test('the sitemap names every public page and nothing private', () => {
     const xml = fs.readFileSync('public/sitemap.xml', 'utf8')
-    for (const p of ['/', '/investors', '/developers', '/investment-sales', '/markets', '/faq']) {
+    for (const p of ['/', '/investors', '/developers', '/investment-sales', '/markets', '/pricing', '/faq', '/gis']) {
       assert.ok(xml.includes(`<loc>https://landquotient.com${p}</loc>`), `sitemap has ${p}`)
     }
     assert.ok(!/\/survey\/|\/s\/|\/api\//.test(xml))
     const robots = fs.readFileSync('public/robots.txt', 'utf8')
     assert.ok(robots.includes('Sitemap: https://landquotient.com/sitemap.xml'))
+  })
+
+  test('every page the build emits is a public page with its own card', () => {
+    // A page added to the build but not to PAGES would ship unchecked.
+    const config = fs.readFileSync('vite.config.ts', 'utf8')
+    const built = [...config.matchAll(/'?[\w-]+'?: '([\w-]+\.html)'/g)].map((m) => m[1]).sort()
+    assert.deepEqual(built, [...PAGES].sort())
+  })
+
+  test('the header links to the pricing page, which offers the trial', () => {
+    const chrome = fs.readFileSync('src/components/MarketingChrome.tsx', 'utf8')
+    assert.ok(chrome.includes('href="/pricing"'))
+    const page = fs.readFileSync('src/views/PricingPage.tsx', 'utf8')
+    assert.ok(page.includes('Start your {TRIAL_LINE}'))
   })
 
   test('every preview card is a 1200x630 PNG', () => {
