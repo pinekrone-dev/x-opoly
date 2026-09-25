@@ -140,8 +140,10 @@ import {
   getParcel,
   listHashes,
   marketSummary,
+  parcelStores,
+  parseShards,
   putParcels,
-  readyMarkets,
+  readyMarketsAcross,
   reindexMarket,
   resetTextIndex,
   searchParcels,
@@ -257,7 +259,7 @@ function bindingError(error, binding) {
  * @param {object} context.storage file store (disk or R2)
  * @param {object} context.env     configuration and secrets
  */
-export function createApp({ db, storage, env = {}, parcelDb = null }) {
+export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards = {} }) {
   const app = new Hono()
 
   /*
@@ -266,9 +268,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
    * Its own database when the deployment gives it one — parcels outnumber
    * every other row in the product and do not belong beside the surveys — and
    * the same database otherwise, which is what the local rig and the tests
-   * run against.
+   * run against. A deployment may bind several, since one D1 holds about
+   * twelve million parcels before it is full; PARCEL_SHARDS names the one
+   * each market lives in, and every market it does not name lives in the
+   * first. See parcelStores.
    */
-  const parcels = parcelDb || db
+  const stores = parcelStores({
+    primary: parcelDb || db,
+    shards: parcelShards,
+    map: parseShards(env.PARCEL_SHARDS),
+  })
+  const parcelsFor = stores.storeFor
 
   const notFound = (c, message) => c.json({ error: message }, 404)
 
@@ -2309,7 +2319,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const market = marketSlug(c)
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     return edgeCached(c, `market/${market}`, 5 * 60, async () => {
-      const summary = await marketSummary(parcels, market).catch(() => null)
+      const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
       if (!summary) return c.json({ ready: false, market })
       return c.json({ ready: true, ...summary })
     })
@@ -2320,7 +2330,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     return edgeCached(c, 'markets', 5 * 60, async () => {
-      const ready = await readyMarkets(parcels).catch(() => [])
+      const ready = await readyMarketsAcross(stores.all).catch(() => [])
       return c.json({ ready })
     })
   })
@@ -2338,7 +2348,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     const market = marketSlug(c)
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
 
-    const summary = await marketSummary(parcels, market).catch(() => null)
+    const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
     if (!summary) return c.json({ ready: false, market }, 404)
 
     /*
@@ -2350,7 +2360,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
      */
     return edgeCached(c, `parcels/${market}`, 10 * 60, async () => {
       try {
-        const found = await searchParcels(parcels, market, parcelFilters(c), {
+        const found = await searchParcels(parcelsFor(market), market, parcelFilters(c), {
           limit: Number(c.req.query('limit')) || undefined,
           offset: Number(c.req.query('offset')) || 0,
           summary,
@@ -2385,7 +2395,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     const id = (c.req.query('id') ?? '').trim()
     if (!id) return c.json({ error: 'id is required.' }, 400)
-    const found = await getParcel(parcels, market, id).catch(() => null)
+    const found = await getParcel(parcelsFor(market), market, id).catch(() => null)
     if (!found) return notFound(c, 'No such parcel in that market.')
     return c.json({ parcel: found })
   })
@@ -2429,14 +2439,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         // Bounded, and says whether it finished. A county holds more rows
         // than one request can delete inside D1's CPU budget, so the caller
         // repeats this until `done` — see clearMarket.
-        const { removed, done } = await clearMarket(parcels, market)
+        const { removed, done } = await clearMarket(parcelsFor(market), market)
         return c.json({ cleared: market, removed, done })
       }
       if (action === 'hashes') {
         // What the market already holds, so a publisher can send only what
         // changed. Paged by pid — see listHashes for why not by offset.
         const asked = Number(c.req.query('limit'))
-        const { hashes, cursor } = await listHashes(parcels, market, {
+        const { hashes, cursor } = await listHashes(parcelsFor(market), market, {
           after: String(c.req.query('after') ?? ''),
           limit: Number.isFinite(asked) ? asked : undefined,
         })
@@ -2451,7 +2461,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         if (pids.length > 20000) {
           return c.json({ error: 'Send at most 20000 parcel ids per request.' }, 413)
         }
-        return c.json({ dropped: await dropParcels(parcels, market, pids) })
+        return c.json({ dropped: await dropParcels(parcelsFor(market), market, pids) })
       }
       if (action === 'rows') {
         const body = await c.req.json().catch(() => null)
@@ -2462,11 +2472,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         if (rows.length > 5000) {
           return c.json({ error: 'Send at most 5000 parcels per request.' }, 413)
         }
-        return c.json({ stored: await putParcels(parcels, market, rows) })
+        return c.json({ stored: await putParcels(parcelsFor(market), market, rows) })
       }
       if (action === 'seal') {
         const body = await c.req.json().catch(() => ({}))
-        const sealed = await sealMarket(parcels, market, {
+        const sealed = await sealMarket(parcelsFor(market), market, {
           keys: Array.isArray(body?.keys) ? body.keys : [],
           builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
         })
@@ -2479,11 +2489,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null }) {
         // bounds one request. `reset=1` empties the index for every market
         // first, which is the way back from an interrupted fill.
         if (c.req.query('reset') === '1') {
-          await resetTextIndex(parcels)
+          await resetTextIndex(parcelsFor(market))
           return c.json({ reset: true })
         }
         const rows = Number(c.req.query('rows'))
-        const step = await reindexMarket(parcels, market, {
+        const step = await reindexMarket(parcelsFor(market), market, {
           budget: Number.isFinite(rows) && rows > 0 ? Math.min(rows, 100_000) : undefined,
         })
         return c.json({ market, ...step })

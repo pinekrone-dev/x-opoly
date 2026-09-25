@@ -7,7 +7,7 @@ import { PLACEHOLDER_ORIGIN, isHtml, withPreviewOrigin } from '../app/lib/previe
 describe('link previews', () => {
   test('index.html ships absolute preview URLs a crawler can follow', () => {
     const html = fs.readFileSync('index.html', 'utf8')
-    assert.match(html, /property="og:image" content="https:\/\/[^"]+\/og\.png"/)
+    assert.match(html, /property="og:image" content="https:\/\/[^"]+\/og\.png(\?v=\w+)?"/)
     assert.match(html, /name="twitter:card" content="summary_large_image"/)
     // Relative URLs are the classic mistake here: a crawler has no page
     // context to resolve them against, so the card renders without an image.
@@ -20,9 +20,11 @@ describe('link previews', () => {
   })
 
   test('the served origin replaces the one baked in at build time', () => {
+    // The placeholder is the real origin now, so the rewrite is exercised
+    // against a different host; on the live domain it is a no-op.
     const html = `<meta property="og:image" content="${PLACEHOLDER_ORIGIN}/og.png" />`
-    const rewritten = withPreviewOrigin(html, 'https://landquotient.com')
-    assert.match(rewritten, /content="https:\/\/landquotient\.com\/og\.png"/)
+    const rewritten = withPreviewOrigin(html, 'https://preview.example.com')
+    assert.match(rewritten, /content="https:\/\/preview\.example\.com\/og\.png"/)
     assert.ok(!rewritten.includes(PLACEHOLDER_ORIGIN))
   })
 

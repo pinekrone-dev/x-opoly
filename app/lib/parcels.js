@@ -963,3 +963,77 @@ export async function readyMarkets(db) {
   const rows = await db.all('SELECT market FROM parcel_markets WHERE n > 0 ORDER BY market')
   return rows.map((row) => row.market)
 }
+
+/*
+ * More than one store.
+ *
+ * D1 caps a database at ten gigabytes, and a county costs about 0.8 KB a
+ * parcel once its text index is counted, so the first store was half full at
+ * six million parcels across ten markets. The twenty largest metros add
+ * fourteen million more. So a deployment may bind several parcel databases,
+ * and a setting names the one each market lives in:
+ *
+ *     PARCEL_SHARDS = "los-angeles-ca=PARCELS_2,cook-il=PARCELS_2"
+ *
+ * A market the setting does not name lives in the first store, which is where
+ * every market published before this existed already is, so the setting
+ * changes nothing until a new county asks for it. The publisher never learns
+ * any of this: it addresses a market, and the ingest door picks the shelf.
+ */
+
+/** The setting, read: market slug to binding name. Blank and malformed entries are skipped. */
+export function parseShards(text) {
+  const map = {}
+  for (const entry of String(text ?? '').split(',')) {
+    const [market, binding] = entry.split('=').map((s) => s.trim())
+    if (market && binding && /^[a-z0-9-]+$/.test(market) && /^[A-Z][A-Z0-9_]*$/.test(binding)) {
+      map[market] = binding
+    }
+  }
+  return map
+}
+
+/**
+ * A store that refuses everything, for a market assigned to a binding this
+ * deployment lacks. Refusing beats falling back: the fallback would quietly
+ * publish a two-million-parcel county into the store that is already full,
+ * and a read of a market that is not here answers as it would for a market
+ * never published, not ready.
+ */
+function unboundStore(market, binding) {
+  const refuse = async () => {
+    throw new Error(`market ${market} is assigned to ${binding}, which this deployment does not bind`)
+  }
+  return { kind: 'unbound', all: refuse, get: refuse, run: refuse, batch: refuse }
+}
+
+/**
+ * Where each market lives.
+ *
+ * @param {object} options
+ * @param {object} options.primary  the store every unnamed market lives in
+ * @param {object} [options.shards] the other stores, by binding name
+ * @param {object} [options.map]    market slug to binding name, from parseShards
+ * @returns {{ storeFor: (market: string) => object, all: object[] }}
+ */
+export function parcelStores({ primary, shards = {}, map = {} }) {
+  const missing = new Map()
+  const storeFor = (market) => {
+    const binding = map[market]
+    if (!binding) return primary
+    if (shards[binding]) return shards[binding]
+    if (!missing.has(market)) missing.set(market, unboundStore(market, binding))
+    return missing.get(market)
+  }
+  const all = [...new Set([primary, ...Object.values(shards)])]
+  return { storeFor, all }
+}
+
+/** Every market with rows in any of these stores, once each, in order. */
+export async function readyMarketsAcross(dbs) {
+  const seen = new Set()
+  for (const db of dbs) {
+    for (const market of await readyMarkets(db)) seen.add(market)
+  }
+  return [...seen].sort()
+}

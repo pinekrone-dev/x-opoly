@@ -19,9 +19,12 @@ workers_dev = true
 # it requires the domain to be a zone in this same Cloudflare account. If a
 # deploy ever fails naming a route, that is what to check. The *.workers.dev
 # address above keeps working either way.
-[[routes]]
-pattern = "survey.realestateaistudio.com"
-custom_domain = true
+# Retired 2026-09-11: the site moved to landquotient.com and this hostname
+# was removed from the Worker. Kept as a record of where it lived.
+#
+# [[routes]]
+# pattern = "survey.realestateaistudio.com"
+# custom_domain = true
 
 # The new canonical home. Cloudflare provisions the DNS records and
 # certificates for both of these on deploy, so nothing is created by hand —
@@ -33,25 +36,20 @@ custom_domain = true
 # and query. Nothing else in the app changes: every link it builds —
 # verification emails, Stripe return URLs, client share links — is derived
 # from the host the request arrived on.
-# HELD BACK: landquotient.com is registered through Cloudflare Registrar in a
-# different account (pinekrone@gmail.com) than the one running this Worker. A
-# custom domain can only name a zone its own account holds, so enabling these
-# now fails the Cloudflare build and the site keeps serving the previous
-# deployment — silently, because a wrangler.toml-only change leaves the bundle
-# hash untouched and the smoke test's rollout check has nothing to notice.
-#
-# The fix is an inter-account registrar transfer, which Cloudflare only allows
-# once the domain is more than 10 days old. Registered 2026-08-25, so eligible
-# from about 2026-09-04. Leave DNSSEC off until then — it blocks the move.
-# Re-enable both blocks once the zone and this Worker are in one account.
-#
-# [[routes]]
-# pattern = "landquotient.com"
-# custom_domain = true
-#
-# [[routes]]
-# pattern = "www.landquotient.com"
-# custom_domain = true
+# The landquotient.com zone and this Worker are in one Cloudflare account
+# since the registrar transfer (registered 2026-08-25, moved 2026-09), so the
+# custom domains can be declared here. Before the transfer these blocks failed
+# the build silently: a wrangler.toml-only change leaves the bundle hash
+# untouched, so the site kept serving the previous deployment and the smoke
+# test's rollout check had nothing to notice.
+
+[[routes]]
+pattern = "landquotient.com"
+custom_domain = true
+
+[[routes]]
+pattern = "www.landquotient.com"
+custom_domain = true
 
 # The built frontend. `single-page-application` makes deep links such as
 # /survey/:id and /s/:token resolve to index.html instead of a 404.
@@ -87,6 +85,22 @@ binding = "PARCELS"
 database_name = "landquotient-parcels"
 database_id = "4e2fa3cb-c04c-4350-bdce-598b3ca3f891"
 
+# One D1 holds ten gigabytes, which is about twelve million parcels once the
+# text index is counted, and the first store was half full with ten markets in
+# it. Further stores are bound as PARCELS_2, PARCELS_3 and so on, and the
+# PARCEL_SHARDS var below names the one each new market lives in. A market the
+# var does not name lives in PARCELS, so nothing already published moves.
+#
+[[d1_databases]]
+binding = "PARCELS_2"
+database_name = "landquotient-parcels-2"
+database_id = "1c6e1ffc-c8bd-4708-937c-7c04c6e6b45a"
+
+[[d1_databases]]
+binding = "PARCELS_3"
+database_name = "landquotient-parcels-3"
+database_id = "7cae5cbf-7d2d-4f4e-9555-5be9c8490336"
+
 # The Prospector parcel data, served publicly at data.realestateaistudio.com.
 # Bound here so the pipeline's GitHub Actions run can publish county rebuilds
 # through /api/gis/ingest — authenticated by the run's own OIDC token, so no
@@ -97,6 +111,12 @@ binding = "PROSPECTOR_DATA"
 bucket_name = "prospector-data"
 
 [vars]
+# Which further parcel store each market lives in, "slug=BINDING" pairs
+# separated by commas. Empty until a market is published to a second store.
+# The second store takes the next nine counties and Los Angeles, about seven
+# million parcels; the third takes San Diego, Chicago, San Francisco, the
+# Inland Empire, Boston, Atlanta and Seattle.
+PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2,minneapolis-mn=PARCELS_2,baltimore-md=PARCELS_2,detroit-mi=PARCELS_2,philadelphia-pa=PARCELS_2,dallas-tx=PARCELS_2,fort-worth-tx=PARCELS_2,miami-fl=PARCELS_2,los-angeles-ca=PARCELS_2,san-diego-ca=PARCELS_3,chicago-il=PARCELS_3,san-francisco-ca=PARCELS_3,riverside-ca=PARCELS_3,boston-ma=PARCELS_3,atlanta-ga=PARCELS_3,seattle-wa=PARCELS_3"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
@@ -143,7 +163,7 @@ workers_dev = true
 
 # Empty, and it MUST be empty. A named environment inherits the top-level
 # `routes`, so leaving this out does not mean "no routes" — it means staging
-# claims survey.realestateaistudio.com and serves it, silently taking
+# claims landquotient.com and serves it, silently taking
 # production's traffic on deploy. Found the hard way.
 routes = []
 

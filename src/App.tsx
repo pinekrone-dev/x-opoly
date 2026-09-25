@@ -5,6 +5,8 @@ import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
 import Faq from './views/Faq'
 import Landing from './views/Landing'
+import Audience from './views/Audience'
+import Markets from './views/Markets'
 import Welcome from './views/Welcome'
 import Home from './views/Home'
 import RecordView from './views/RecordView'
@@ -125,6 +127,40 @@ export default function App() {
   if (route.view === 'faq') {
     return (
       <Faq
+        selfServe={session.billing.selfServe}
+        onSignIn={() => {
+          setDoor('signIn')
+          navigate('/')
+        }}
+        onGetStarted={() => {
+          setDoor('signUp')
+          navigate('/')
+        }}
+      />
+    )
+  }
+
+  /* The other public pages: one per kind of reader, and the market list.
+     Same two doors as the FAQ. */
+  if (route.view === 'audience' && route.audience) {
+    return (
+      <Audience
+        slug={route.audience}
+        selfServe={session.billing.selfServe}
+        onSignIn={() => {
+          setDoor('signIn')
+          navigate('/')
+        }}
+        onGetStarted={() => {
+          setDoor('signUp')
+          navigate('/')
+        }}
+      />
+    )
+  }
+  if (route.view === 'markets') {
+    return (
+      <Markets
         selfServe={session.billing.selfServe}
         onSignIn={() => {
           setDoor('signIn')

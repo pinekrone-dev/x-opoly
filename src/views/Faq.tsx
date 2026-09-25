@@ -1,4 +1,6 @@
-import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
+import { useEffect } from 'react'
+
+import { AlsoOn, MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 
 /**
  * The questions a broker asks before they will put a live requirement in
@@ -102,6 +104,10 @@ export default function Faq({
   onSignIn: () => void
   onGetStarted: () => void
 }) {
+  useEffect(() => {
+    document.title = 'Land Quotient FAQ — what brokers, developers and investors ask'
+  }, [])
+
   return (
     <div className="min-h-full bg-surface">
       <MarketingHeader
@@ -109,6 +115,7 @@ export default function Faq({
         onSignIn={onSignIn}
         onGetStarted={onGetStarted}
         homeHref="/"
+        current="/faq"
       />
 
       <main>
@@ -175,6 +182,8 @@ export default function Faq({
             </div>
           </div>
         </div>
+
+        <AlsoOn except="/faq" />
       </main>
 
       <MarketingFooter onSignIn={onSignIn} homeHref="/" />

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
-import { MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
+import { AlsoOn, MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
+import PricingCard from '../components/Pricing'
 
 /**
  * The public face of the product.
@@ -154,7 +155,7 @@ export default function Landing({
      * the document scroll puts the header back on the viewport.
      */
     <div className="min-h-full bg-surface">
-      <MarketingHeader selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} />
+      <MarketingHeader selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} current="/" />
 
       <main>
         {/*
@@ -324,59 +325,11 @@ export default function Landing({
               </p>
             </div>
 
-            <div className="mx-auto mt-10 max-w-sm">
-              <div className="overflow-hidden rounded-xl border border-line shadow-xl shadow-slate-900/10">
-                <div className="bg-brand-night p-7 text-center">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand-soft">Land Quotient</p>
-                  <p className="mt-3 text-5xl font-bold tracking-tight text-white">
-                    $29<span className="text-base font-medium text-slate-400"> / month</span>
-                  </p>
-                  <p className="mt-2 text-xs text-slate-400">per workspace, teammates included</p>
-                </div>
-                <ul className="space-y-3 bg-surface p-7 text-sm text-body">
-                  {INCLUDED.map((line) => (
-                    <li key={line} className="flex items-start gap-2.5">
-                      <svg
-                        className="mt-0.5 shrink-0 text-brand"
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.4"
-                        aria-hidden
-                      >
-                        <path d="m5 13 4 4L19 7" />
-                      </svg>
-                      {line}
-                    </li>
-                  ))}
-                </ul>
-                <div className="bg-surface px-7 pb-7">
-                  {selfServe ? (
-                    <>
-                      <button type="button" className="btn-primary w-full py-3" onClick={onGetStarted}>
-                        Subscribe — $29/month
-                      </button>
-                      <p className="mt-3 text-center text-[11px] leading-relaxed text-faint">
-                        Create your account, confirm your email, and pay securely by card. Promo codes are
-                        entered at checkout. Powered by Stripe.
-                      </p>
-                    </>
-                  ) : (
-                    <p className="rounded-lg border border-line bg-sunken p-3 text-center text-xs text-muted">
-                      New signups are opening soon. Already invited? Use your invitation link, or{' '}
-                      <button type="button" className="font-medium text-brand-deep underline" onClick={onSignIn}>
-                        sign in
-                      </button>
-                      .
-                    </p>
-                  )}
-                </div>
-              </div>
-            </div>
+            <PricingCard included={INCLUDED} selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} />
           </div>
         </section>
+
+        <AlsoOn except="/" />
       </main>
 
       <MarketingFooter onSignIn={onSignIn} />
