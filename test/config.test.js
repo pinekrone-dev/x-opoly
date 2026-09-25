@@ -51,6 +51,28 @@ describe('wrangler.toml', () => {
     assert.match(id[1], /^[0-9a-f-]{36}$/, `database_id "${id[1]}" is not a UUID`)
   })
 
+  test('staging declares its own empty routes, inside its own table', () => {
+    // A key belongs to the last [table] header above it. Adding a table such
+    // as [env.staging.triggers] above `routes = []` quietly moves the line
+    // into that table, and staging then inherits landquotient.com.
+    let table = ''
+    const found = []
+    for (const line of lines) {
+      const trimmed = line.trim()
+      const header = trimmed.match(/^\[\[?([^\]]+)\]\]?$/)
+      if (header) table = header[1]
+      else if (/^routes\s*=\s*\[\s*\]/.test(trimmed)) found.push(table)
+    }
+    assert.deepEqual(found, ['env.staging'], 'routes = [] must sit directly under [env.staging]')
+  })
+
+  test('the daily job is scheduled for production and not for staging', () => {
+    assert.match(source, /^\[triggers\]\ncrons = \["[^"]+"\]$/m)
+    assert.match(source, /^\[env\.staging\.triggers\]\ncrons = \[\]$/m)
+    const worker = fs.readFileSync(path.join(root, 'worker', 'index.js'), 'utf8')
+    assert.match(worker, /async scheduled\(/)
+  })
+
   test('deep links resolve to the app instead of 404ing', () => {
     assert.match(source, /not_found_handling = "single-page-application"/)
   })

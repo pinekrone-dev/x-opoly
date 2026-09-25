@@ -217,6 +217,7 @@ export function trialStartedEmail({ name, trialEnd, days, settingsUrl }) {
       ? `Your card will not be charged before ${ends}. On that date the subscription starts unless you cancel first.`
       : 'Your card will not be charged until the trial ends. The subscription starts then unless you cancel first.',
     'To cancel, open Settings in the app and choose Cancel subscription. It takes effect straight away, you keep the rest of your trial, and you will not be charged.',
+    'We will email you again a week before the trial ends.',
   ]
   const footnote = 'You are receiving this because a Land Quotient trial was started with this email address.'
   return {
@@ -251,5 +252,25 @@ export function cancellationEmail({ name, endsAt, trial, settingsUrl }) {
     subject: 'Your Land Quotient subscription is cancelled',
     text: `${paragraphs.join('\n\n')}\n\nSettings: ${settingsUrl}\n\n${footnote}`,
     html: frame('Subscription cancelled', paragraphs, { url: settingsUrl, button: 'Open Settings', footnote }),
+  }
+}
+
+/**
+ * The reminder a week before a trial becomes a paid subscription: the date,
+ * and the way out, in the same plain words as the email that started it.
+ */
+export function trialReminderEmail({ name, trialEnd, settingsUrl }) {
+  const greeting = name ? `Hi ${name},` : 'Hi,'
+  const ends = longDate(trialEnd)
+  const paragraphs = [
+    `${greeting} a reminder that your free trial of Land Quotient ends ${ends ? `on ${ends}` : 'soon'}.`,
+    `${ends ? 'On that date' : 'When it ends'} the subscription starts and your card is charged. There is nothing you need to do to keep it.`,
+    'If you would rather not continue, open Settings in the app and choose Cancel subscription before then. You keep access to the end of the trial and you will not be charged.',
+  ]
+  const footnote = 'You are receiving this because you started a Land Quotient trial with this email address.'
+  return {
+    subject: ends ? `Your Land Quotient trial ends on ${ends}` : 'Your Land Quotient trial ends soon',
+    text: `${paragraphs.join('\n\n')}\n\nSettings: ${settingsUrl}\n\n${footnote}`,
+    html: frame('Your trial ends soon', paragraphs, { url: settingsUrl, button: 'Open Settings', footnote }),
   }
 }

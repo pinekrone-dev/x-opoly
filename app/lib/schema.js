@@ -511,4 +511,7 @@ export const COLUMN_ADDITIONS = [
   ['billing', 'trial_end', 'TEXT'],
   ['billing', 'cancel_at', 'TEXT'],
   ['billing', 'started_mail_at', 'TEXT'],
+  // Claims the one "your trial ends soon" email, as started_mail_at does
+  // the first one. See sendTrialReminders.
+  ['billing', 'reminder_mail_at', 'TEXT'],
 ]

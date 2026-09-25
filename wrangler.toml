@@ -58,6 +58,11 @@ directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
+# Once a day, 16:07 UTC (morning in the US): the trial reminders. See
+# `scheduled` in worker/index.js. One D1 query on a day with nothing due.
+[triggers]
+crons = ["7 16 * * *"]
+
 # Provisioned in the Cloudflare account, region ENAM. Tables already created.
 [[d1_databases]]
 binding = "DB"
@@ -166,6 +171,11 @@ workers_dev = true
 # claims landquotient.com and serves it, silently taking
 # production's traffic on deploy. Found the hard way.
 routes = []
+
+# No cron on staging: it holds no Stripe key, so the daily job would only
+# wake up to do nothing.
+[env.staging.triggers]
+crons = []
 
 [env.staging.vars]
 # Same reasoning as production above: Carto throttles anonymous use with

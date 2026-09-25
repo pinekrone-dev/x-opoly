@@ -17,6 +17,7 @@ import {
   billingState,
   claimStartedMail,
   periodEndIso,
+  sendTrialReminders,
   setRenewal,
   subscriptionTerms,
   trialDays,
@@ -30,7 +31,7 @@ import {
   BillingError,
 } from '../app/lib/billing.js'
 import { nodeAdapter } from '../app/lib/sql.js'
-import { cancellationEmail, trialStartedEmail } from '../app/lib/email.js'
+import { cancellationEmail, trialReminderEmail, trialStartedEmail } from '../app/lib/email.js'
 
 const ENV = { STRIPE_SECRET_KEY: 'sk_test_stub', STRIPE_PUBLISHABLE_KEY: 'pk_test_stub' }
 
@@ -637,6 +638,92 @@ describe('the billing emails', () => {
         assert.ok(!part.includes('\u2014'), 'no em dash')
         assert.ok(!/\$\s?\d/.test(part), 'no price')
       }
+    }
+  })
+})
+
+describe('the reminder a week before a trial ends', () => {
+  const now = Date.parse('2026-10-01T16:00:00Z')
+  const inDays = (n) => new Date(now + n * 86400e3).toISOString()
+  const trialing = (id, endIso, extra = {}) => ({
+    id,
+    status: 'trialing',
+    trial_end: Date.parse(endIso) / 1000,
+    items: { data: [{ current_period_end: Date.parse(endIso) / 1000 }] },
+    cancel_at: null,
+    cancel_at_period_end: false,
+    ...extra,
+  })
+
+  before(async () => {
+    const add = async (team, email, trialEnd, { started = inDays(-7), status = 'trialing' } = {}) => {
+      await db.run('INSERT INTO users (id, email, name, password_hash, created_at) VALUES (?, ?, ?, ?, ?)', [
+        team, email, null, 'x', inDays(-7),
+      ]).catch(async () => {
+        // The users table's required columns vary by version; fall back to the minimum.
+        await db.run('INSERT INTO users (id, email) VALUES (?, ?)', [team, email])
+      })
+      await db.run(
+        `INSERT INTO billing (team_id, customer_id, subscription_id, status, trial_end, started_mail_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'x')`,
+        [team, `cus_${team}`, `sub_${team}`, status, trialEnd, started],
+      )
+    }
+    await add('r-due', 'due@example.com', inDays(6))
+    await add('r-later', 'later@example.com', inDays(10))
+    await add('r-past', 'past@example.com', inDays(-1))
+    await add('r-new', 'new@example.com', inDays(5), { started: inDays(-1) })
+    await add('r-gone', 'gone@example.com', inDays(3))
+    await add('r-paid', 'paid@example.com', inDays(4), { status: 'active' })
+  })
+
+  test('mails only trials ending inside the week, once, and never one already set to end', async () => {
+    const mailed = []
+    const fetchImpl = async (url) => {
+      const id = String(url).split('/subscriptions/')[1]
+      const body = id === 'sub_r-gone' ? trialing(id, inDays(3), { cancel_at_period_end: true }) : trialing(id, inDays(6))
+      return new Response(JSON.stringify(body), { status: 200 })
+    }
+    const tally = await sendTrialReminders(db, ENV, {
+      now,
+      fetchImpl,
+      send: async (team, terms) => mailed.push({ email: team.email, trialEnd: terms.trialEnd }),
+    })
+    assert.deepEqual(mailed.map((m) => m.email), ['due@example.com'])
+    assert.equal(tally.sent, 1)
+    assert.equal(tally.skipped, 1, 'the one cancelled on Stripe\'s own page is read fresh and skipped')
+    const again = await sendTrialReminders(db, ENV, { now, fetchImpl, send: async () => mailed.push('twice') })
+    assert.equal(again.due, 0)
+    assert.equal(mailed.length, 1, 'never twice')
+  })
+
+  test('a failed send is released for tomorrow rather than lost', async () => {
+    await db.run("UPDATE billing SET reminder_mail_at = NULL WHERE team_id = 'r-due'")
+    const fetchImpl = async () => new Response(JSON.stringify(trialing('sub_r-due', inDays(6))), { status: 200 })
+    const failed = await sendTrialReminders(db, ENV, {
+      now,
+      fetchImpl,
+      send: async () => {
+        throw new Error('mail provider down')
+      },
+    })
+    assert.equal(failed.failed, 1)
+    const row = await db.get("SELECT reminder_mail_at FROM billing WHERE team_id = 'r-due'")
+    assert.equal(row.reminder_mail_at, null)
+  })
+
+  test('with no Stripe key nothing is read at all', async () => {
+    const tally = await sendTrialReminders(db, {}, { now, send: async () => assert.fail('no send') })
+    assert.equal(tally.due, 0)
+  })
+
+  test('the reminder names the date and the way out, with no em dash or price', () => {
+    const mail = trialReminderEmail({ name: 'Pat', trialEnd: '2026-10-09T12:00:00Z', settingsUrl: 'https://landquotient.com/settings' })
+    assert.match(mail.subject, /ends on October 9, 2026/)
+    assert.match(mail.text, /Cancel subscription before then/)
+    for (const part of [mail.subject, mail.text, mail.html]) {
+      assert.ok(!part.includes('\u2014'))
+      assert.ok(!/\$\s?\d/.test(part))
     }
   })
 })

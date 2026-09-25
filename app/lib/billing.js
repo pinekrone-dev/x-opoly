@@ -441,6 +441,78 @@ export async function billingState(db, env, teamId, { fetchImpl = fetch, now = D
   }
 }
 
+/** How far ahead of a trial's end the reminder goes out. */
+export const REMINDER_DAYS = 7
+const DAY = 24 * 60 * 60 * 1000
+
+/**
+ * The "your trial ends soon" emails, run once a day by the Worker's cron.
+ *
+ * Seven days ahead because that is what the card networks ask of a merchant
+ * whose trial turns into a charge, and because a reminder three days out
+ * reaches people who are travelling after the charge. One query finds the
+ * trials ending inside the window that have not been reminded; each is
+ * claimed before anything is sent, so an overlapping run cannot mail twice.
+ *
+ * The stored row can be behind Stripe (a cancellation made on Stripe's own
+ * page with no webhook to report it), so each subscription is read fresh
+ * before its email goes: a trial that is no longer running, or is already
+ * set to end, gets nothing. A trial that started within two days is skipped
+ * too, because the "trial started" email already said everything this one
+ * would. Bounded to `limit` a run; the rest go tomorrow.
+ *
+ * `send(team, subscription)` does the mailing and is the caller's, so this
+ * stays free of addresses and templates. Returns what happened, by count.
+ */
+export async function sendTrialReminders(db, env, { send, now = Date.now(), limit = 50, fetchImpl = fetch } = {}) {
+  const tally = { due: 0, sent: 0, skipped: 0, failed: 0 }
+  if (!stripeConfigured(env)) return tally
+  const rows = await db.all(
+    `SELECT b.team_id, b.subscription_id, b.customer_id, u.email, u.name
+       FROM billing b JOIN users u ON u.id = b.team_id
+      WHERE b.status = 'trialing'
+        AND b.reminder_mail_at IS NULL
+        AND b.cancel_at IS NULL
+        AND b.trial_end > ? AND b.trial_end <= ?
+        AND (b.started_mail_at IS NULL OR b.started_mail_at <= ?)
+      LIMIT ?`,
+    [
+      new Date(now).toISOString(),
+      new Date(now + REMINDER_DAYS * DAY).toISOString(),
+      new Date(now - 2 * DAY).toISOString(),
+      limit,
+    ],
+  )
+  tally.due = rows.length
+  for (const row of rows) {
+    const { changes } = await db.run(
+      'UPDATE billing SET reminder_mail_at = ? WHERE team_id = ? AND reminder_mail_at IS NULL',
+      [new Date(now).toISOString(), row.team_id],
+    )
+    if (changes !== 1) continue
+    try {
+      const subscription = await stripe(env, `/subscriptions/${encodeURIComponent(row.subscription_id)}`, {
+        method: 'GET',
+        fetchImpl,
+      })
+      await record(db, row.team_id, subscription, row.customer_id)
+      const terms = subscriptionTerms(subscription)
+      if (subscription.status !== 'trialing' || terms.cancelAt || !terms.trialEnd) {
+        tally.skipped += 1
+        continue
+      }
+      await send({ email: row.email, name: row.name, teamId: row.team_id }, terms)
+      tally.sent += 1
+    } catch {
+      // Released, so tomorrow's run tries again rather than the reminder
+      // being lost to one bad minute at Stripe or the mail provider.
+      await db.run('UPDATE billing SET reminder_mail_at = NULL WHERE team_id = ?', [row.team_id]).catch(() => {})
+      tally.failed += 1
+    }
+  }
+  return tally
+}
+
 /** Teams whose owner never pays: the operator and the test account. */
 export function isExemptEmail(env, email) {
   return String(env.STRIPE_EXEMPT_EMAILS ?? '')
