@@ -147,6 +147,42 @@ describe('the Cloudflare Worker', () => {
     assert.equal((await call(env, '/api/share/nope')).status, 404)
   })
 
+  test('every link unfurls as itself: share links name the survey, public pages keep their own card', async () => {
+    const fs = await import('node:fs')
+    const index = fs.readFileSync('index.html', 'utf8')
+    const pricing = fs.readFileSync('pricing.html', 'utf8')
+    const env = await workerEnv({
+      // The real built pages, as the asset binding serves them.
+      ASSETS: {
+        async fetch(request) {
+          const body = new URL(request.url).pathname === '/pricing' ? pricing : index
+          return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        },
+      },
+    })
+    const og = (html, name) => html.match(new RegExp(`property="${name}"\\s+content="([^"]*)"`))?.[1]
+
+    const created = await call(env, '/api/surveys', asJson({ name: 'Harbor Blvd relocation', clientName: 'Secret Client' }))
+    const { id, share } = created.body.survey
+    await call(env, `/api/surveys/${id}/share`, asJson({ enabled: true }))
+
+    const shared = (await call(env, `/s/${share.token}`)).body
+    assert.equal(og(shared, 'og:title'), 'Harbor Blvd relocation | Market survey')
+    assert.equal(og(shared, 'og:url'), `${BASE}/s/${share.token}`)
+    assert.match(og(shared, 'og:image'), /^https:\/\/sitesurvey\.example\.com\/og-share\.png/)
+    assert.ok(!shared.includes('Secret Client'))
+
+    const map = (await call(env, '/gis/phoenix-az')).body
+    assert.equal(og(map, 'og:title'), 'Phoenix, AZ parcel map | Land Quotient')
+
+    const app = (await call(env, '/survey/abc123')).body
+    assert.equal(og(app, 'og:url'), `${BASE}/survey/abc123`, 'not the home page')
+
+    const page = (await call(env, '/pricing')).body
+    assert.equal(og(page, 'og:title'), '14 days free, then $29 a month', 'a public page is served as built')
+    assert.equal(og(page, 'og:url'), `${BASE}/pricing`)
+  })
+
   test('stores an upload in R2 and serves it back', async () => {
     const env = await workerEnv()
     const created = await call(env, '/api/surveys', asJson({ name: 'Flyer intake' }))

@@ -31,6 +31,7 @@ export default defineConfig({
         'investment-sales': 'investment-sales.html',
         markets: 'markets.html',
         faq: 'faq.html',
+                pricing: 'pricing.html',
         // /gis exactly; a market deep link such as /gis/phoenix-az falls back
         // to index.html and the root card, which is right for a private map.
         gis: 'gis.html',

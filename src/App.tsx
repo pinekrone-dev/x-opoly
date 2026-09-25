@@ -7,6 +7,7 @@ import Faq from './views/Faq'
 import Landing from './views/Landing'
 import Audience from './views/Audience'
 import Markets from './views/Markets'
+import PricingPage from './views/PricingPage'
 import Welcome from './views/Welcome'
 import Home from './views/Home'
 import RecordView from './views/RecordView'
@@ -146,6 +147,21 @@ export default function App() {
     return (
       <Audience
         slug={route.audience}
+        selfServe={session.billing.selfServe}
+        onSignIn={() => {
+          setDoor('signIn')
+          navigate('/')
+        }}
+        onGetStarted={() => {
+          setDoor('signUp')
+          navigate('/')
+        }}
+      />
+    )
+  }
+  if (route.view === 'pricing') {
+    return (
+      <PricingPage
         selfServe={session.billing.selfServe}
         onSignIn={() => {
           setDoor('signIn')

@@ -71,6 +71,15 @@ export function MarketingHeader({
           >
             Markets
           </a>
+          {/* Pricing stays on narrow screens too: it is the page a visitor
+              deciding whether to start a trial goes looking for. */}
+          <a
+            className={`btn-ghost px-3 py-1.5 ${current === '/pricing' ? 'text-ink' : ''}`}
+            href="/pricing"
+            aria-current={current === '/pricing' ? 'page' : undefined}
+          >
+            Pricing
+          </a>
           <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="/faq">
             FAQ
           </a>
@@ -78,8 +87,9 @@ export function MarketingHeader({
             Sign in
           </button>
           {selfServe ? (
-            <button type="button" className="btn-primary px-3.5 py-1.5" onClick={onGetStarted}>
-              Get started
+            <button type="button" className="btn-primary whitespace-nowrap px-3.5 py-1.5" onClick={onGetStarted}>
+              <span className="sm:hidden">Free trial</span>
+              <span className="hidden sm:inline">Start free trial</span>
             </button>
           ) : null}
         </nav>
@@ -123,7 +133,7 @@ export function MarketingFooter({ onSignIn, homeHref = '' }: { onSignIn: () => v
           <a className="underline hover:text-brand-soft" href="/faq">
             FAQ
           </a>
-          <a className="underline hover:text-brand-soft" href={`${homeHref}#pricing`}>
+          <a className="underline hover:text-brand-soft" href="/pricing">
             Pricing
           </a>
           <button type="button" className="ml-auto underline hover:text-brand-soft" onClick={onSignIn}>
