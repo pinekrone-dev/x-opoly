@@ -15,6 +15,8 @@ import { createApp } from '../app/routes.js'
 import { d1Adapter } from '../app/lib/sql.js'
 import { r2Storage } from '../app/lib/storage.js'
 import { isHtml, withPreviewOrigin } from '../app/lib/preview.js'
+import { sendTrialReminders } from '../app/lib/billing.js'
+import { emailConfigured, sendEmail, trialReminderEmail } from '../app/lib/email.js'
 
 /**
  * Built once per environment and reused for the life of the isolate.
@@ -135,7 +137,31 @@ function missingAssetsPage(reason) {
 </html>`
 }
 
+/**
+ * The daily cron (wrangler.toml `triggers`): trial reminders.
+ *
+ * One D1 query on a quiet day. There is no request to read a hostname from,
+ * so the settings link uses PUBLIC_ORIGIN, or the production domain.
+ */
+async function daily(env) {
+  if (!env.DB || !emailConfigured(env)) return
+  await ensureSchema(env)
+  const origin = String(env.PUBLIC_ORIGIN || 'https://landquotient.com').replace(/\/$/, '')
+  const tally = await sendTrialReminders(d1Adapter(env.DB), env, {
+    send: (team, terms) =>
+      sendEmail(env, {
+        to: team.email,
+        ...trialReminderEmail({ name: team.name, trialEnd: terms.trialEnd, settingsUrl: `${origin}/settings` }),
+      }),
+  })
+  if (tally.due) console.log('trial reminders', JSON.stringify(tally))
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(daily(env))
+  },
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
 
