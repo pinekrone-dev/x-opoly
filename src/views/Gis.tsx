@@ -16,6 +16,8 @@ import GisRail, {
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
+import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
+import { floodZoom, tileReader } from '../lib/floodTiles'
 import type {
   Comp,
   Deal,
@@ -2526,6 +2528,35 @@ export default function Gis({
    * just switched on has tiles still arriving.
    */
   const [nearby, setNearby] = useState<Record<string, Record<string, unknown>[]> | null>(null)
+
+  /*
+   * The flood zone under the open parcel, whether the flood layer is on or
+   * not.
+   *
+   * Read from the market's flood tile archive directly rather than from the
+   * map, which only knows the tiles it has drawn: one ranged read of a file
+   * the edge caches, no database and no pipeline join. Keyed by the parcel's
+   * box so a stale answer never lands on the next parcel opened.
+   */
+  const floodLayer = useMemo(() => published.find((layer) => layer.id === 'flood-zones' && layer.tiles) ?? null, [published])
+  const [flood, setFlood] = useState<{ box: string; answer: FloodAnswer | null; failed: boolean } | null>(null)
+  useEffect(() => {
+    if (!floodLayer?.tiles || !selectedBox) {
+      setFlood(null)
+      return undefined
+    }
+    const key = selectedBox.join(',')
+    const url = `${CATALOG}/${active}/${floodLayer.tiles}`
+    let live = true
+    setFlood({ box: key, answer: null, failed: false })
+    floodZoom(url)
+      .then((zoom) => floodAt(selectedBox, zoom, tileReader(url, floodLayer.sourceLayer ?? floodLayer.id)))
+      .then((answer) => live && setFlood({ box: key, answer, failed: false }))
+      .catch(() => live && setFlood({ box: key, answer: null, failed: true }))
+    return () => {
+      live = false
+    }
+  }, [floodLayer, selectedBox, active])
   const onExtrasNear = useCallback((found: Record<string, Record<string, unknown>[]> | null) => {
     setNearby(found)
   }, [])
@@ -4088,6 +4119,39 @@ export default function Gis({
           extra={
             parcel ? (
               <>
+                {/* The flood zone, on every parcel in a market FEMA maps,
+                    whether or not the flood layer is switched on. */}
+                {floodLayer && flood && (
+                  <PanelSection title="Flood zone">
+                    {flood.failed ? (
+                      <p className="text-xs text-muted">The flood map could not be read just now.</p>
+                    ) : !flood.answer ? (
+                      <p className="text-xs text-muted">Checking FEMA's flood map…</p>
+                    ) : flood.answer.status === 'out' ? (
+                      <p className="text-xs text-body">Not in a FEMA special flood hazard area.</p>
+                    ) : (
+                      <dl className="space-y-1 text-xs">
+                        <Row
+                          label="Zone"
+                          value={
+                            flood.answer.status === 'in'
+                              ? flood.answer.zones.length > 1
+                                ? `${flood.answer.zone}, and ${flood.answer.zones.filter((z) => z !== flood.answer?.zone).join(', ')} on part of the lot`
+                                : String(flood.answer.zone ?? 'Special flood hazard area')
+                              : `Part of the lot is in ${flood.answer.zones.join(', ') || 'a hazard area'}`
+                          }
+                        />
+                        {zoneMeaning(flood.answer.zone) ? <Row label="Meaning" value={zoneMeaning(flood.answer.zone) as string} /> : null}
+                        {flood.answer.subtype ? <Row label="Subtype" value={flood.answer.subtype.toLowerCase().replace(/^./, (c) => c.toUpperCase())} /> : null}
+                        {flood.answer.bfe != null ? <Row label="Base flood elevation" value={`${flood.answer.bfe.toLocaleString()} ft`} /> : null}
+                      </dl>
+                    )}
+                    <p className="mt-1.5 text-[11px] leading-snug text-faint">
+                      FEMA National Flood Hazard Layer. A lender's flood determination is the official answer.
+                    </p>
+                  </PanelSection>
+                )}
+
                 {/* Who holds it, from the pipeline's resolved groups: the
                     portfolio is one holder across spelling variants, the
                     back office one mailing address across many entity
@@ -4163,7 +4227,7 @@ export default function Gis({
                     rail is a section here, with no further click. */}
                 {nearby &&
                   shownLayers
-                    .filter((layer) => layerOn[layer.id])
+                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id))
                     .map((layer) => {
                       const hits = nearby[layer.id] ?? []
                       const order = layer.fields?.length ? layer.fields : null
