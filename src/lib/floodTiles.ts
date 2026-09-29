@@ -1,7 +1,6 @@
 import { PMTiles } from 'pmtiles'
-import { VectorTile } from '@mapbox/vector-tile'
-import { PbfReader } from 'pbf'
 import type { DecodedTile, ReadTile } from './flood'
+import { decodeTile } from './tileDecode'
 
 /*
  * The browser half of flood.ts: one tile out of a market's flood archive,
@@ -38,19 +37,8 @@ export function tileReader(url: string, sourceLayer: string): ReadTile {
     if (!pending) {
       pending = archive(url)
         .getZxy(z, x, y)
-        .then((response) => {
-          // No tile is not an error: FEMA drew nothing there.
-          if (!response?.data) return { extent: 4096, features: [] }
-          const layer = new VectorTile(new PbfReader(new Uint8Array(response.data))).layers[sourceLayer]
-          if (!layer) return { extent: 4096, features: [] }
-          const features = []
-          for (let i = 0; i < layer.length; i++) {
-            const feature = layer.feature(i)
-            if (feature.type !== 3) continue
-            features.push({ rings: feature.loadGeometry(), properties: feature.properties })
-          }
-          return { extent: layer.extent, features }
-        })
+        // No tile is not an error: FEMA drew nothing there.
+        .then((response) => decodeTile(response?.data, sourceLayer))
         .catch(() => {
           // A failed read is forgotten, so the next parcel opened tries again.
           decoded.delete(key)

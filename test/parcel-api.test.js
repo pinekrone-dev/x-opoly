@@ -311,3 +311,87 @@ describe('searching a county', () => {
     assert.deepEqual(res.body.ready, ['austin-tx'])
   })
 })
+
+/*
+ * The brain panel. No AI key is configured here, so the rules read the
+ * question, which is also the path a deployment without a key takes. The
+ * market has no zoning or flood layers in this rig (the catalogue lookup is
+ * answered 404), so these pin the matching and the parcel filters; the
+ * geometry has its own tests in flood.test.js.
+ */
+describe('asking in plain English', () => {
+  const realFetch = globalThis.fetch
+  before(() => {
+    globalThis.fetch = async (url, init) =>
+      String(url).includes('data.realestateaistudio.com') ? new Response('missing', { status: 404 }) : realFetch(url, init)
+  })
+  after(() => {
+    globalThis.fetch = realFetch
+  })
+  const ask = (body) => call('/api/gis/ask', { method: 'POST', body: JSON.stringify({ market: 'austin-tx', ...body }) })
+
+  test('signing in is required', async () => {
+    const res = await anonymous('/api/gis/ask', { method: 'POST', body: JSON.stringify({ market: 'austin-tx', prompt: 'land' }) })
+    assert.equal(res.status, 401)
+  })
+
+  test('a question the store answers alone comes back as filters for the map', async () => {
+    const res = await ask({ prompt: 'land over 20 acres' })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.mode, 'filters')
+    assert.equal(res.body.source, 'rules')
+    assert.deepEqual(res.body.plan.assetTypes, ['Land'])
+    assert.equal(res.body.plan.acresMin, 20)
+  })
+
+  test('an export over the market comes back as rows, filtered by the store', async () => {
+    const res = await ask({ prompt: 'export parcels over 5 acres' })
+    assert.equal(res.body.mode, 'set')
+    assert.equal(res.body.plan.action, 'export')
+    assert.deepEqual(res.body.ids.sort(), ['202', '203'])
+    assert.equal(res.body.rows[0].zoning, null, 'no zoning layer here, so no zoning, rather than a guess')
+  })
+
+  test('an upload is matched row by row without a model, and every row is accounted for', async () => {
+    const csv = [
+      'Name,Property Address,Zip',
+      'HQ,"400 Congress Avenue, Suite 1200",78701',
+      'Yard,18 Warehouse Way,',
+      'Nowhere,77 Imaginary Blvd,',
+      'Blank,,',
+    ].join('\n')
+    const res = await ask({ prompt: '', upload: { name: 'sites.csv', text: csv } })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.mode, 'set')
+    assert.equal(res.body.upload, true)
+    assert.equal(res.body.plan.columns.address, 'Property Address')
+    const byName = Object.fromEntries(res.body.rows.map((r) => [r.input.Name, r]))
+    assert.equal(byName.HQ.id, '201', 'suite and spelled-out avenue still find the parcel')
+    assert.equal(byName.Yard.id, '202')
+    assert.equal(byName.Nowhere.id, null)
+    assert.match(byName.Nowhere.why, /No parcel/)
+    assert.equal(byName.Blank.passes, false)
+    assert.equal(res.body.counts.matched, 2)
+  })
+
+  test('the question filters the uploaded rows, and says why a row fell out', async () => {
+    const csv = ['Address', '400 Congress Ave', '18 Warehouse Way', '9 Scrub Rd'].join('\n')
+    const res = await ask({ prompt: 'which of these are over 5 acres', upload: { name: 'a.csv', text: csv } })
+    assert.deepEqual(res.body.ids.sort(), ['202', '203'])
+    const office = res.body.rows.find((r) => r.id === '201')
+    assert.equal(office.passes, false)
+    assert.match(office.why, /smaller/)
+  })
+
+  test('a file with no address column says so rather than guessing', async () => {
+    const res = await ask({ prompt: 'check these', upload: { name: 'a.csv', text: 'Foo,Bar\n1,2' } })
+    assert.equal(res.status, 422)
+    assert.match(res.body.error, /which column/)
+  })
+
+  test('a flood question in a market with no flood layer is not silently answered', async () => {
+    const res = await ask({ prompt: 'land outside the flood zone' })
+    assert.equal(res.body.plan.flood, null, 'no flood data here, so no flood filter is claimed')
+    assert.equal(res.body.hasFlood, false)
+  })
+})

@@ -19,6 +19,8 @@ import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
 import type {
+  AskAnswer,
+  AskRow,
   Comp,
   Deal,
   MapView,
@@ -933,6 +935,54 @@ function exportCsv(rows: Record<string, string | number | null>[], slug: string)
   URL.revokeObjectURL(url)
 }
 
+/**
+ * The brain panel's answer as a file.
+ *
+ * An upload comes back as the broker's own rows with the answer appended,
+ * so the file they sent is the file they get back, one row for one row, and
+ * a row that matched nothing says why rather than disappearing. A question
+ * about the market comes back as the parcels, one per row.
+ */
+function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
+  const rows = (answer.rows ?? []).filter((row) => !onlyPassing || row.passes)
+  const cell = (value: unknown) => {
+    const text = value == null ? '' : String(value)
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+  }
+  const added: [keyof AskRow, string][] = [
+    ['parcelNumber', 'Parcel number'],
+    ['address', answer.upload ? 'Matched address' : 'Address'],
+    ['owner', 'Owner'],
+    ['assetType', 'Asset type'],
+    ['value', 'Value'],
+    ['acres', 'Acres'],
+    ['zip', 'Zip'],
+    ...(answer.hasZoning ? ([['zoning', 'Zoning'], ['zoningCategory', 'Zoning category']] as [keyof AskRow, string][]) : []),
+    ...(answer.hasFlood ? ([['floodZone', 'FEMA flood zone'], ['baseFloodElevation', 'Base flood elevation (ft)']] as [keyof AskRow, string][]) : []),
+    ['passes', 'Meets the question'],
+    ['why', 'Why'],
+  ]
+  const inputs = answer.upload ? Object.keys(rows.find((row) => row.input)?.input ?? {}) : []
+  const header = [...inputs, ...added.map(([, label]) => label)].map(cell).join(',')
+  const body = rows
+    .map((row) =>
+      [
+        ...inputs.map((key) => row.input?.[key] ?? ''),
+        ...added.map(([key]) => (key === 'passes' ? (row.passes ? 'Yes' : 'No') : row[key])),
+      ]
+        .map(cell)
+        .join(','),
+    )
+    .join('\n')
+  const blob = new Blob([`${header}\n${body}\n`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${slug}-${answer.upload ? 'checked' : 'parcels'}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
 /** A census figure, in the units its field declares — the panel's own rules. */
 function censusValue(value: number, kind: string): string {
   if (!Number.isFinite(value)) return '—'
@@ -1163,10 +1213,21 @@ export default function Gis({
   const [value, setValue] = useState({ min: '', max: '' })
   const [acres, setAcres] = useState({ min: '', max: '' })
 
-  // The scout: a hunt typed in plain English, answered as the filters above.
-  const [hunt, setHunt] = useState('')
-  const [hunting, setHunting] = useState(false)
-  const [huntNote, setHuntNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
+  // The brain panel: a question and optionally a file, answered on the map or as a file.
+  const [askText, setAskText] = useState('')
+  const [askFile, setAskFile] = useState<{ name: string; text: string } | null>(null)
+  const [askBusy, setAskBusy] = useState(false)
+  const [askAnswer, setAskAnswer] = useState<AskAnswer | null>(null)
+  const [askError, setAskError] = useState<string | null>(null)
+  const [askShown, setAskShown] = useState(false)
+  const askPicker = useRef<HTMLInputElement>(null)
+  // An answer belongs to the county it was asked of.
+  useEffect(() => {
+    setAskAnswer(null)
+    setAskShown(false)
+    setAskError(null)
+  }, [active])
+
 
   useEffect(() => {
     catalogue('markets.json', FRESH)
@@ -1199,8 +1260,6 @@ export default function Gis({
     setValue({ min: '', max: '' })
     setAcres({ min: '', max: '' })
     setQuery('')
-    setHunt('')
-    setHuntNote(null)
     setOwners(null)
     setOwnerPick(null)
     setPublished([])
@@ -2165,9 +2224,11 @@ export default function Gis({
    * is the difference between a search result and a map.
    */
   const filterIds = useMemo(() => {
+    // An answer from the brain panel, while it is on the map, is the set.
+    if (askShown && askAnswer?.mode === 'set') return askAnswer.ids ?? []
     if (server?.ready) return found?.ids ?? null
     return filtered ? filtered.map((row) => row.id as number | string) : null
-  }, [filtered, server, found])
+  }, [filtered, server, found, askShown, askAnswer])
 
   /** What the current set adds up to. The report is a reading, not a second query. */
   const summary = useMemo(() => {
@@ -2920,61 +2981,38 @@ export default function Gis({
     setCompsBusy(false)
   }
 
-  async function runHunt() {
-    const ask = hunt.trim()
-    if (!ask || hunting) return
-    setHunting(true)
-    setHuntNote(null)
+  /*
+   * The brain panel's question, and the file with it.
+   *
+   * The server reads the question once (with the file's header and three
+   * rows) and runs everything else as code. What comes back is either
+   * filters, which go into the Filter tab exactly as a person would set
+   * them, or a set of parcels, which goes on the map or into a file.
+   */
+  async function runAsk() {
+    if (!active || askBusy || (!askText.trim() && !askFile)) return
+    setAskBusy(true)
+    setAskError(null)
+    setAskShown(false)
     try {
-      const res = await api.gisScout({
-        prompt: ask,
-        assetTypes: assetOptions.map((option) => option.value),
-        valueLabel: meta?.valueLabel || 'Value',
-      })
-      if (res.empty) {
-        setHuntNote({
-          tone: 'warn',
-          text:
-            res.source === 'ai'
-              ? 'That did not translate into any filter this county supports.'
-              : 'Could not read that. Try a phrasing like "vacant land over 5 acres under $2M" — or set an AI key on the server for free-form hunts.',
-        })
+      const answer = await api.gisAsk({ market: active, prompt: askText.trim(), upload: askFile })
+      setAskAnswer(answer)
+      if (answer.mode === 'filters') {
+        const plan = answer.plan
+        setAssets(new Set(plan.assetTypes))
+        setValue({ min: plan.valueMin != null ? String(plan.valueMin) : '', max: plan.valueMax != null ? String(plan.valueMax) : '' })
+        setAcres({ min: plan.acresMin != null ? String(plan.acresMin) : '', max: plan.acresMax != null ? String(plan.acresMax) : '' })
+        setQuery(plan.keyword ?? '')
+      } else if (answer.plan.action === 'export') {
+        exportAsk(answer, active, !answer.upload)
       } else {
-        const f = res.filters
-        setAssets(new Set(f.assetTypes))
-        setValue({
-          min: f.valueMin != null ? String(f.valueMin) : '',
-          max: f.valueMax != null ? String(f.valueMax) : '',
-        })
-        setAcres({
-          min: f.acresMin != null ? String(f.acresMin) : '',
-          max: f.acresMax != null ? String(f.acresMax) : '',
-        })
-        setQuery(f.keyword ?? '')
-        /*
-         * The budget, once it starts to matter.
-         *
-         * Only shown past four fifths, and only when a model was actually
-         * called — most hunts are read by the rule parser and cost nothing,
-         * so mentioning a budget on those would be noise about a limit the
-         * person is not approaching.
-         */
-        const spent =
-          res.budget && res.budget.used > res.budget.cap * 0.8
-            ? ` ${res.budget.used} of ${res.budget.cap} AI hunts used today.`
-            : ''
-        setHuntNote({
-          tone: 'ok',
-          text: `${res.explanation ?? 'Filters set below — adjust them freely.'}${spent}`,
-        })
+        setAskShown(true)
       }
     } catch (cause) {
-      setHuntNote({
-        tone: 'warn',
-        text: cause instanceof Error ? cause.message : 'The scout could not answer.',
-      })
+      setAskAnswer(null)
+      setAskError(cause instanceof Error ? cause.message : 'That question could not be answered.')
     } finally {
-      setHunting(false)
+      setAskBusy(false)
     }
   }
 
@@ -3249,6 +3287,166 @@ export default function Gis({
           filter: filtered ? String(filtered.length.toLocaleString()) : undefined,
         }}
       >
+        {rail === 'ask' && (
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-ask">
+                Ask in plain English
+              </label>
+              <textarea
+                id="gis-ask"
+                rows={3}
+                className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
+                placeholder={
+                  askFile
+                    ? 'What to check — "which of these are zoned industrial and outside the flood zone?"'
+                    : 'e.g. "vacant land over 5 acres outside the flood zone, export it"'
+                }
+                value={askText}
+                onChange={(event) => setAskText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault()
+                    void runAsk()
+                  }
+                }}
+              />
+              <input
+                ref={askPicker}
+                type="file"
+                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  if (file.size > 4 * 1024 * 1024) {
+                    setAskError('That file is over 4 MB. Split it and add each part.')
+                    return
+                  }
+                  void file.text().then((text) => setAskFile({ name: file.name, text }))
+                }}
+              />
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  type="button"
+                  className="flex-1 rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
+                  disabled={askBusy || (!askText.trim() && !askFile) || !active}
+                  onClick={() => void runAsk()}
+                >
+                  {askBusy ? (askFile ? 'Checking your list…' : 'Working it out…') : 'Ask'}
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-dashed border-line px-2 py-1.5 text-[11px] text-body hover:border-brand/50"
+                  onClick={() => askPicker.current?.click()}
+                  title="A CSV of addresses or parcel numbers"
+                >
+                  {askFile ? 'Change file' : 'Add a list'}
+                </button>
+              </div>
+              {askFile ? (
+                <p className="mt-1 flex items-center justify-between text-[11px] text-muted">
+                  <span className="truncate">{askFile.name}</span>
+                  <button type="button" className="ml-2 underline hover:text-body" onClick={() => setAskFile(null)}>
+                    Remove
+                  </button>
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] leading-snug text-faint">
+                  Add a CSV of addresses or parcel numbers to check a list instead of the whole county. Excel files: save as CSV first.
+                </p>
+              )}
+            </div>
+
+            {askError ? <p className="text-[11px] leading-snug text-amber-600">{askError}</p> : null}
+
+            {askAnswer ? (
+              <div className="space-y-2 border-t border-line pt-3">
+                <p className="text-xs text-body">{askAnswer.explanation}</p>
+                <p className="text-[11px] text-faint">
+                  {askAnswer.source === 'ai' ? 'Read by AI once; everything after is run by the map.' : 'Read by rules, no AI used.'}
+                  {askAnswer.note ? ` ${askAnswer.note}` : ''}
+                </p>
+                {askAnswer.mode === 'filters' ? (
+                  <p className="text-xs text-body">
+                    <strong className="text-ink">{summary.count.toLocaleString()}</strong> parcels match. The filters are set in the
+                    Filter tab, where you can adjust them.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs text-body">
+                      {askAnswer.upload ? (
+                        <>
+                          {askAnswer.counts?.rows.toLocaleString()} rows · {askAnswer.counts?.matched.toLocaleString()} matched to a
+                          parcel · <strong className="text-ink">{askAnswer.counts?.passing.toLocaleString()}</strong> meet the question
+                        </>
+                      ) : (
+                        <>
+                          <strong className="text-ink">{askAnswer.counts?.passing.toLocaleString()}</strong> of{' '}
+                          {askAnswer.counts?.rows.toLocaleString()} checked meet the question
+                        </>
+                      )}
+                    </p>
+                    {askAnswer.truncated ? <p className="text-[11px] text-amber-600">{askAnswer.truncated}</p> : null}
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50 disabled:opacity-50"
+                        disabled={!askAnswer.ids?.length}
+                        onClick={() => setAskShown((on) => !on)}
+                      >
+                        {askShown ? 'Clear from map' : 'Show on map'}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50"
+                        onClick={() => active && exportAsk(askAnswer, active, !askAnswer.upload)}
+                      >
+                        Download CSV
+                      </button>
+                    </div>
+                    <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-md border border-line">
+                      {(askAnswer.rows ?? []).slice(0, 100).map((row) => (
+                        <li key={`${row.index}-${row.id ?? 'none'}`}>
+                          <button
+                            type="button"
+                            className="w-full px-2 py-1.5 text-left hover:bg-sunken disabled:cursor-default disabled:hover:bg-transparent"
+                            disabled={!row.id}
+                            onClick={() => row.id && pickFromSearch(row.id)}
+                          >
+                            <span className="flex items-center gap-1.5 text-[11px]">
+                              <span
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${row.passes ? 'bg-brand' : row.id ? 'bg-amber-500' : 'bg-line-strong'}`}
+                                aria-hidden
+                              />
+                              <span className="truncate font-medium text-ink">
+                                {row.address ?? (askAnswer.plan.columns?.address ? row.input?.[askAnswer.plan.columns.address] : null) ?? 'No address'}
+                              </span>
+                            </span>
+                            <span className="block truncate pl-3 text-[11px] text-muted">
+                              {[
+                                row.passes || !/zoned/i.test(row.why) ? row.zoning : null,
+                                row.floodZone && row.floodZone !== 'None' && (row.passes || !/flood/i.test(row.why)) ? `Flood ${row.floodZone}` : null,
+                                row.passes ? null : row.why,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ') || 'Meets the question'}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {(askAnswer.rows?.length ?? 0) > 100 ? (
+                      <p className="text-[11px] text-muted">The first 100 are listed; the CSV has all {askAnswer.rows?.length.toLocaleString()}.</p>
+                    ) : null}
+                  </>
+                )}
+              </div>
+            ) : null}
+          </div>
+        )}
+
         {rail === 'layers' && (
           <div className="space-y-3">
             {/* The market belongs here rather than floating over the map:
@@ -3771,41 +3969,13 @@ export default function Gis({
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
-                <div className="border-b border-line pb-3">
-                  <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-scout">
-                    Ask for parcels
-                  </label>
-                  <textarea
-                    id="gis-scout"
-                    rows={2}
-                    className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
-                    placeholder='Plain English — "vacant land over 5 acres under $2M"'
-                    value={hunt}
-                    onChange={(event) => setHunt(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' && !event.shiftKey) {
-                        event.preventDefault()
-                        runHunt()
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="mt-1.5 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
-                    disabled={hunting || hunt.trim() === ''}
-                    onClick={runHunt}
-                  >
-                    {hunting ? 'Reading the hunt…' : 'Find parcels'}
-                  </button>
-                  {huntNote && (
-                    <p
-                      role="status"
-                      className={`mt-1.5 text-[11px] leading-snug ${huntNote.tone === 'ok' ? 'text-muted' : 'text-amber-600'}`}
-                    >
-                      {huntNote.text}
-                    </p>
-                  )}
-                </div>
+                <button
+                  type="button"
+                  className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50"
+                  onClick={() => setRail('ask')}
+                >
+                  Rather ask in plain English, or check a list? <span className="font-medium text-brand">Open Ask</span>
+                </button>
                 {assetOptions.length > 0 ? (
                   <div>
                     <p className="mb-1 text-[11px] font-medium text-body">Asset type</p>

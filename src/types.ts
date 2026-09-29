@@ -565,3 +565,56 @@ export interface ParcelSearch {
   offset: number
   limit: number
 }
+
+/** What the brain panel's plan says to do. */
+export interface AskPlan {
+  action: 'show' | 'export' | 'count'
+  assetTypes: string[]
+  valueMin: number | null
+  valueMax: number | null
+  acresMin: number | null
+  acresMax: number | null
+  keyword: string | null
+  zoningCategories: string[]
+  zoningCodes: string[]
+  flood: 'in' | 'out' | null
+  columns: { address: string | null; city: string | null; zip: string | null; parcel: string | null } | null
+  explanation: string | null
+}
+
+/** One parcel, or one uploaded row, as the brain panel answered it. */
+export interface AskRow {
+  index: number
+  input: Record<string, string> | null
+  id: string | null
+  address: string | null
+  owner: string | null
+  parcelNumber: string | null
+  assetType: string | null
+  value: number | null
+  acres: number | null
+  zip: string | null
+  zoning: string | null
+  zoningCategory: string | null
+  floodZone: string | null
+  floodStatus: 'in' | 'partly' | 'out' | null
+  baseFloodElevation: number | null
+  match: 'exact' | 'street' | 'none'
+  passes: boolean
+  why: string
+}
+
+export interface AskAnswer {
+  mode: 'filters' | 'set'
+  plan: AskPlan
+  explanation: string
+  source: 'ai' | 'rules'
+  note: string | null
+  hasFlood: boolean
+  hasZoning: boolean
+  upload?: boolean
+  rows?: AskRow[]
+  ids?: string[]
+  counts?: { rows: number; matched: number; passing: number }
+  truncated?: string | null
+}

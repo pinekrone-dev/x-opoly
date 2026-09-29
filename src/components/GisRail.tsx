@@ -3,8 +3,9 @@ import { useState } from 'react'
 /*
  * The left rail.
  *
- * Four questions a broker arrives with, in the order they get asked: what am I
- * looking at, where is the thing I already know about, which of these are worth
+ * Ask stands first: a question in plain English, or a list of addresses,
+ * answered on the map or as a file. Then four questions a broker arrives
+ * with, in the order they get asked: what am I looking at, where is the thing I already know about, which of these are worth
  * my time, and what do I hand to someone else. Layers, Search, Filter, Report.
  *
  * The rail owns none of the answers. It is chrome around panels the GIS view
@@ -12,9 +13,22 @@ import { useState } from 'react'
  * apart — the count in Report is the same set the map is drawing.
  */
 
-export type RailTab = 'layers' | 'search' | 'filter' | 'report'
+export type RailTab = 'ask' | 'layers' | 'search' | 'filter' | 'report'
 
 const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
+  {
+    // A question in plain English, or a spreadsheet of addresses, answered
+    // on the map or as a file. First, because it can stand in for the rest.
+    id: 'ask',
+    label: 'Ask',
+    icon: (
+      <>
+        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+        <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4M12 5v13" />
+      </>
+    ),
+  },
   {
     id: 'layers',
     label: 'Layers',

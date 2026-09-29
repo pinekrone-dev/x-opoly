@@ -108,6 +108,18 @@ import { extractFromText } from './lib/paste.js'
 import { askJson, resolveProvider } from './lib/ai.js'
 import { BOOK_STYLE_PROMPT, normalizeBookStyle } from './lib/bookstyle.js'
 import { heuristicScout, runScout } from './lib/scout.js'
+import {
+  CHECK_LIMIT,
+  UPLOAD_ROWS,
+  aiPlan,
+  describePlan,
+  heuristicPlan,
+  needsOverlay,
+  passesAttributes,
+  passesOverlay,
+} from './lib/ask.js'
+import { matchAddresses } from './lib/addresses.js'
+import { checkParcels } from './lib/overlays.js'
 import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
@@ -154,6 +166,8 @@ import {
   resetTextIndex,
   searchParcels,
   sealMarket,
+  hydrate,
+  ftsQuery,
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
 import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
@@ -2787,6 +2801,237 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     } catch (cause) {
       return c.json({ error: cause?.message || 'The scout could not read that hunt.' }, 422)
     }
+  })
+
+  /*
+   * The brain panel: a question, and optionally a spreadsheet, answered as
+   * parcels on the map or a file.
+   *
+   * One model call reads the question (and the upload's headers and three
+   * sample rows) into a plan; see lib/ask.js. Everything after is code: the
+   * rows are matched to parcels through the text index, the parcel filters
+   * are applied, and zoning and flood are read from the market's own tile
+   * archives. Without an AI key the rules read the question instead.
+   */
+  const catalogJson = async (key) => {
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(key)
+      return object ? JSON.parse(await object.text()) : null
+    }
+    const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
+      headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
+    })
+    return answer.ok ? answer.json() : null
+  }
+
+  app.post('/api/gis/ask', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'ask', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+
+    const body = await c.req.json().catch(() => ({}))
+    const market = /^[a-z0-9-]{2,40}$/.test(String(body?.market ?? '')) ? body.market : null
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const prompt = String(body?.prompt ?? '').trim().slice(0, 1000)
+    const text = typeof body?.upload?.text === 'string' ? body.upload.text : ''
+    if (!prompt && !text) return c.json({ error: 'Ask a question, or add a file.' }, 400)
+    if (text.length > 4 * 1024 * 1024) return c.json({ error: 'That file is over 4 MB. Split it and ask again.' }, 413)
+
+    const store = parcelsFor(market)
+    const summary = await marketSummary(store, market).catch(() => null)
+    if (!summary) return c.json({ error: 'That market is not published yet.' }, 404)
+
+    // The county's own vocabulary, so a plan can only name what exists here.
+    const catalogue = await catalogJson(`${market}/layers.json`).catch(() => null)
+    const layers = Array.isArray(catalogue) ? catalogue : catalogue?.layers ?? []
+    const floodLayer = layers.find((l) => l.id === 'flood-zones' && l.tiles) ?? null
+    const zoningLayer = layers.find((l) => l.id === 'zoning' && l.tiles) ?? null
+    const codeCounts = new Map()
+    for (const city of zoningLayer?.pivot ?? []) {
+      for (const category of city.categories ?? []) {
+        for (const [code, count] of category.codes ?? []) codeCounts.set(code, (codeCounts.get(code) ?? 0) + count)
+      }
+    }
+    const vocab = {
+      assetTypes: (summary.assets ?? []).map((a) => a.value).filter(Boolean),
+      valueLabel: 'Value',
+      zoningCategories: ((zoningLayer?.categories ?? []).find((f) => f.field === 'Category')?.values ?? []).map((v) => v[0]),
+      zoningCodes: [...codeCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 300).map(([code]) => code),
+      hasFlood: Boolean(floodLayer),
+    }
+
+    // The upload, read as rows. Capped, and the cap is said out loud.
+    let records = []
+    if (text) {
+      records = readDelimited(text)
+      if (!records.length) return c.json({ error: 'That file has no rows under its header.' }, 400)
+    }
+    const headers = records.length ? Object.keys(records[0]) : []
+    const cut = records.length > UPLOAD_ROWS
+    if (cut) records = records.slice(0, UPLOAD_ROWS)
+
+    // The plan: the model once when there is one, the rules otherwise.
+    let plan
+    let source = 'rules'
+    let note = null
+    const provider = resolveProvider(env)
+    const ruled = heuristicPlan(prompt, vocab, headers)
+    if (provider && prompt) {
+      const overspent = await afforded(c, 'scout')
+      if (overspent) return overspent
+      try {
+        plan = await aiPlan(prompt, vocab, records.length ? { headers, sample: records.slice(0, 3) } : null, provider, env)
+        source = 'ai'
+      } catch {
+        plan = ruled.plan
+        note = 'The AI could not be reached, so the question was read by rules.'
+      }
+    } else {
+      if (ruled.empty) {
+        return c.json({ error: 'Could not read that. Try "vacant land over 5 acres outside the flood zone", or add a file.' }, 422)
+      }
+      plan = ruled.plan
+    }
+    const explanation = plan.explanation || describePlan(plan, { upload: records.length > 0 })
+    const flood = floodLayer ? { archive: archiveFor(`${market}/${floodLayer.tiles}`), sourceLayer: floodLayer.sourceLayer ?? floodLayer.id } : null
+    const zoning = zoningLayer ? { archive: archiveFor(`${market}/${zoningLayer.tiles}`), sourceLayer: zoningLayer.sourceLayer ?? zoningLayer.id } : null
+    const base = { plan, explanation, source, note, hasFlood: Boolean(flood), hasZoning: Boolean(zoning) }
+
+    // A question about the whole market that the parcel store answers alone
+    // goes back as filters: the map, the count and the export already know
+    // how to page a county, and there is no cap to apply.
+    if (!records.length && !needsOverlay(plan) && plan.action !== 'export') {
+      return c.json({ ...base, mode: 'filters' })
+    }
+
+    let candidates = []
+    let truncated = cut ? `Only the first ${UPLOAD_ROWS.toLocaleString()} rows of the file were read.` : null
+    if (records.length) {
+      if (!plan.columns?.address && !plan.columns?.parcel) {
+        return c.json({ error: 'Could not tell which column holds the address. Name it in your question, e.g. "addresses are in the Site column".' }, 422)
+      }
+      /*
+       * One indexed lookup per row. A market whose text index is still being
+       * built is scanned instead, but only a small one: a scan per row over a
+       * county of a million parcels is exactly the bill the index exists to
+       * stop, so a large unindexed market waits for its index.
+       */
+      if (!summary.fts && summary.count > 50000) {
+        return c.json({ error: 'This market is still being indexed for search. Try again tomorrow.' }, 409)
+      }
+      const COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest'
+      const lookup = async (words) => {
+        const tokens = String(words ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+        if (!tokens.length) return []
+        const found = summary.fts
+          ? await store.all(
+              `SELECT ${COLUMNS} FROM parcels_fts f CROSS JOIN parcels
+                WHERE f.parcels_fts MATCH ? AND parcels.rowid = f.rowid AND market = ? LIMIT 40`,
+              [ftsQuery(tokens.join(' ')), market],
+            )
+          : await store.all(
+              `SELECT ${COLUMNS} FROM parcels WHERE market = ? ${tokens.map(() => "AND hay LIKE ? ESCAPE '\\'").join(' ')} LIMIT 40`,
+              [market, ...tokens.map((t) => `%${t.replace(/[\\%_]/g, (ch) => `\\${ch}`)}%`)],
+            )
+        return found.map(hydrate)
+      }
+      const key = (value) => String(value ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
+      const cols = plan.columns
+      const matched = []
+      for (let i = 0; i < records.length; i += 20) {
+        const slice = records.slice(i, i + 20)
+        const done = await Promise.all(
+          slice.map(async (record, j) => {
+            const index = i + j
+            const id = cols.parcel ? String(record[cols.parcel] ?? '').trim() : ''
+            if (id) {
+              const hit = (await lookup(id)).find((p) => key(p.gid) === key(id) || key(p.id) === key(id))
+              if (hit) return { index, record, parcel: hit, match: 'exact', why: 'Matched by parcel number' }
+            }
+            const address = cols.address ? String(record[cols.address] ?? '') : ''
+            const zip = cols.zip ? String(record[cols.zip] ?? '').match(/\d{5}/)?.[0] ?? null : null
+            const [answer] = await matchAddresses([{ index, record, address, zip }], lookup)
+            return answer
+          }),
+        )
+        matched.push(...done)
+      }
+      candidates = matched
+    } else {
+      // The whole market, filtered by the store, then checked by geometry.
+      const filters = {
+        query: plan.keyword ?? '',
+        assets: plan.assetTypes,
+        valueMin: plan.valueMin,
+        valueMax: plan.valueMax,
+        acresMin: plan.acresMin,
+        acresMax: plan.acresMax,
+      }
+      const first = await searchParcels(store, market, filters, { limit: 1000, summary })
+      const rows = [...first.rows]
+      while (rows.length < Math.min(first.count, CHECK_LIMIT)) {
+        const page = await searchParcels(store, market, filters, { limit: 1000, offset: rows.length, summary })
+        if (!page.rows.length) break
+        rows.push(...page.rows)
+      }
+      if (first.count > CHECK_LIMIT) {
+        truncated = `${first.count.toLocaleString()} parcels matched the filters; the ${CHECK_LIMIT.toLocaleString()} most valuable were checked. Narrow the question to check them all.`
+      }
+      candidates = rows.slice(0, CHECK_LIMIT).map((row, index) => ({
+        index,
+        record: null,
+        parcel: row.bb ? row : hydrate(row),
+        match: 'exact',
+        why: null,
+      }))
+    }
+
+    const found = candidates.filter((c) => c.parcel)
+    const checks = await checkParcels(found.map((c) => c.parcel), { flood, zoning })
+    const checkOf = new Map(found.map((c, i) => [c, checks[i]]))
+    const rows = candidates.map((candidate) => {
+      const parcel = candidate.parcel
+      const check = checkOf.get(candidate) ?? { flood: null, zoning: null }
+      const reason = !parcel
+        ? candidate.why
+        : passesAttributes(parcel, plan) ?? passesOverlay(check, plan)
+      return {
+        index: candidate.index,
+        input: candidate.record,
+        id: parcel?.id ?? null,
+        address: parcel?.ad ?? null,
+        owner: parcel?.ow ?? null,
+        parcelNumber: parcel?.gid ?? null,
+        assetType: parcel?.at ?? null,
+        value: parcel?.mv ?? null,
+        acres: parcel?.ac ?? null,
+        zip: parcel?.zp ?? null,
+        zoning: check.zoning?.code ?? null,
+        zoningCategory: check.zoning?.category ?? null,
+        floodZone: check.flood ? (check.flood.status === 'out' ? 'None' : check.flood.zones.join(', ') || check.flood.zone) : null,
+        floodStatus: check.flood?.status ?? null,
+        baseFloodElevation: check.flood?.bfe ?? null,
+        match: candidate.match,
+        passes: Boolean(parcel) && !reason,
+        why: reason || candidate.why || 'Passes',
+      }
+    })
+    const passing = rows.filter((r) => r.passes)
+    return c.json({
+      ...base,
+      mode: 'set',
+      upload: records.length > 0,
+      rows,
+      ids: passing.map((r) => r.id),
+      counts: {
+        rows: rows.length,
+        matched: found.length,
+        passing: passing.length,
+      },
+      truncated,
+    })
   })
 
   /*

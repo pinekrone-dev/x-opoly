@@ -7,6 +7,7 @@ import type { BookStyle,
   BillingConfig,
   BillingStatus,
   RenewalResult,
+  AskAnswer,
   Invite,
   TeamMember,
   Zone,
@@ -211,6 +212,9 @@ export const api = {
   },
 
   /** A parcel hunt in plain English, answered as the GIS view's own filters. */
+  /** The brain panel: a question, and optionally a CSV, answered as a plan and its results. */
+  gisAsk: (input: { market: string; prompt: string; upload?: { name: string; text: string } | null }) =>
+    request<AskAnswer>('/api/gis/ask', json(input)),
   gisScout: (input: { prompt: string; assetTypes: string[]; valueLabel?: string }) =>
     request<{
       filters: {
