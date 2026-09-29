@@ -25,6 +25,15 @@ export type Ring = { x: number; y: number }[]
 export interface TileFeature {
   rings: Ring[]
   properties: Record<string, unknown>
+  /** minX, minY, maxX, maxY in tile units, when the decoder worked it out. */
+  bbox?: [number, number, number, number]
+}
+
+/** Whether a point is inside a feature, testing its box before its outline. */
+export function insideFeature(px: number, py: number, feature: TileFeature): boolean {
+  const box = feature.bbox
+  if (box && (px < box[0] || px > box[2] || py < box[1] || py > box[3])) return false
+  return insideRings(px, py, feature.rings)
 }
 
 export interface DecodedTile {
@@ -99,17 +108,19 @@ function elevation(value: unknown): number | null {
 }
 
 /**
- * Tests a lot against the flood tiles at one zoom.
+ * What an overlay's polygons hold at a lot: the feature under its centre,
+ * and every feature met across the sample grid, one per point.
  *
- * `fields` names the properties the pipeline wrote: the zone, subtype and
- * elevation columns, under whatever labels the layer entry gives them.
+ * Shared by the flood row and the zoning check, so both read a lot the same
+ * way. Throws when nothing was found and a tile could not be read, because
+ * "nothing here" and "could not look" must never be the same answer.
  */
-export async function floodAt(
+export async function pointHits(
   box: [number, number, number, number],
   zoom: number,
   readTile: ReadTile,
-  fields = { zone: 'Zone', subtype: 'Subtype', bfe: 'Base flood elevation' },
-): Promise<FloodAnswer> {
+  what = 'overlay',
+): Promise<{ centre: TileFeature | null; found: TileFeature[] }> {
   const tiles = new Map<string, Promise<DecodedTile | null>>()
   let unread = false
   const hitAt = async (lng: number, lat: number) => {
@@ -124,23 +135,67 @@ export async function floodAt(
       return null
     }
     const { px, py } = tileCoords(lng, lat, zoom, tile.extent)
-    return tile.features.find((f) => insideRings(px, py, f.rings)) ?? null
+    return tile.features.find((f) => insideFeature(px, py, f)) ?? null
   }
-
-  const points = samplePoints(box)
-  const hits = await Promise.all(points.map(([lng, lat]) => hitAt(lng, lat)))
+  const hits = await Promise.all(samplePoints(box).map(([lng, lat]) => hitAt(lng, lat)))
   const found = hits.filter((h): h is TileFeature => h != null)
+  if (unread && !found.length) throw new Error(`The ${what} tiles could not be read.`)
+  return { centre: hits[0], found }
+}
+
+/**
+ * Tests a lot against the flood tiles at one zoom.
+ *
+ * `fields` names the properties the pipeline wrote: the zone, subtype and
+ * elevation columns, under whatever labels the layer entry gives them.
+ */
+export async function floodAt(
+  box: [number, number, number, number],
+  zoom: number,
+  readTile: ReadTile,
+  fields = { zone: 'Zone', subtype: 'Subtype', bfe: 'Base flood elevation' },
+): Promise<FloodAnswer> {
   // A tile that could not be read is not a dry lot. Saying "not in a flood
   // zone" because the network failed is the one answer this must never give.
-  if (unread && !found.length) throw new Error('The flood tiles could not be read.')
+  const { centre, found } = await pointHits(box, zoom, readTile, 'flood')
   const zones = [...new Set(found.map((f) => text(f.properties[fields.zone])).filter((z): z is string => z != null))]
-  const lead = hits[0] ?? found[0] ?? null
+  const lead = centre ?? found[0] ?? null
   return {
-    status: hits[0] ? 'in' : found.length ? 'partly' : 'out',
+    status: centre ? 'in' : found.length ? 'partly' : 'out',
     zone: lead ? text(lead.properties[fields.zone]) : null,
     subtype: lead ? text(lead.properties[fields.subtype]) : null,
     bfe: lead ? elevation(lead.properties[fields.bfe]) : null,
     zones,
+  }
+}
+
+export interface ZoningAnswer {
+  code: string | null
+  category: string | null
+  city: string | null
+}
+
+/**
+ * The zoning district a lot sits in: the one under its centre, or, for a lot
+ * whose centre falls on a street or a gap between districts, the district
+ * most of its sample points land in. Null fields when no district covers it.
+ */
+export async function zoningAt(
+  box: [number, number, number, number],
+  zoom: number,
+  readTile: ReadTile,
+): Promise<ZoningAnswer> {
+  const { centre, found } = await pointHits(box, zoom, readTile, 'zoning')
+  let lead = centre
+  if (!lead && found.length) {
+    const counts = new Map<TileFeature, number>()
+    for (const f of found) counts.set(f, (counts.get(f) ?? 0) + 1)
+    lead = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]
+  }
+  return {
+    code: lead ? text(lead.properties.Zoning) : null,
+    category: lead ? text(lead.properties.Category) : null,
+    city: lead ? text(lead.properties.City) : null,
   }
 }
 
