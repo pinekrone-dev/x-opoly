@@ -394,4 +394,50 @@ describe('asking in plain English', () => {
     assert.equal(res.body.plan.flood, null, 'no flood data here, so no flood filter is claimed')
     assert.equal(res.body.hasFlood, false)
   })
+
+  /*
+   * An answer the AI planned comes a hundred records at a time; the next
+   * hundred go back with the plan, so no second model call is made. There
+   * is no AI key in this rig, so the pages are asked for the way the app
+   * asks for every page after the first: with the plan and source handed
+   * back. The same file read by the free rules comes back whole.
+   */
+  const bigFile = [
+    'Property Address',
+    ...Array.from({ length: 250 }, (_, i) => (i % 2 ? '400 Congress Avenue' : `${1000 + i} Nowhere Blvd`)),
+  ].join('\n')
+
+  test('an AI-planned answer comes back 100 records at a time, with where the next hundred start', async () => {
+    const first = await ask({ prompt: '', upload: { name: 'big.csv', text: bigFile } })
+    assert.equal(first.status, 200)
+    assert.equal(first.body.source, 'rules')
+    assert.equal(first.body.rows.length, 250, 'read by rules, the whole file comes back at once')
+    assert.equal(first.body.page, null)
+
+    const page = (offset) =>
+      ask({ prompt: '', upload: { name: 'big.csv', text: bigFile }, plan: first.body.plan, source: 'ai', offset })
+    const one = await page(0)
+    assert.equal(one.body.rows.length, 100)
+    assert.deepEqual(one.body.page, { size: 100, offset: 0, next: 100, total: 250 })
+    assert.equal(one.body.rows[0].index, 0)
+    const two = await page(100)
+    assert.equal(two.body.rows[0].index, 100, 'the second page starts where the first stopped')
+    assert.equal(two.body.page.next, 200)
+    const three = await page(200)
+    assert.equal(three.body.rows.length, 50)
+    assert.equal(three.body.page.next, null, 'the last page says so')
+    assert.equal(
+      one.body.counts.passing + two.body.counts.passing + three.body.counts.passing,
+      first.body.counts.passing,
+      'the pages together are the whole answer',
+    )
+  })
+
+  test('a plan handed back is clamped like any other', async () => {
+    const res = await ask({ prompt: 'export land', plan: { action: 'export', assetTypes: ['Casino'], flood: 'in' }, source: 'ai' })
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body.plan.assetTypes, [], 'an asset type this county does not publish is dropped')
+    assert.equal(res.body.plan.flood, null, 'no flood layer here')
+    assert.equal(res.body.page.size, 100)
+  })
 })

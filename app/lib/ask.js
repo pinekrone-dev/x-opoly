@@ -25,6 +25,17 @@ export const UPLOAD_ROWS = 2000
 /** The most parcels one ask checks against zoning and flood. */
 export const CHECK_LIMIT = 3000
 
+/**
+ * How many records an answer the AI planned hands back at once.
+ *
+ * The model reads the question once whatever the size of the answer, so
+ * this is not about the model's cost per record: it keeps an AI-planned
+ * answer to a list a person can read, and the next hundred are asked for
+ * with the same plan, so they cost no second model call. An answer the free
+ * rules planned comes back whole.
+ */
+export const AI_PAGE = 100
+
 const ACTIONS = new Set(['show', 'export', 'count'])
 
 const lower = (value) => String(value ?? '').trim().toLowerCase()
