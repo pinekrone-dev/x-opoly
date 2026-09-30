@@ -233,7 +233,21 @@ export class VesselHub {
     }
     this.socket = socket
     this.since = this.now()
-    socket.addEventListener('message', (event) => this.receive(event.data))
+    socket.addEventListener('message', (event) => {
+      // The feed sends binary frames, and Cloudflare's runtime hands a
+      // binary frame over as a Blob, which has to be read before it can be
+      // decoded. Decoding it as bytes instead throws, and every ship was
+      // dropped that way while the layer sat on "connecting".
+      const data = event.data
+      if (data && typeof data !== 'string' && typeof data.text === 'function') {
+        data.text().then(
+          (raw) => this.receive(raw),
+          () => {},
+        )
+      } else {
+        this.receive(data)
+      }
+    })
     socket.addEventListener('close', (event) => {
       if (this.socket !== socket) return
       this.socket = null
