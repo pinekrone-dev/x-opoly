@@ -342,6 +342,8 @@ export const api = {
       if (filters.zoningNot?.length) params.set('znot', filters.zoningNot.join(','))
       if (filters.zoningCodes?.length) params.set('zn', filters.zoningCodes.join(','))
       if (filters.flood) params.set('flood', filters.flood)
+      if (filters.buildings) params.set('bld', filters.buildings)
+      if (filters.coverageMax != null) params.set('cov', String(filters.coverageMax))
       if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))

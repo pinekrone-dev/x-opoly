@@ -1,0 +1,65 @@
+# Tags every parcel in the markets named in ops/tag-request.json with what
+# the map knows about it: zoning and FEMA flood (worked out by the Worker a
+# stretch at a time) and the buildings standing on it (worked out here, from
+# Overture Maps' footprints read once in map order; see the script).
+#
+# It lives in this repository because this one is public, so its Actions
+# minutes are free; the data pipeline's repository is private and metered.
+# Publishing needs no stored credential: the run's own OIDC token is the auth,
+# and this repository is on the ingest endpoint's allowlist.
+#
+# Start a run by changing ops/tag-request.json on the live branch:
+#   { "markets": ["dupage-il", "lake-county-il"], "what": "zoning,buildings", "reset": false }
+name: Tag parcels
+
+on:
+  push:
+    branches:
+      - claude/sitemapcre-tool-clone-qyq7jy
+    paths:
+      - ops/tag-request.json
+  workflow_dispatch:
+
+concurrency:
+  group: tag-parcels
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      markets: ${{ steps.read.outputs.markets }}
+      what: ${{ steps.read.outputs.what }}
+      reset: ${{ steps.read.outputs.reset }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read the request
+        id: read
+        run: |
+          echo "markets=$(jq -c '.markets' ops/tag-request.json)" >> "$GITHUB_OUTPUT"
+          echo "what=$(jq -r '.what // "zoning,buildings"' ops/tag-request.json)" >> "$GITHUB_OUTPUT"
+          echo "reset=$(jq -r '.reset // false' ops/tag-request.json)" >> "$GITHUB_OUTPUT"
+          cat ops/tag-request.json
+
+  tag:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        market: ${{ fromJson(needs.plan.outputs.markets) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Tag ${{ matrix.market }}
+        run: node scripts/tag-buildings.mjs --what=${{ needs.plan.outputs.what }} ${{ needs.plan.outputs.reset == 'true' && '--reset' || '' }} ${{ matrix.market }}

@@ -190,6 +190,18 @@ const PARCEL_ADDED_COLUMNS = [
   ['parcel_markets', 'tagged', 'INTEGER NOT NULL DEFAULT 0'],
   ['parcel_markets', 'tag_cursor', 'INTEGER NOT NULL DEFAULT 0'],
   ['parcel_markets', 'tagged_at', 'TEXT'],
+  /*
+   * What stands on the parcel, from Overture Maps' building footprints:
+   * `bn` how many buildings, `ba` their footprint in square metres, `bh` the
+   * tallest in metres (NULL when none has a height). NULL `bn` is "not read".
+   * Worked out off the Worker by scripts/tag-buildings.mjs, which reads each
+   * building tile once in map order, and written here only where it changed.
+   */
+  ['parcels', 'bn', 'INTEGER'],
+  ['parcels', 'ba', 'REAL'],
+  ['parcels', 'bh', 'REAL'],
+  ['parcel_markets', 'btagged', 'INTEGER NOT NULL DEFAULT 0'],
+  ['parcel_markets', 'btagged_at', 'TEXT'],
 ]
 
 /*
@@ -319,6 +331,47 @@ export async function reindexMarket(db, market, { budget = REINDEX_BUDGET } = {}
     cursor = hi
   }
   return { indexed: indexedRows, cursor, done: false }
+}
+
+/**
+ * A market's parcel boxes, a page at a time in rowid order, for a tagger that
+ * works off the Worker: [rowid, west, south, east, north].
+ */
+export async function listBoxes(db, market, { after = 0, limit = 50000 } = {}) {
+  await ensureParcelSchema(db)
+  const size = Math.min(Math.max(1, Number(limit) || 50000), 50000)
+  const rows = await db.all(
+    'SELECT rowid AS r, w, s, e, n FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+    [market, Math.max(0, Number(after) || 0), size],
+  )
+  return {
+    boxes: rows.map((row) => [row.r, row.w, row.s, row.e, row.n]),
+    cursor: rows.length === size ? rows[rows.length - 1].r : null,
+  }
+}
+
+/**
+ * Building tags worked out elsewhere, written only where they differ from
+ * what the row holds: [rowid, count, footprint m², tallest m or null]. The
+ * WHERE clause does the comparing, so an unchanged parcel costs a read and
+ * no write. `done` marks the market's building pass finished.
+ */
+export async function putBuildingTags(db, market, rows, { done = false, now = () => new Date() } = {}) {
+  await ensureParcelSchema(db)
+  const clean = (Array.isArray(rows) ? rows : [])
+    .filter((row) => Array.isArray(row) && Number.isInteger(row[0]) && Number.isInteger(row[1]) && row[1] >= 0)
+    .map(([r, bn, ba, bh]) => [r, bn, Number.isFinite(ba) ? Math.round(ba) : 0, Number.isFinite(bh) ? Math.round(bh * 10) / 10 : null])
+  const statements = clean.map(([r, bn, ba, bh]) => [
+    'UPDATE parcels SET bn = ?, ba = ?, bh = ? WHERE rowid = ? AND market = ? AND (bn IS NOT ? OR ba IS NOT ? OR bh IS NOT ?)',
+    [bn, ba, bh, r, market, bn, ba, bh],
+  ])
+  if (done) {
+    statements.push(['UPDATE parcel_markets SET btagged = 1, btagged_at = ? WHERE market = ?', [now().toISOString(), market]])
+  }
+  // A thousand to a batch, the size a tagging step already writes in one.
+  for (let i = 0; i < statements.length; i += 1000) await db.batch(statements.slice(i, i + 1000))
+  if (done) forgetSummary(market)
+  return { received: clean.length }
 }
 
 /** Parcels one tagging request checks, by default. */
@@ -790,6 +843,8 @@ export async function marketSummary(db, market) {
           fts: Number(row.fts ?? 0) === 1,
           // Zoning and flood are filters once a tagging pass has finished.
           tagged: Number(row.tagged ?? 0) === 1,
+          // And buildings, once the building pass has.
+          btagged: Number(row.btagged ?? 0) === 1,
         }
   // A missing market is remembered too: the app asks about every market it
   // lists, and the ones not published here would otherwise cost a read each.
@@ -805,6 +860,9 @@ export function hydrate(row) {
   if ('zc' in row) out.zc = row.zc ?? null
   if ('zn' in row) out.zn = row.zn ?? null
   if ('fz' in row) out.fz = row.fz == null ? null : Number(row.fz)
+  if ('bn' in row) out.bn = row.bn == null ? null : Number(row.bn)
+  if ('ba' in row) out.ba = row.ba == null ? null : Number(row.ba)
+  if ('bh' in row) out.bh = row.bh == null ? null : Number(row.bh)
   if (row.rest) {
     try {
       Object.assign(out, JSON.parse(row.rest))
@@ -886,6 +944,15 @@ function where(market, filters = {}, { fts = false } = {}) {
   if (filters.flood === 'in') clauses.push('fz = 1')
   if (filters.flood === 'out') clauses.push('fz = 0')
 
+  // What stands on it: no building at all, or some; and how much of the lot
+  // the buildings cover, for "under-built" (the lot's acres from the roll).
+  if (filters.buildings === 'vacant') clauses.push('bn = 0')
+  if (filters.buildings === 'built') clauses.push('bn > 0')
+  if (filters.coverageMax != null && Number.isFinite(filters.coverageMax)) {
+    clauses.push('bn IS NOT NULL AND ac > 0 AND ba <= ac * 4046.86 * ?')
+    params.push(filters.coverageMax)
+  }
+
   // An area of the map: parcels whose box touches it.
   const box = Array.isArray(filters.box) && filters.box.length === 4 && filters.box.every(Number.isFinite) ? filters.box : null
   if (box) {
@@ -930,6 +997,8 @@ export function filtersActive(filters = {}) {
   if ((filters.zoningCategories || []).length || (filters.zoningNot || []).length || (filters.zoningCodes || []).length) return true
   if (filters.flood === 'in' || filters.flood === 'out') return true
   if (Array.isArray(filters.box) && filters.box.length === 4) return true
+  if (filters.buildings === 'vacant' || filters.buildings === 'built') return true
+  if (filters.coverageMax != null && Number.isFinite(filters.coverageMax)) return true
   return [filters.valueMin, filters.valueMax, filters.acresMin, filters.acresMax].some(
     (v) => v != null && Number.isFinite(v),
   )
@@ -942,7 +1011,7 @@ export function filtersActive(filters = {}) {
  * and what the whole matching set adds up to — the three things the panel
  * needs, from one predicate, in one round trip from the browser's side.
  */
-const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz'
+const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh'
 
 export async function searchParcels(
   db,
@@ -1067,7 +1136,7 @@ export async function searchParcels(
 export async function getParcel(db, market, id) {
   await ensureParcelSchema(db)
   const row = await db.get(
-    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz
+    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh
        FROM parcels WHERE market = ? AND pid = ?`,
     [market, String(id)],
   )

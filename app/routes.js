@@ -173,6 +173,8 @@ import {
   searchParcels,
   sealMarket,
   tagMarket,
+  listBoxes,
+  putBuildingTags,
   hydrate,
   ftsQuery,
 } from './lib/parcels.js'
@@ -2429,6 +2431,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       zoningNot: list('znot'),
       zoningCodes: list('zn'),
       flood: ['in', 'out'].includes(c.req.query('flood')) ? c.req.query('flood') : null,
+      buildings: ['vacant', 'built'].includes(c.req.query('bld')) ? c.req.query('bld') : null,
+      coverageMax: (() => {
+        const v = Number(c.req.query('cov'))
+        return c.req.query('cov') && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
+      })(),
       box: readArea((c.req.query('box') ?? '').split(',').filter(Boolean)),
     }
   }
@@ -2644,6 +2651,22 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
         })
         return c.json({ sealed: market, ...sealed })
+      }
+      if (action === 'boxes') {
+        // The market's parcel boxes, for a tagger working off the Worker.
+        const page = await listBoxes(parcelsFor(market), market, {
+          after: Number(c.req.query('after')) || 0,
+          limit: Number(c.req.query('limit')) || undefined,
+        })
+        return c.json({ market, ...page })
+      }
+      if (action === 'building-tags') {
+        const body = await c.req.json().catch(() => null)
+        const rows = Array.isArray(body) ? body : body?.rows
+        if (!Array.isArray(rows)) return c.json({ error: 'Send the tags as a JSON array.' }, 400)
+        if (rows.length > 5000) return c.json({ error: 'Send at most 5000 rows per request.' }, 413)
+        const done = c.req.query('done') === '1'
+        return c.json({ market, ...(await putBuildingTags(parcelsFor(market), market, rows, { done })) })
       }
       if (action === 'tag') {
         /*
@@ -2942,6 +2965,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       zoningCategories: ((zoningLayer?.categories ?? []).find((f) => f.field === 'Category')?.values ?? []).map((v) => v[0]),
       zoningCodes: [...codeCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 300).map(([code]) => code),
       hasFlood: Boolean(floodLayer),
+      hasBuildings: Boolean(summary.btagged),
     }
 
     // The upload, read as rows. Capped, and the cap is said out loud.
@@ -3095,6 +3119,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         floodZone: check.flood ? (check.flood.status === 'out' ? 'None' : check.flood.zones.join(', ') || check.flood.zone) : null,
         floodStatus: check.flood?.status ?? null,
         baseFloodElevation: check.flood?.bfe ?? null,
+        buildings: parcel?.bn ?? null,
+        footprint: parcel?.ba ?? null,
+        tallest: parcel?.bh ?? null,
         match: candidate.match,
         passes: Boolean(parcel) && !reason,
         why: reason || candidate.why || 'Passes',
@@ -3125,7 +3152,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       if (!summary.fts && summary.count > 50000) {
         return c.json({ error: 'This market is still being indexed for search. Try again tomorrow.' }, 409)
       }
-      const COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest'
+      const COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, bn, ba, bh, rest'
       const lookup = async (words) => {
         const tokens = String(words ?? '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
         if (!tokens.length) return []
@@ -3216,6 +3243,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         valueMax: plan.valueMax,
         acresMin: plan.acresMin,
         acresMax: plan.acresMax,
+        buildings: plan.buildings,
+        coverageMax: plan.coverageMax,
         box: area,
       }
       if (paged) {
@@ -3276,7 +3305,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       const answers = await jev.many(
         judged.map((r) => ({
           state: parcelState(
-            { ad: r.address, at: r.assetType, mv: r.value, ac: r.acres },
+            { ad: r.address, at: r.assetType, mv: r.value, ac: r.acres, bn: r.buildings, ba: r.footprint },
             {
               zoning: [r.zoning, r.zoningCategory ? `(${r.zoningCategory})` : null].filter(Boolean).join(' ') || null,
               flood: r.floodZone === 'None' ? 'outside' : r.floodZone ? `inside, zone ${r.floodZone}` : null,

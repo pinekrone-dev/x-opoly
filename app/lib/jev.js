@@ -112,6 +112,11 @@ export function parcelState(parcel, extra = {}) {
     Number(parcel.ac) > 0 ? `Lot size: ${Math.round(Number(parcel.ac) * 100) / 100} acres` : null,
     extra.zoning ? `Zoning: ${extra.zoning}` : null,
     extra.flood ? `FEMA flood hazard area: ${extra.flood}` : null,
+    parcel.bn != null
+      ? Number(parcel.bn) > 0
+        ? `Buildings on the lot (mapped footprints): ${parcel.bn}, about ${Math.round(Number(parcel.ba || 0) * 10.7639).toLocaleString()} sq ft of footprint`
+        : 'No building footprint mapped on the lot'
+      : null,
     parcel.yb ? `Year built: ${parcel.yb}` : null,
     parcel.sf ? `Building area: ${parcel.sf} sq ft` : null,
   ].filter(Boolean)
