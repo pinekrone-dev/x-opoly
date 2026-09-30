@@ -101,6 +101,9 @@ export function normalizePlan(raw, vocab = {}, headers = []) {
     flood: vocab.hasFlood ? flood : null,
     columns,
     explanation: typeof raw?.explanation === 'string' ? raw.explanation.slice(0, 300) : null,
+    // The judgement no column holds, as one yes/no question to rate each
+    // parcel against ("Would this parcel suit a drive-through car wash?").
+    score: typeof raw?.score === 'string' && raw.score.trim().length > 8 ? raw.score.trim().slice(0, 200) : null,
   }
 }
 
@@ -179,6 +182,9 @@ export function planPrompt(prompt, vocab = {}, upload = null) {
     'hazard area, "out" for parcels outside one, or null), zoningCategories and zoningCodes (arrays, from the',
     'lists given, to include), zoningNot (array of zoning categories to leave out: "anything but residential"',
     'is zoningNot ["Residential"], not zoningCategories), columns ({address, city, zip, parcel}: the upload header names holding each, or null),',
+    'score (when the request asks for a judgement no column holds, such as suitability for a use, "good for a',
+    'car wash", "likely redevelopment", "fits a small warehouse user": one yes/no question to rate each parcel',
+    'against, e.g. "Would this parcel suit a drive-through car wash?"; otherwise null),',
     'and explanation (one sentence saying what will be done). Use only names from the lists given.',
     'Leave anything the request does not ask for as null or an empty array.',
   ].join(' ')
