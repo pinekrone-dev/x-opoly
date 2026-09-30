@@ -1,0 +1,5 @@
+{
+  "markets": ["dupage-il", "lake-county-il", "will-il"],
+  "what": "zoning,buildings",
+  "reset": false
+}
