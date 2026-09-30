@@ -1650,7 +1650,7 @@ export default function Gis({
       setVessels((current) => (next.status === 'error' && current?.ships.length ? { ...current, status: 'error', note: next.note } : next))
       // Quicker while the feed is still opening, so the first ships appear
       // in seconds rather than after a full interval.
-      timer = setTimeout(tick, next.status === 'connecting' ? 5000 : next.status === 'off' ? 120000 : 20000)
+      timer = setTimeout(tick, next.status === 'connecting' ? 5000 : next.status === 'off' ? 30000 : 20000)
     }
     void tick()
     return () => {

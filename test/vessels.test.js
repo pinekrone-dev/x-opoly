@@ -97,6 +97,10 @@ function fakeSocket() {
     feed(message) {
       handlers.message?.({ data: new TextEncoder().encode(JSON.stringify(message)).buffer })
     },
+    /** A frame as Cloudflare's runtime delivers it: a Blob, read asynchronously. */
+    feedBlob(message) {
+      handlers.message?.({ data: new Blob([JSON.stringify(message)]) })
+    },
     drop(reason) {
       handlers.close?.({ code: 1006, reason })
     },
@@ -162,6 +166,17 @@ describe('one connection for everyone', () => {
     assert.equal(ny.status, 'live')
     assert.deepEqual(ny.ships.map((s) => s.m), [111])
     assert.equal('s' in ny.ships[0], false, 'bookkeeping stays on the server')
+  })
+
+  test('a frame that arrives as a Blob is read, as the Workers runtime delivers them', async () => {
+    const { hub, sockets } = rig()
+    await hub.watch('new-york-ny', NYC)
+    sockets[0].feedBlob({ MessageType: 'SubscriptionConfirmation', Message: { CompressionEnabled: false } })
+    sockets[0].feedBlob(position(111, 40.68, -74.02))
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    const ny = await hub.watch('new-york-ny', NYC)
+    assert.equal(ny.status, 'live')
+    assert.deepEqual(ny.ships.map((s) => s.m), [111])
   })
 
   test('a second market joins the same connection, with the update held to once a second', async () => {
