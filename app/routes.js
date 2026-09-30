@@ -123,7 +123,8 @@ import {
   passesAttributes,
   passesOverlay,
 } from './lib/ask.js'
-import { matchAddresses } from './lib/addresses.js'
+import { matchAddresses, parseAddress } from './lib/addresses.js'
+import { createJev, parcelState } from './lib/jev.js'
 import { checkParcels } from './lib/overlays.js'
 import { verifyActionsToken } from './lib/oidc.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
@@ -3035,7 +3036,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         const explanation = plan.explanation || describePlan(plan, { upload: records.length > 0 })
     const flood = floodLayer ? { archive: archiveFor(`${market}/${floodLayer.tiles}`), sourceLayer: floodLayer.sourceLayer ?? floodLayer.id } : null
     const zoning = zoningLayer ? { archive: archiveFor(`${market}/${zoningLayer.tiles}`), sourceLayer: zoningLayer.sourceLayer ?? zoningLayer.id } : null
-    const base = { plan, explanation, source, note, hasFlood: Boolean(flood), hasZoning: Boolean(zoning), area: area ? { box: area } : null }
+    /*
+     * Jev, when there is a key: a rating for the judgement in the question
+     * ("would this suit a car wash?") on each parcel that meets it, and a
+     * second look at uploaded rows that matched nothing. Only public county
+     * facts go in a rating; a tiebreak sends the uploaded address itself.
+     */
+    const jev = createJev(env)
+    const scoring = Boolean(plan.score && jev.enabled)
+    const base = {
+      plan,
+      explanation,
+      source,
+      note,
+      hasFlood: Boolean(flood),
+      hasZoning: Boolean(zoning),
+      area: area ? { box: area } : null,
+      scored: scoring,
+    }
 
     // A question about the whole market that the parcel store answers alone
     // goes back as filters: the map, the count and the export already know
@@ -3046,7 +3064,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * map, counted in the report and exported from there, and no geometry
      * to check at all. Before that, it is checked parcel by parcel below.
      */
-    if (!records.length && (!needsOverlay(plan) || summary.tagged)) {
+    if (!records.length && !scoring && (!needsOverlay(plan) || summary.tagged)) {
       return c.json({ ...base, mode: 'filters', tagged: Boolean(summary.tagged) })
     }
 
@@ -3055,7 +3073,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * says where the next hundred start; one the rules planned comes back
      * whole. Either way every record below is run by code, not the model.
      */
-    const paged = source === 'ai'
+    // Anything a model touches comes a hundred at a time: a plan the AI
+    // wrote, a rating from Jev, or an upload Jev may take a second look at.
+    const paged = source === 'ai' || scoring || (records.length > 0 && jev.enabled)
     const toRow = (candidate, check) => {
       const parcel = candidate.parcel
       const reason = !parcel ? candidate.why : passesAttributes(parcel, plan) ?? passesOverlay(check, plan)
@@ -3147,6 +3167,44 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         )
         matched.push(...done)
       }
+      if (jev.enabled) {
+        /*
+         * A second look at rows that matched nothing: parcels at the same
+         * house number found through any other word of the street, and Jev
+         * asked whether each is the same property. Only a confident yes is
+         * taken, and the row says it was Jev's call.
+         */
+        const unmatched = matched.filter((m) => !m.parcel && m.address)
+        for (const row of unmatched) {
+          const parts = parseAddress(row.address)
+          if (!parts?.number || !parts.street) continue
+          const words = parts.street.split(' ').filter((w) => w.length >= 3).slice(0, 3)
+          const seen = new Map()
+          for (const word of words) {
+            for (const candidate of await lookup(`${parts.number} ${word}`)) {
+              if (parseAddress(candidate.ad)?.number === parts.number) seen.set(candidate.id, candidate)
+            }
+          }
+          const candidates = [...seen.values()].slice(0, 3)
+          if (!candidates.length) continue
+          const zip = row.zip ? ` ${row.zip}` : ''
+          const answers = await jev.many(
+            candidates.map((candidate) => ({
+              state: `Two street addresses from different records in the same county. From a customer's list: "${row.address}${zip}". From the county assessment roll: "${candidate.ad}${candidate.zp ? ` ${candidate.zp}` : ''}".`,
+              question: 'Do these two addresses name the same property?',
+            })),
+          )
+          let best = -1
+          answers.forEach((p, i) => {
+            if (p != null && p >= 0.85 && (best < 0 || p > answers[best])) best = i
+          })
+          if (best >= 0) {
+            row.parcel = candidates[best]
+            row.match = 'likely'
+            row.why = `Matched by Jev, ${Math.round(answers[best] * 100)}% sure the addresses are the same property`
+          }
+        }
+      }
       matchedCount = matched.filter((m) => m.parcel).length
       rows = await checkAll(matched)
     } else {
@@ -3212,9 +3270,31 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       }
     }
 
+    if (scoring) {
+      // Rated best first; a parcel Jev could not rate keeps its place after them.
+      const judged = rows.filter((r) => r.passes && r.id)
+      const answers = await jev.many(
+        judged.map((r) => ({
+          state: parcelState(
+            { ad: r.address, at: r.assetType, mv: r.value, ac: r.acres },
+            {
+              zoning: [r.zoning, r.zoningCategory ? `(${r.zoningCategory})` : null].filter(Boolean).join(' ') || null,
+              flood: r.floodZone === 'None' ? 'outside' : r.floodZone ? `inside, zone ${r.floodZone}` : null,
+            },
+          ),
+          question: plan.score,
+        })),
+      )
+      judged.forEach((r, i) => {
+        r.score = answers[i]
+      })
+      rows.sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+    }
+
     const passing = rows.filter((r) => r.passes)
     return c.json({
       ...base,
+      jev: jev.enabled ? jev.spent() : null,
       mode: 'set',
       upload: records.length > 0,
       rows,

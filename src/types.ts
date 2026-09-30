@@ -588,6 +588,8 @@ export interface AskPlan {
   zoningCategories: string[]
   /** Zoning categories to leave out ("anything but residential"). */
   zoningNot: string[]
+  /** A yes/no judgement to rate each parcel against, when the question asks for one. */
+  score?: string | null
   zoningCodes: string[]
   flood: 'in' | 'out' | null
   columns: { address: string | null; city: string | null; zip: string | null; parcel: string | null } | null
@@ -611,15 +613,20 @@ export interface AskRow {
   floodZone: string | null
   floodStatus: 'in' | 'partly' | 'out' | null
   baseFloodElevation: number | null
-  match: 'exact' | 'street' | 'none'
+  /** 'likely' when Jev settled a near match on an uploaded address. */
+  match: 'exact' | 'street' | 'likely' | 'none'
   passes: boolean
   why: string
+  /** Jev's rating against the question's judgement, 0 to 1, when one was asked. */
+  score?: number | null
 }
 
 export interface AskAnswer {
   mode: 'filters' | 'set'
   /** The market's parcels carry zoning and flood tags, so those are filters too. */
   tagged?: boolean
+  /** Each parcel that meets the question was rated by Jev against `plan.score`. */
+  scored?: boolean
   /** The map area the question was about, when it was not the whole county. */
   area?: { box: [number, number, number, number] } | null
   plan: AskPlan

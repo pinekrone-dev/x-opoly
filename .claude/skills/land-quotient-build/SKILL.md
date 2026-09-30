@@ -99,6 +99,13 @@ run with the GitHub Actions tools rather than polling.
   - `pivot` (zoning only): `[{city, count, categories: [{category, count, codes: [[code, count]…]}]}]` — the tree behind the filter icon.
 - Parcel rows reach D1 `PARCELS` through `POST /api/gis/ingest`, authenticated by the runner's GitHub OIDC token; no credential is stored on either side.
 
+### Jev (TypeSafe) in Ask
+
+- `app/lib/jev.js`: POST `https://api.typesafe.ai/v1/systemone` `{model: 'jev-latest', state, questions: {q: {type: 'noul', instructions}}}` -> `answers.q.noul` (0-1). Key: Worker secret `TYPESAFE_API_KEY`; absent = off, every answer null. Ceiling 250 calls per request, 8 in flight.
+- Rating: the AI plan may carry `score` (a yes/no judgement no column holds). With a key, each page of up to 100 passing parcels is rated from public facts only (`parcelState`: address, land use, value, acres, zoning, flood; never owner names) and sorted best first; the answer is set mode, `scored: true`, rows carry `score`.
+- Tiebreak: with a key, uploaded rows that matched nothing are retried against parcels at the same house number found through other street words; Jev's yes at >= 0.85 is taken as `match: 'likely'` with the percentage in `why`. The uploaded address text is sent (Kevin cleared TypeSafe on 30 Sep 2026).
+- Anything a model touches pages at 100 (`paged` covers AI plans, ratings, and uploads when Jev is on).
+
 ### Zoning and flood tags
 
 - `parcels.zc` (zoning category), `zn` (district code), `fz` (1 in FEMA SFHA, 0 out); `''` = checked, no district; NULL = never read. `parcel_markets.tagged` flips to 1 when a pass finishes (`summary.tagged`).

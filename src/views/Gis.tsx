@@ -987,6 +987,7 @@ function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
     ...(answer.hasZoning ? ([['zoning', 'Zoning'], ['zoningCategory', 'Zoning category']] as [keyof AskRow, string][]) : []),
     ...(answer.hasFlood ? ([['floodZone', 'FEMA flood zone'], ['baseFloodElevation', 'Base flood elevation (ft)']] as [keyof AskRow, string][]) : []),
     ['passes', 'Meets the question'],
+    ...(answer.scored ? ([['score', 'Score (Jev)']] as [keyof AskRow, string][]) : []),
     ['why', 'Why'],
   ]
   const inputs = answer.upload ? Object.keys(rows.find((row) => row.input)?.input ?? {}) : []
@@ -995,7 +996,9 @@ function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
     .map((row) =>
       [
         ...inputs.map((key) => row.input?.[key] ?? ''),
-        ...added.map(([key]) => (key === 'passes' ? (row.passes ? 'Yes' : 'No') : row[key])),
+        ...added.map(([key]) =>
+          key === 'passes' ? (row.passes ? 'Yes' : 'No') : key === 'score' ? (row.score != null ? `${Math.round(row.score * 100)}%` : '') : row[key],
+        ),
       ]
         .map(cell)
         .join(','),
@@ -3765,6 +3768,7 @@ export default function Gis({
                 <p className="text-xs text-body">{askAnswer.explanation}</p>
                 <p className="text-[11px] text-faint">
                   {askAnswer.source === 'ai' ? 'Read by AI once; everything after is run by the map.' : 'Read by rules, no AI used.'}
+                  {askAnswer.scored && askAnswer.plan.score ? ` Each parcel rated by Jev: "${askAnswer.plan.score}"` : ''}
                   {askAnswer.note ? ` ${askAnswer.note}` : ''}
                 </p>
                 {askAnswer.mode === 'filters' ? (
@@ -3862,6 +3866,14 @@ export default function Gis({
                               <span className="truncate font-medium text-ink">
                                 {row.address ?? (askAnswer.plan.columns?.address ? row.input?.[askAnswer.plan.columns.address] : null) ?? 'No address'}
                               </span>
+                              {row.score != null ? (
+                                <span
+                                  className="ml-auto shrink-0 rounded bg-brand/10 px-1 text-[10px] font-semibold tabular-nums text-ink"
+                                  title="Jev's rating against the question"
+                                >
+                                  {Math.round(row.score * 100)}%
+                                </span>
+                              ) : null}
                             </span>
                             <span className="block truncate pl-3 text-[11px] text-muted">
                               {[
