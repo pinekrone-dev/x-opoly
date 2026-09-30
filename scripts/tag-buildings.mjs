@@ -145,9 +145,14 @@ async function tagMarket(slug) {
   let tagged = 0
   let built = 0
   let unread = 0
+  // Sent FLUSH rows at a time, the most one request takes; a group of tiles
+  // can carry the pile past it before the next check.
   const flush = async (done = false) => {
-    if (!pending.length && !done) return
-    await post(`/api/gis/ingest/parcels?market=${slug}&action=building-tags${done ? '&done=1' : ''}`, pending, `${slug} tags`)
+    while (pending.length > FLUSH || (pending.length && !done)) {
+      await post(`/api/gis/ingest/parcels?market=${slug}&action=building-tags`, pending.slice(0, FLUSH), `${slug} tags`)
+      pending = pending.slice(FLUSH)
+    }
+    if (done) await post(`/api/gis/ingest/parcels?market=${slug}&action=building-tags&done=1`, pending, `${slug} tags`)
     pending = []
   }
   // A few tile groups at a time: their tiles are read together, eight in flight.
