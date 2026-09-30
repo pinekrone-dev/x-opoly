@@ -31,6 +31,7 @@ import type { BookStyle,
   TourPlan,
   TourRequest,
 } from './types'
+import type { VesselAnswer } from './lib/vessels'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -215,6 +216,9 @@ export const api = {
   /** The brain panel: a question, and optionally a CSV, answered as a plan and its results. */
   gisAsk: (input: { market: string; prompt: string; upload?: { name: string; text: string } | null }) =>
     request<AskAnswer>('/api/gis/ask', json(input)),
+  /** Live ship positions in a coastal market. */
+  gisVessels: (market: string) =>
+    request<VesselAnswer>(`/api/gis/vessels?market=${encodeURIComponent(market)}`),
   gisScout: (input: { prompt: string; assetTypes: string[]; valueLabel?: string }) =>
     request<{
       filters: {

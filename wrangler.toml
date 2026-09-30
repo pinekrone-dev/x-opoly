@@ -144,6 +144,18 @@ TILE_PROVIDER = "osm"
 #   ANTHROPIC_API_KEY  reading a flyer with AI
 #   GOOGLE_MAPS_API_KEY  Google routing and Places, instead of OSRM/Overpass
 #   CENSUS_API_KEY     raises the ACS rate limit; the data is free either way
+#   AISSTREAM_API_KEY  live ship positions on coastal markets (free key, aisstream.io)
+
+# The live ship feed: one Durable Object holding the only connection to
+# aisstream.io, open only while someone has the Ships layer on. Its key is a
+# secret, set with `wrangler secret put AISSTREAM_API_KEY`, never here.
+[[durable_objects.bindings]]
+name = "VESSELS"
+class_name = "VesselHubObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VesselHubObject"]
 
 # --- staging -----------------------------------------------------------------
 #
@@ -196,3 +208,9 @@ database_id = "221665a5-978a-446f-be9d-4ee60e10f0d6"
 [[env.staging.r2_buckets]]
 binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads-staging"
+
+# Durable Object bindings are not inherited by an environment, so staging
+# names its own; the class and its migration are shared.
+[[env.staging.durable_objects.bindings]]
+name = "VESSELS"
+class_name = "VesselHubObject"

@@ -99,6 +99,14 @@ run with the GitHub Actions tools rather than polling.
   - `pivot` (zoning only): `[{city, count, categories: [{category, count, codes: [[code, count]…]}]}]` — the tree behind the filter icon.
 - Parcel rows reach D1 `PARCELS` through `POST /api/gis/ingest`, authenticated by the runner's GitHub OIDC token; no credential is stored on either side.
 
+### Ships (live AIS)
+
+- `src/lib/vessels.ts` is shared vocabulary: `COASTAL_MARKETS` (14 markets with NOAA-verified traffic), `marketBox` (centre ± 0.6° lat / 0.75° lng), type groups and colours.
+- `app/lib/vessels.js` holds `readMessage` and `VesselHub`: one aisstream.io WebSocket, subscribed to the boxes of markets polled in the last 90 s, closed when nobody polls. Feed rules it obeys: 3 connections per account and per IP, subscribe within 3 s, at most one update a second, no browser connections.
+- `worker/vessels.js` is the Durable Object (`VESSELS` → `VesselHubObject`, one instance named `ais`), swept by a 30 s alarm; nothing is stored.
+- `GET /api/gis/vessels?market=` builds the box from the market's catalogue centre (never from the caller) and edge-caches live answers for 15 s. Without `AISSTREAM_API_KEY` (a Worker secret) it answers `status: 'off'`.
+- The Gis view polls every 20 s while the Ships layer is on and the tab visible. A bad key shows as a close before the first message.
+
 ## prospector: the data factory
 
 ### Layout and build order

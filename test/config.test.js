@@ -73,6 +73,19 @@ describe('wrangler.toml', () => {
     assert.match(worker, /async scheduled\(/)
   })
 
+  test('the ship feed object is bound in production and staging, and exported by the Worker', () => {
+    // Durable Object bindings are not inherited by an environment: a staging
+    // table without its own leaves env.VESSELS undefined there, and the
+    // Ships layer reads "not switched on" on staging while working in
+    // production, which is the wrong way round to find out.
+    assert.match(source, /^\[\[durable_objects\.bindings\]\]\nname = "VESSELS"\nclass_name = "VesselHubObject"$/m)
+    assert.match(source, /^\[\[env\.staging\.durable_objects\.bindings\]\]\nname = "VESSELS"\nclass_name = "VesselHubObject"$/m)
+    assert.match(source, /^new_sqlite_classes = \["VesselHubObject"\]$/m)
+    assert.doesNotMatch(source, /AISSTREAM_API_KEY\s*=/, 'the feed key is a secret, never a var')
+    const worker = fs.readFileSync(path.join(root, 'worker', 'index.js'), 'utf8')
+    assert.match(worker, /export \{ VesselHubObject \}/)
+  })
+
   test('deep links resolve to the app instead of 404ing', () => {
     assert.match(source, /not_found_handling = "single-page-application"/)
   })
