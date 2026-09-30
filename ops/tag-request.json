@@ -1,6 +1,5 @@
 {
-  "markets": ["dupage-il", "lake-county-il", "will-il"],
+  "markets": ["los-angeles-ca", "chicago-il", "phoenix-az", "houston-tx", "dallas-tx", "new-york-ny", "orange-county-ca", "san-diego-ca", "miami-fl", "fort-lauderdale-fl", "tampa-fl", "philadelphia-pa", "detroit-mi", "minneapolis-mn", "denver-co", "las-vegas-nv", "austin-tx", "nashville-tn", "washington-dc", "boston-ma", "jersey-city-nj"],
   "what": "zoning,buildings",
-  "reset": false,
-  "note": "re-run after the batch-size fix"
+  "reset": false
 }
