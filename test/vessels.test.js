@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import test, { after, before, describe } from 'node:test'
 
 import { FRESH_MS, VesselHub, WATCH_MS, readMessage } from '../app/lib/vessels.js'
-import { COASTAL_MARKETS, marketBox, shipGroup, vesselFeatures } from '../src/lib/vessels.ts'
+import { COASTAL_MARKETS, marketBox, shipGroup, snapView, vesselFeatures, viewTooWide } from '../src/lib/vessels.ts'
 import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
 
@@ -66,6 +66,12 @@ describe('reading the feed', () => {
     assert.equal(shipGroup(37), 'Pleasure and sailing')
     assert.equal(shipGroup(0), 'Not yet reported')
     assert.equal(shipGroup(null), 'Not yet reported')
+  })
+
+  test('a view snaps outward to a shared grid, and a county is too wide', () => {
+    assert.deepEqual(snapView([-74.013, 40.701, -73.951, 40.749]), [-74.02, 40.7, -73.94, 40.76])
+    assert.equal(viewTooWide([-74.1, 40.6, -73.95, 40.75]), false)
+    assert.equal(viewTooWide([-74.5, 40.4, -73.4, 41.1]), true)
   })
 
   test('ships become points with the fields the card reads', () => {
@@ -179,6 +185,20 @@ describe('one connection for everyone', () => {
     assert.deepEqual(ny.ships.map((s) => s.m), [111])
   })
 
+  test('only the ships in view come back, and none when the view is a whole county', async () => {
+    const { hub, sockets } = rig()
+    await hub.watch('new-york-ny', NYC)
+    sockets[0].feed(position(111, 40.68, -74.02))
+    sockets[0].feed(position(222, 40.95, -73.8))
+    const harbour = await hub.watch('new-york-ny', NYC, [-74.1, 40.6, -73.95, 40.75])
+    assert.deepEqual(harbour.ships.map((s) => s.m), [111])
+    assert.equal(harbour.total, 2, 'the market count still says what is out there')
+    const county = await hub.watch('new-york-ny', NYC, [-74.5, 40.4, -73.4, 41.1])
+    assert.equal(county.tooWide, true)
+    assert.deepEqual(county.ships, [])
+    assert.equal(county.total, 2)
+  })
+
   test('a second market joins the same connection, with the update held to once a second', async () => {
     const { hub, sockets, advance } = rig()
     await hub.watch('new-york-ny', NYC)
@@ -251,10 +271,14 @@ describe('GET /api/gis/vessels', () => {
   }
 
   before(async () => {
+    // No parcel archive here, so the box falls back to one around the
+    // market's centre; nothing in this file reaches the real catalogue.
     globalThis.fetch = async (url, init) =>
       String(url).endsWith('/new-york-ny/meta.json')
         ? Response.json({ center: [-73.9712, 40.7431] })
-        : realFetch(url, init)
+        : String(url).includes('data.realestateaistudio.com')
+          ? new Response('missing', { status: 404 })
+          : realFetch(url, init)
     app = await createServer({
       DATA_DIR: temp.directory,
       DB_FILE: `${temp.directory}/test.db`,
@@ -284,6 +308,14 @@ describe('GET /api/gis/vessels', () => {
     assert.equal(res.status, 401)
   })
 
+  test('the market extents answer even when no archive can be read', async () => {
+    // Every archive 404s here: the answer is an empty list, never a guess
+    // and never an error that would leave the map without its navigator.
+    const res = await get('/api/gis/extents')
+    assert.equal(res.status, 200)
+    assert.deepEqual(res.body.extents, [])
+  })
+
   test('an inland market has no ships to offer', async () => {
     assert.equal(COASTAL_MARKETS.has('phoenix-az'), false)
     const res = await get('/api/gis/vessels?market=phoenix-az')
@@ -300,6 +332,11 @@ describe('GET /api/gis/vessels', () => {
     assert.equal(asked.searchParams.get('market'), 'new-york-ny')
     const box = ['w', 's', 'e', 'n'].map((k) => Number(asked.searchParams.get(k)))
     assert.deepEqual(box, marketBox([-73.9712, 40.7431]), 'the caller cannot widen the box')
+    assert.deepEqual(
+      ['vw', 'vs', 've', 'vn'].map((k) => Number(asked.searchParams.get(k))),
+      snapView([-180, -90, 180, 90]),
+      'the view only narrows what is sent back',
+    )
   })
 })
 
