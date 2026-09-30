@@ -212,3 +212,51 @@ describe('asking about buildings', () => {
     assert.doesNotMatch(parcelState({ ad: '9 Unknown' }), /[Bb]uilding/)
   })
 })
+
+describe('the zoomed-out summary grid', () => {
+  test('a market summed into cells once per version, with flood and vacancy shares', async () => {
+    const { parcelGrid, GRID_CELL, tagMarket } = await import('../app/lib/parcels.js')
+    const { gridFeatures } = await import('../src/lib/grid.ts')
+    const db = nodeAdapter(new DatabaseSync(':memory:'))
+    await db.migrate()
+    await putParcels(db, 'grid-test', [
+      // Two lots in one cell, one in the next cell east.
+      { id: 1, ad: 'a', mv: 1000000, ac: 1, bb: [-100.0049, 40.0021, -100.0041, 40.0029] },
+      { id: 2, ad: 'b', mv: 3000000, ac: 1, bb: [-100.0039, 40.0031, -100.0031, 40.0039] },
+      { id: 3, ad: 'c', mv: 200000, ac: 4, bb: [-99.9949, 40.0021, -99.9941, 40.0029] },
+    ])
+    await sealMarket(db, 'grid-test', { keys: ['id', 'ad', 'mv', 'ac'] })
+    let reads = 0
+    const counted = { ...db, get: db.get.bind(db), run: db.run.bind(db), batch: db.batch.bind(db), all: (sql, args) => ((reads += /GROUP BY gx/.test(sql) ? 1 : 0), db.all(sql, args)) }
+
+    const grid = await parcelGrid(counted, 'grid-test')
+    assert.equal(grid.cell, GRID_CELL)
+    assert.equal(grid.cells.length, 2)
+    const west = grid.cells.find((c) => c[2] === 2)
+    assert.deepEqual(west.slice(2, 5), [2, 4000000, 2])
+    assert.deepEqual(west.slice(5), [0, 0, 0, 0], 'nothing tagged yet, so no shares')
+    await parcelGrid(counted, 'grid-test')
+    assert.equal(reads, 1, 'the second ask reads the kept row, not the market')
+
+    // Tagging makes a new version, and the shares appear.
+    const { boxes } = await listBoxes(db, 'grid-test')
+    await putBuildingTags(db, 'grid-test', boxes.map((b, i) => [b[0], i === 0 ? 0 : 1, 100, null]), { done: true })
+    await tagMarket(db, 'grid-test', { check: async (ps) => ps.map((_, i) => ({ zoning: null, flood: { status: i === 1 ? 'in' : 'out', zones: ['AE'] } })), budget: 10 })
+    const tagged = await parcelGrid(counted, 'grid-test')
+    assert.equal(reads, 2)
+    const again = tagged.cells.find((c) => c[2] === 2)
+    assert.deepEqual(again.slice(5), [1, 2, 1, 2], 'one of two in the flood zone, one of two vacant')
+
+    const value = gridFeatures(tagged, 'value')
+    assert.equal(value.geo.features.length, 2)
+    const bands = Object.keys(value.colors)
+    assert.equal(bands.length, 2, 'two cells, two bands')
+    assert.deepEqual(bands, ['up to $50k / acre', '$50k–$2M / acre'])
+    const cellProps = value.geo.features.find((f) => f.properties.Parcels === '2').properties
+    assert.equal(cellProps['In flood zone'], '50%')
+    assert.equal(cellProps['No building'], '50%')
+    const [ring] = value.geo.features[0].geometry.coordinates
+    assert.ok(Math.abs(ring[1][0] - ring[0][0] - GRID_CELL) < 1e-9)
+    assert.equal(gridFeatures({ ...tagged, cells: [] }, 'value'), null)
+  })
+})

@@ -62,6 +62,13 @@ export const PARCEL_SCHEMA = [
     breaks     TEXT,
     built_at   TEXT
   )`,
+  // The zoomed-out summary grid, worked out once per version of the market.
+  `CREATE TABLE IF NOT EXISTS parcel_grids (
+    market   TEXT PRIMARY KEY,
+    version  TEXT NOT NULL,
+    body     TEXT NOT NULL,
+    made_at  TEXT
+  )`,
   // Every filter starts by naming a market, so every index leads with it.
   'CREATE INDEX IF NOT EXISTS idx_parcels_market_mv ON parcels(market, mv)',
   'CREATE INDEX IF NOT EXISTS idx_parcels_market_ac ON parcels(market, ac)',
@@ -845,6 +852,8 @@ export async function marketSummary(db, market) {
           tagged: Number(row.tagged ?? 0) === 1,
           // And buildings, once the building pass has.
           btagged: Number(row.btagged ?? 0) === 1,
+          taggedAt: row.tagged_at || null,
+          btaggedAt: row.btagged_at || null,
         }
   // A missing market is remembered too: the app asks about every market it
   // lists, and the ones not published here would otherwise cost a read each.
@@ -1222,4 +1231,73 @@ export async function readyMarketsAcross(dbs) {
     for (const market of await readyMarkets(db)) seen.add(market)
   }
   return [...seen].sort()
+}
+
+/** The summary grid's cell, in degrees: about a kilometre. */
+export const GRID_CELL = 0.01
+
+const gridsMaking = new Map()
+
+/**
+ * The market summed into a grid of cells, for the map zoomed out past the
+ * point where lots can be told apart: per cell, how many parcels, their value
+ * and acres, how many are in the flood zone (of how many were read), and how
+ * many are vacant (of how many were read). Cells are indexed from -180/-90
+ * so the same cell means the same ground in every market.
+ *
+ * One aggregate over the market, kept as one row and made again only when
+ * the market is republished or re-tagged, so a county is read once per
+ * version, not once per viewer.
+ */
+export async function parcelGrid(db, market, { cell = GRID_CELL, now = () => new Date() } = {}) {
+  await ensureParcelSchema(db)
+  const summary = await marketSummary(db, market)
+  if (!summary) return null
+  const version = [summary.builtAt, summary.taggedAt, summary.btaggedAt, cell].join('|')
+  const held = await db.get('SELECT version, body FROM parcel_grids WHERE market = ?', [market])
+  if (held?.version === version) return JSON.parse(held.body)
+  const key = `${market}|${version}`
+  if (!gridsMaking.has(key)) {
+    const making = (async () => {
+      const rows = await db.all(
+        `SELECT CAST(((w + e) / 2 + 180) / ? AS INTEGER) AS gx, CAST(((s + n) / 2 + 90) / ? AS INTEGER) AS gy,
+                COUNT(*) AS c, SUM(COALESCE(mv, 0)) AS mv, SUM(COALESCE(ac, 0)) AS ac,
+                SUM(fz = 1) AS fl, SUM(fz IS NOT NULL) AS ft, SUM(bn = 0) AS vac, SUM(bn IS NOT NULL) AS bt
+           FROM parcels WHERE market = ? AND w IS NOT NULL AND s IS NOT NULL AND e IS NOT NULL AND n IS NOT NULL
+          GROUP BY gx, gy`,
+        [cell, cell, market],
+      )
+      const grid = {
+        market,
+        cell,
+        version,
+        tagged: summary.tagged,
+        btagged: summary.btagged,
+        cells: rows.map((r) => [
+          Number(r.gx),
+          Number(r.gy),
+          Number(r.c),
+          Math.round(Number(r.mv) || 0),
+          Math.round((Number(r.ac) || 0) * 100) / 100,
+          Number(r.fl) || 0,
+          Number(r.ft) || 0,
+          Number(r.vac) || 0,
+          Number(r.bt) || 0,
+        ]),
+      }
+      const body = JSON.stringify(grid)
+      // A row holds at most 2 MB; a grid that large is still answered, just not kept.
+      if (body.length < 1_900_000) {
+        await db.run(
+          `INSERT INTO parcel_grids (market, version, body, made_at) VALUES (?, ?, ?, ?)
+           ON CONFLICT(market) DO UPDATE SET version = excluded.version, body = excluded.body, made_at = excluded.made_at`,
+          [market, version, body, now().toISOString()],
+        )
+      }
+      return grid
+    })()
+    gridsMaking.set(key, making)
+    making.finally(() => gridsMaking.delete(key)).catch(() => {})
+  }
+  return gridsMaking.get(key)
 }

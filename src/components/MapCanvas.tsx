@@ -1497,7 +1497,12 @@ export default function MapCanvas({
         const within = layer.tiles && layer.sourceLayer ? { 'source-layer': layer.sourceLayer } : {}
         // Below the zoom the archive carries, a tiled layer has nothing to
         // draw and should not ask for tiles that do not exist.
-        const from = layer.tiles && layer.minzoom != null ? { minzoom: layer.minzoom } : {}
+        // A drawn layer can also stop at a zoom: the summary grid gives way
+        // to the lots once they are drawn.
+        const from = {
+          ...(layer.tiles && layer.minzoom != null ? { minzoom: layer.minzoom } : {}),
+          ...(!layer.tiles && layer.maxzoom != null ? { maxzoom: layer.maxzoom } : {}),
+        }
         const specs: maplibregl.LayerSpecification[] =
           layer.kind === 'point'
             ? [{ id: `x-${layer.id}-point`, type: 'circle', source, ...within, ...from, paint: {} }]

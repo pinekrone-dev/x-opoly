@@ -18,6 +18,7 @@ import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
+import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '../lib/grid'
 import { OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 
@@ -1207,7 +1208,9 @@ export default function Gis({
    * keyed by layer id, because the set of layers is the catalog's to decide.
    */
   const [published, setPublished] = useState<PublishedLayer[]>([])
-  const [layerOn, setLayerOn] = useState<Record<string, boolean>>({})
+  // The summary grid starts on: it is what the map shows zoomed out, and it
+  // gets out of the way by itself once lots are drawn.
+  const [layerOn, setLayerOn] = useState<Record<string, boolean>>({ grid: true })
   const [layerData, setLayerData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
   const [layerStyle, setLayerStyle] = useState<Record<string, { color: string; opacity: number }>>({})
   const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
@@ -1962,10 +1965,52 @@ export default function Gis({
     return (field?.values ?? []).map(([name]) => name).filter(Boolean)
   }, [published])
 
-  /** Every layer the panel and the map treat alike: published, comps, buildings and ships. */
+  /*
+   * The zoomed-out summary: the market's parcels summed into kilometre cells
+   * and shaded by the metric picked, drawn until the lots themselves are.
+   * One small file per market version, kept at the edge.
+   */
+  const [gridMetric, setGridMetric] = useState<GridMetric>('value')
+  const [grid, setGrid] = useState<ParcelGrid | null>(null)
+  const gridVersion = server?.ready ? [server.builtAt, server.tagged ? 1 : 0, server.btagged ? 1 : 0].join('-') : null
+  useEffect(() => {
+    if (!active || !layerOn.grid || !gridVersion) return undefined
+    if (grid?.market === active) return undefined
+    let live = true
+    api
+      .gisGrid(active, gridVersion)
+      .then((answer) => live && setGrid(answer))
+      .catch(() => live && setGrid(null))
+    return () => {
+      live = false
+    }
+  }, [active, layerOn.grid, gridVersion, grid?.market])
+  const gridDrawing = useMemo(
+    () => (grid && grid.market === active ? gridFeatures(grid, gridMetric) : null),
+    [grid, active, gridMetric],
+  )
+  const gridLayer = useMemo(
+    (): PublishedLayer => ({
+      id: 'grid',
+      label: 'Parcel summary',
+      kind: 'polygon',
+      color: '#d97706',
+      file: '',
+      maxzoom: PARCEL_MIN_ZOOM,
+      note: 'Zoomed out, until lots are drawn',
+      categories: gridDrawing
+        ? [{ field: 'Band', values: Object.keys(gridDrawing.colors).map((band): [string, number] => [band, gridDrawing.counts[band] ?? 0]), colors: gridDrawing.colors }]
+        : undefined,
+      fields: ['Band', 'Parcels', 'Assessed value', 'Acres', 'Value per acre', 'In flood zone', 'No building'],
+      attribution: 'County assessment roll, summed into 1 km cells',
+    }),
+    [gridDrawing],
+  )
+
+  /** Every layer the panel and the map treat alike: published, comps, the summary, buildings and ships. */
   const shownLayers = useMemo(
-    () => [...published, compsLayer, BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])],
-    [published, compsLayer, coastal, vesselsLayer],
+    () => [...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])],
+    [published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
   )
 
   /** The same, for geometry: comps come from the workspace and ships from the feed, not the catalog. */
@@ -1973,8 +2018,9 @@ export default function Gis({
     const out = { ...layerData }
     if (compsGeo) out.comps = compsGeo
     if (vesselsGeo) out.vessels = vesselsGeo
+    if (gridDrawing) out.grid = gridDrawing.geo
     return out
-  }, [layerData, compsGeo, vesselsGeo])
+  }, [layerData, compsGeo, vesselsGeo, gridDrawing])
 
   /*
    * What each loaded layer could be coloured by, and how.
@@ -3109,7 +3155,7 @@ export default function Gis({
     if (st.parcelColorBy === 'auto' || st.parcelColorBy === 'group' || st.parcelColorBy === 'value') {
       setParcelColorBy(st.parcelColorBy)
     }
-    if (st.layerOn && typeof st.layerOn === 'object') setLayerOn(st.layerOn as Record<string, boolean>)
+    if (st.layerOn && typeof st.layerOn === 'object') setLayerOn({ grid: true, ...(st.layerOn as Record<string, boolean>) })
     if (st.layerStyle && typeof st.layerStyle === 'object') {
       setLayerStyle(st.layerStyle as Record<string, { color: string; opacity: number }>)
     }
@@ -4323,6 +4369,29 @@ export default function Gis({
                         switching a layer on ought to hand over the records
                         as well, because a hundred and eight city lots with
                         asking prices are a list somebody wants to read. */}
+                    {layer.id === 'grid' && (
+                      <div className="space-y-1">
+                        <label className="flex items-center gap-1.5 text-[11px] text-body">
+                          Shade by
+                          <select
+                            value={gridMetric}
+                            onChange={(event) => setGridMetric(event.target.value as GridMetric)}
+                            className="rounded border border-line bg-surface px-1 py-0.5 text-[11px]"
+                          >
+                            {GRID_METRICS.filter((m) => !m.needs || grid?.[m.needs]).map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <p className="text-[11px] text-muted">
+                          {!grid
+                            ? 'Summing the market…'
+                            : 'Each square is about a kilometre. It fades out once you are close enough to see lots; click a square for its numbers.'}
+                        </p>
+                      </div>
+                    )}
                     {layer.id === 'vessels' && (
                       <p className="text-[11px] text-muted">
                         {!vessels
@@ -5043,7 +5112,7 @@ export default function Gis({
                 {nearby &&
                   shownLayers
                     // Flood has its own section above, and a ship passing is not a fact about a parcel.
-                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id) && layer.id !== 'vessels' && layer.id !== 'buildings')
+                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id) && !['vessels', 'buildings', 'grid'].includes(layer.id))
                     .map((layer) => {
                       const hits = nearby[layer.id] ?? []
                       const order = layer.fields?.length ? layer.fields : null
