@@ -168,6 +168,7 @@ import {
   resetTextIndex,
   searchParcels,
   sealMarket,
+  tagMarket,
   hydrate,
   ftsQuery,
 } from './lib/parcels.js'
@@ -2401,6 +2402,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   /** The filters, read off the query string exactly once. */
   const parcelFilters = (c) => {
     const ownerId = (c.req.query('owner') ?? '').trim()
+    const list = (name) =>
+      (c.req.query(name) ?? '')
+        .split(',')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .slice(0, 300)
     return {
       query: (c.req.query('q') ?? '').trim().slice(0, 120),
       assets: (c.req.query('at') ?? '')
@@ -2413,6 +2420,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       acresMin: bound(c.req.query('amin')),
       acresMax: bound(c.req.query('amax')),
       owner: ownerId ? { kind: c.req.query('ownerKind') === 'b' ? 'b' : 'p', id: ownerId } : null,
+      // Zoning and flood, read from the tags a tagging pass wrote.
+      zoningCategories: list('zc'),
+      zoningNot: list('znot'),
+      zoningCodes: list('zn'),
+      flood: ['in', 'out'].includes(c.req.query('flood')) ? c.req.query('flood') : null,
     }
   }
 
@@ -2627,6 +2639,29 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           builtAt: typeof body?.builtAt === 'string' ? body.builtAt : null,
         })
         return c.json({ sealed: market, ...sealed })
+      }
+      if (action === 'tag') {
+        /*
+         * Tag the next stretch of the market's parcels with the zoning and
+         * flood its own map layers show, read from the archives in the
+         * bucket exactly as the parcel card reads them. The caller repeats
+         * until `done`; the store keeps the cursor, and `reset=1` starts a
+         * fresh pass (after the layers have been refreshed).
+         */
+        const catalogue = await catalogJson(`${market}/layers.json`).catch(() => null)
+        const layers = Array.isArray(catalogue) ? catalogue : catalogue?.layers ?? []
+        const floodLayer = layers.find((l) => l.id === 'flood-zones' && l.tiles) ?? null
+        const zoningLayer = layers.find((l) => l.id === 'zoning' && l.tiles) ?? null
+        if (!floodLayer && !zoningLayer) return c.json({ market, checked: 0, changed: 0, done: true, nothing: true })
+        const flood = floodLayer ? { archive: archiveFor(`${market}/${floodLayer.tiles}`), sourceLayer: floodLayer.sourceLayer ?? floodLayer.id } : null
+        const zoning = zoningLayer ? { archive: archiveFor(`${market}/${zoningLayer.tiles}`), sourceLayer: zoningLayer.sourceLayer ?? zoningLayer.id } : null
+        const rows = Number(c.req.query('rows'))
+        const step = await tagMarket(parcelsFor(market), market, {
+          check: (parcels) => checkParcels(parcels, { flood, zoning }),
+          budget: Number.isFinite(rows) && rows > 0 ? rows : undefined,
+          reset: c.req.query('reset') === '1',
+        })
+        return c.json({ market, flood: Boolean(flood), zoning: Boolean(zoning), ...step })
       }
       if (action === 'reindex') {
         // Mirror the market into the text index, a bounded step at a time.
@@ -2952,8 +2987,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // A question about the whole market that the parcel store answers alone
     // goes back as filters: the map, the count and the export already know
     // how to page a county, and there is no cap to apply.
-    if (!records.length && !needsOverlay(plan) && plan.action !== 'export') {
-      return c.json({ ...base, mode: 'filters' })
+    /*
+     * Once a market's parcels carry their zoning and flood, a question about
+     * them is a filter like any other: the whole county, highlighted on the
+     * map, counted in the report and exported from there, and no geometry
+     * to check at all. Before that, it is checked parcel by parcel below.
+     */
+    if (!records.length && plan.action !== 'export' && (!needsOverlay(plan) || summary.tagged)) {
+      return c.json({ ...base, mode: 'filters', tagged: Boolean(summary.tagged) })
     }
 
     /*

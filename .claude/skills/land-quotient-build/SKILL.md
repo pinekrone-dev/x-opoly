@@ -99,6 +99,13 @@ run with the GitHub Actions tools rather than polling.
   - `pivot` (zoning only): `[{city, count, categories: [{category, count, codes: [[code, count]…]}]}]` — the tree behind the filter icon.
 - Parcel rows reach D1 `PARCELS` through `POST /api/gis/ingest`, authenticated by the runner's GitHub OIDC token; no credential is stored on either side.
 
+### Zoning and flood tags
+
+- `parcels.zc` (zoning category), `zn` (district code), `fz` (1 in FEMA SFHA, 0 out); `''` = checked, no district; NULL = never read. `parcel_markets.tagged` flips to 1 when a pass finishes (`summary.tagged`).
+- Written by `POST /api/gis/ingest/parcels?action=tag&rows=N[&reset=1]` (`tagMarket` + `checkParcels`, same geometry as the card), driven by prospector `pipeline/tag_parcels.py` / `tag-parcels.yml` (one job per market, 6 at a time; monthly on the 5th with `--reset`, writing only changed tags). Publishing upserts its own columns only, so tags survive.
+- Search filters: `zc`, `znot`, `zn`, `flood=in|out` query params. "Anything but X" (`zoningNot`) requires a mapped district. Ask answers zoning/flood questions as whole-county filters once `tagged`; before that it checks parcel by parcel (CHECK_LIMIT).
+- UI: Filter tab zoning chips cycle any → only → anything but; flood Any/Outside/Inside. "Open as a table" (Report tab and Ask) shows the current search 200 rows a page with CSV export.
+
 ### Ask paging and limits
 
 - An answer whose plan the AI wrote (`source: 'ai'`) comes back `AI_PAGE` = 100 records at a time with `page: { size, offset, next, total }`; the client's "Next 100" posts the same `plan`, `source` and `offset`, so no second model call is made. Upload rows page by file row; a market-wide question pages by parcels that pass, walking the store 200 at a time up to `CHECK_LIMIT`.

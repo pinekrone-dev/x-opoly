@@ -71,6 +71,8 @@ export function normalizePlan(raw, vocab = {}, headers = []) {
     action: ACTIONS.has(raw?.action) ? raw.action : 'show',
     ...filters,
     zoningCategories: clamp(raw?.zoningCategories, vocab.zoningCategories),
+    // "Anything but residential": categories to leave out.
+    zoningNot: clamp(raw?.zoningNot, vocab.zoningCategories),
     zoningCodes: clamp(raw?.zoningCodes, vocab.zoningCodes),
     flood: vocab.hasFlood ? flood : null,
     columns,
@@ -80,8 +82,15 @@ export function normalizePlan(raw, vocab = {}, headers = []) {
 
 /** Whether the plan needs the overlay check, which the parcel store cannot answer. */
 export function needsOverlay(plan) {
-  return Boolean(plan.flood || plan.zoningCategories.length || plan.zoningCodes.length)
+  return Boolean(plan.flood || plan.zoningCategories.length || plan.zoningCodes.length || plan.zoningNot?.length)
 }
+
+/*
+ * Words that turn a zoning category round: "anything but residential",
+ * "not industrial", "except commercial", "other than", "excluding",
+ * "non-residential". Read from the few words just before the category.
+ */
+const NEGATION = /(?:\bbut|\bother than|\bnot|\bexcept(?:ing)?|\bexclud(?:e|ing)|\bwithout|\bnon-?|\bno)\s*(?:\w+\s+){0,2}$/i
 
 /**
  * The free reading of a question: the scout's rules for the parcel filters,
@@ -103,24 +112,31 @@ export function heuristicPlan(prompt, vocab = {}, headers = []) {
       : 'in'
   }
 
-  if (/zon(ed|ing|e)\b/i.test(text)) {
+  if (/zon(ed|ing|e)\b/i.test(text) || /\bnon-?\w/i.test(text)) {
     const words = lower(text)
-    raw.zoningCategories = (vocab.zoningCategories ?? []).filter((category) => {
+    raw.zoningCategories = []
+    raw.zoningNot = []
+    for (const category of vocab.zoningCategories ?? []) {
       const head = lower(category).split(/[\s/]+/)[0]
-      return head.length > 3 && words.includes(head)
-    })
+      if (head.length <= 3) continue
+      const at = words.indexOf(head)
+      if (at < 0) continue
+      const before = words.slice(Math.max(0, at - 40), at)
+      if (NEGATION.test(before)) raw.zoningNot.push(category)
+      else raw.zoningCategories.push(category)
+    }
     // A code is matched as written, whole: "C-2" or "PD", never inside a word.
     const tokens = new Set(text.split(/[^A-Za-z0-9.-]+/).filter(Boolean).map((t) => t.toUpperCase()))
     raw.zoningCodes = (vocab.zoningCodes ?? []).filter((code) => tokens.has(String(code).toUpperCase()))
     // The category words were about zoning, not the assessor's land use:
     // "industrial zoning" is not a request for parcels the county taxes as
     // industrial.
-    if (raw.zoningCategories.length || raw.zoningCodes.length) raw.assetTypes = []
+    if (raw.zoningCategories.length || raw.zoningNot.length || raw.zoningCodes.length) raw.assetTypes = []
   }
 
   const plan = normalizePlan(raw, vocab, headers)
   const empty =
-    base.empty && !plan.flood && !plan.zoningCategories.length && !plan.zoningCodes.length && !headers.length
+    base.empty && !plan.flood && !plan.zoningCategories.length && !plan.zoningNot.length && !plan.zoningCodes.length && !headers.length
   return { plan, empty }
 }
 
@@ -137,7 +153,8 @@ export function planPrompt(prompt, vocab = {}, upload = null) {
     'assetTypes (array, from the list given), valueMin, valueMax (dollars), acresMin, acresMax,',
     'keyword (an owner or street name to search, or null), flood ("in" for parcels in a FEMA special flood',
     'hazard area, "out" for parcels outside one, or null), zoningCategories and zoningCodes (arrays, from the',
-    'lists given), columns ({address, city, zip, parcel}: the upload header names holding each, or null),',
+    'lists given, to include), zoningNot (array of zoning categories to leave out: "anything but residential"',
+    'is zoningNot ["Residential"], not zoningCategories), columns ({address, city, zip, parcel}: the upload header names holding each, or null),',
     'and explanation (one sentence saying what will be done). Use only names from the lists given.',
     'Leave anything the request does not ask for as null or an empty array.',
   ].join(' ')
@@ -190,6 +207,13 @@ export function passesOverlay(check, plan) {
     if (plan.flood === 'in' && !wet) return 'Not in a flood hazard area'
     if (plan.flood === 'out' && wet) return `In flood zone ${check.flood.zones.join(', ') || check.flood.zone || ''}`.trim()
   }
+  if (plan.zoningNot?.length) {
+    if (!check.zoning) return 'Zoning could not be read'
+    if (!check.zoning.code && !check.zoning.category) return 'No zoning district mapped here'
+    if (plan.zoningNot.includes(check.zoning.category)) {
+      return `Zoned ${[check.zoning.code, check.zoning.category ? `(${check.zoning.category})` : null].filter(Boolean).join(' ')}`
+    }
+  }
   if (plan.zoningCategories.length || plan.zoningCodes.length) {
     if (!check.zoning) return 'Zoning could not be read'
     const byCategory = plan.zoningCategories.includes(check.zoning.category)
@@ -210,6 +234,7 @@ export function describePlan(plan, { upload = false } = {}) {
   if (plan.zoningCategories.length || plan.zoningCodes.length) {
     parts.push(`zoned ${[...plan.zoningCategories, ...plan.zoningCodes].join(' or ')}`)
   }
+  if (plan.zoningNot?.length) parts.push(`zoned anything but ${plan.zoningNot.join(' or ')}`)
   if (plan.flood === 'in') parts.push('in a FEMA flood hazard area')
   if (plan.flood === 'out') parts.push('outside FEMA flood hazard areas')
   if (plan.keyword) parts.push(`mentioning "${plan.keyword}"`)
