@@ -218,6 +218,9 @@ export const api = {
     market: string
     prompt: string
     upload?: { name: string; text: string } | null
+    /** The whole county (free questions only) or the map view given in `box`. */
+    area?: 'county' | 'view'
+    box?: [number, number, number, number] | null
     /** The next page of an earlier answer: its plan and where to start. */
     plan?: AskAnswer['plan']
     source?: AskAnswer['source']
@@ -339,6 +342,7 @@ export const api = {
       if (filters.zoningNot?.length) params.set('znot', filters.zoningNot.join(','))
       if (filters.zoningCodes?.length) params.set('zn', filters.zoningCodes.join(','))
       if (filters.flood) params.set('flood', filters.flood)
+      if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))
       return request<ParcelSearch>(`/api/gis/parcels?${params.toString()}`)

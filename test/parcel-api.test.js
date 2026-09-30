@@ -344,12 +344,40 @@ describe('asking in plain English', () => {
     assert.equal(res.body.plan.acresMin, 20)
   })
 
-  test('an export over the market comes back as rows, filtered by the store', async () => {
+  test('an export over the whole county is a filter, exported from the report like any search', async () => {
     const res = await ask({ prompt: 'export parcels over 5 acres' })
-    assert.equal(res.body.mode, 'set')
+    assert.equal(res.body.mode, 'filters', 'the store answers it whole; nothing is checked parcel by parcel')
     assert.equal(res.body.plan.action, 'export')
-    assert.deepEqual(res.body.ids.sort(), ['202', '203'])
-    assert.equal(res.body.rows[0].zoning, null, 'no zoning layer here, so no zoning, rather than a guess')
+    assert.equal(res.body.plan.acresMin, 5)
+    assert.equal(res.body.area, null)
+  })
+
+  /*
+   * The whole county is only for questions that cost nothing: read by the
+   * free rules and answered from columns the store holds. Anything else is
+   * asked about a smaller area of the map.
+   */
+  test('a question about the map view needs a view, and a small one', async () => {
+    const none = await ask({ prompt: 'land over 5 acres', area: 'view' })
+    assert.equal(none.status, 400)
+    const wide = await ask({ prompt: 'land over 5 acres', area: 'view', box: [-98.2, 30, -97.3, 30.7] })
+    assert.equal(wide.status, 422)
+    assert.equal(wide.body.tooWide, true)
+    const near = await ask({ prompt: 'land over 5 acres', area: 'view', box: [-97.65, 30.35, -97.45, 30.55] })
+    assert.equal(near.status, 200)
+    assert.deepEqual(near.body.area.box, [-97.65, 30.35, -97.45, 30.55], 'the area comes back to be applied as a filter')
+  })
+
+  test('the area narrows the search to parcels inside it', async () => {
+    const res = await call('/api/gis/parcels?market=austin-tx&box=-97.65,30.35,-97.55,30.45')
+    assert.deepEqual(res.body.ids, ['202'])
+  })
+
+  test('a question the free reader cannot read is not taken to the AI for the whole county', async () => {
+    const res = await ask({ prompt: 'what would a developer think of this' })
+    assert.equal(res.status, 422)
+    assert.equal(res.body.needsArea, true)
+    assert.match(res.body.error, /smaller area/)
   })
 
   test('an upload is matched row by row without a model, and every row is accounted for', async () => {
@@ -438,6 +466,5 @@ describe('asking in plain English', () => {
     assert.equal(res.status, 200)
     assert.deepEqual(res.body.plan.assetTypes, [], 'an asset type this county does not publish is dropped')
     assert.equal(res.body.plan.flood, null, 'no flood layer here')
-    assert.equal(res.body.page.size, 100)
   })
 })

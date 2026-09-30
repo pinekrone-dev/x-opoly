@@ -130,3 +130,15 @@ describe('reading "anything but"', () => {
     assert.match(passesOverlay({ zoning: { code: null, category: null } }, plan), /No zoning district/)
   })
 })
+
+describe('the area a question may cover', () => {
+  test('a map view is read strictly, and only a small one is small enough', async () => {
+    const { readArea, areaSmallEnough } = await import('../app/lib/ask.js')
+    assert.equal(readArea(null), null)
+    assert.equal(readArea([1, 2, 3]), null)
+    assert.equal(readArea([-97, 30, -98, 31]), null, 'east before west is not an area')
+    assert.deepEqual(readArea(['-97.7', '30.2', '-97.6', '30.3']), [-97.7, 30.2, -97.6, 30.3])
+    assert.equal(areaSmallEnough([-97.7, 30.2, -97.5, 30.4]), true)
+    assert.equal(areaSmallEnough([-98.2, 30, -97.3, 30.7]), false, 'a county is not a small area')
+  })
+})

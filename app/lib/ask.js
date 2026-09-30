@@ -36,6 +36,30 @@ export const CHECK_LIMIT = 3000
  */
 export const AI_PAGE = 100
 
+/**
+ * The widest area, in degrees either way, that a question costing something
+ * may be asked about: roughly thirty kilometres, a city district rather than
+ * a county. A question the free reader understands, answered from columns
+ * the store already holds, may cover the whole county; one that needs the AI,
+ * or a parcel-by-parcel check of the zoning and flood maps, is asked about a
+ * smaller area on the map instead.
+ */
+export const AREA_MAX_SPAN = 0.35
+
+/** A map view as [west, south, east, north], or null when it is not one. */
+export function readArea(box) {
+  if (!Array.isArray(box) || box.length !== 4) return null
+  const [w, s, e, n] = box.map(Number)
+  if (![w, s, e, n].every(Number.isFinite) || e <= w || n <= s) return null
+  if (Math.abs(w) > 180 || Math.abs(e) > 180 || Math.abs(s) > 90 || Math.abs(n) > 90) return null
+  return [w, s, e, n].map((v) => Math.round(v * 1e5) / 1e5)
+}
+
+/** Whether an area is small enough for a question that costs something. */
+export function areaSmallEnough(box) {
+  return Boolean(box) && box[2] - box[0] <= AREA_MAX_SPAN && box[3] - box[1] <= AREA_MAX_SPAN
+}
+
 const ACTIONS = new Set(['show', 'export', 'count'])
 
 const lower = (value) => String(value ?? '').trim().toLowerCase()
