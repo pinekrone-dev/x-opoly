@@ -555,6 +555,8 @@ export interface ParcelQuery {
   zoningCodes?: string[]
   /** Inside or outside FEMA's special flood hazard area. */
   flood?: 'in' | 'out' | null
+  /** Only parcels touching this area of the map, west-south-east-north. */
+  box?: [number, number, number, number] | null
 }
 
 export interface ParcelSearch {
@@ -618,6 +620,8 @@ export interface AskAnswer {
   mode: 'filters' | 'set'
   /** The market's parcels carry zoning and flood tags, so those are filters too. */
   tagged?: boolean
+  /** The map area the question was about, when it was not the whole county. */
+  area?: { box: [number, number, number, number] } | null
   plan: AskPlan
   explanation: string
   source: 'ai' | 'rules'

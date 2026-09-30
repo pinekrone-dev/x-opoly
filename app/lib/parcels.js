@@ -881,6 +881,13 @@ function where(market, filters = {}, { fts = false } = {}) {
   if (filters.flood === 'in') clauses.push('fz = 1')
   if (filters.flood === 'out') clauses.push('fz = 0')
 
+  // An area of the map: parcels whose box touches it.
+  const box = Array.isArray(filters.box) && filters.box.length === 4 && filters.box.every(Number.isFinite) ? filters.box : null
+  if (box) {
+    clauses.push('e >= ? AND w <= ? AND n >= ? AND s <= ?')
+    params.push(box[0], box[2], box[1], box[3])
+  }
+
   if (filters.owner && filters.owner.id) {
     clauses.push(filters.owner.kind === 'b' ? 'bo = ?' : 'po = ?')
     params.push(String(filters.owner.id))
@@ -917,6 +924,7 @@ export function filtersActive(filters = {}) {
   if (filters.owner && filters.owner.id) return true
   if ((filters.zoningCategories || []).length || (filters.zoningNot || []).length || (filters.zoningCodes || []).length) return true
   if (filters.flood === 'in' || filters.flood === 'out') return true
+  if (Array.isArray(filters.box) && filters.box.length === 4) return true
   return [filters.valueMin, filters.valueMax, filters.acresMin, filters.acresMax].some(
     (v) => v != null && Number.isFinite(v),
   )

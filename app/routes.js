@@ -110,7 +110,10 @@ import { BOOK_STYLE_PROMPT, normalizeBookStyle } from './lib/bookstyle.js'
 import { heuristicScout, runScout } from './lib/scout.js'
 import {
   AI_PAGE,
+  AREA_MAX_SPAN,
   CHECK_LIMIT,
+  areaSmallEnough,
+  readArea,
   UPLOAD_ROWS,
   aiPlan,
   describePlan,
@@ -2425,6 +2428,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       zoningNot: list('znot'),
       zoningCodes: list('zn'),
       flood: ['in', 'out'].includes(c.req.query('flood')) ? c.req.query('flood') : null,
+      box: readArea((c.req.query('box') ?? '').split(',').filter(Boolean)),
     }
   }
 
@@ -2949,12 +2953,48 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const cut = records.length > UPLOAD_ROWS
     if (cut) records = records.slice(0, UPLOAD_ROWS)
 
+    /*
+     * Where the question is about: the whole county, or the area on the map.
+     *
+     * The whole county is only for a question that costs nothing to answer:
+     * read by the free rules, and answered from columns the store holds. A
+     * question that needs the AI, or a parcel-by-parcel check of the zoning
+     * and flood maps, is asked about a smaller area instead. An upload is
+     * its own list, so it needs no area.
+     */
+    const wholeCounty = !records.length && body?.area !== 'view'
+    const area = records.length ? null : readArea(body?.box)
+    if (!records.length && !wholeCounty) {
+      if (!area) return c.json({ error: 'Move the map to the area you want to ask about, then ask again.' }, 400)
+      if (!areaSmallEnough(area)) {
+        return c.json(
+          {
+            error: `That view is too wide to analyse. Zoom in to a smaller area (about ${Math.round(AREA_MAX_SPAN * 100)} km across), or ask about the whole county with a question the free reader understands.`,
+            tooWide: true,
+          },
+          422,
+        )
+      }
+    }
+
     // The plan: the model once when there is one, the rules otherwise.
     let plan
     let source = 'rules'
     let note = null
-    const provider = resolveProvider(env)
+    // Across the whole county the AI is not used: its answer would cost
+    // something, and the county is only for questions that do not.
+    const provider = wholeCounty ? null : resolveProvider(env)
     const ruled = heuristicPlan(prompt, vocab, headers)
+    if (wholeCounty && ruled.empty && !given) {
+      return c.json(
+        {
+          error:
+            'The free reader could not read that for the whole county. Zoom in to a smaller area and choose "This map view" to have the AI read it, or ask it more simply, e.g. "vacant land over 5 acres outside the flood zone".',
+          needsArea: true,
+        },
+        422,
+      )
+    }
     if (given) {
       // Clamped again, like any plan: it came from the browser this time.
       plan = normalizePlan(given, vocab, headers)
@@ -2979,10 +3019,23 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       }
       plan = ruled.plan
     }
-    const explanation = plan.explanation || describePlan(plan, { upload: records.length > 0 })
+    if (wholeCounty && needsOverlay(plan) && !summary.tagged) {
+      return c.json(
+        {
+          error:
+            "Zoning and flood across the whole county need this market's parcels tagged first, which is on its way. For now, zoom in to a smaller area and choose \"This map view\".",
+          needsArea: true,
+        },
+        422,
+      )
+    }
+    if (wholeCounty && provider === null && resolveProvider(env) && !given) {
+      note = 'Read by the free rules, as the whole county was asked about. Zoom in and choose "This map view" to have the AI read the question.'
+    }
+        const explanation = plan.explanation || describePlan(plan, { upload: records.length > 0 })
     const flood = floodLayer ? { archive: archiveFor(`${market}/${floodLayer.tiles}`), sourceLayer: floodLayer.sourceLayer ?? floodLayer.id } : null
     const zoning = zoningLayer ? { archive: archiveFor(`${market}/${zoningLayer.tiles}`), sourceLayer: zoningLayer.sourceLayer ?? zoningLayer.id } : null
-    const base = { plan, explanation, source, note, hasFlood: Boolean(flood), hasZoning: Boolean(zoning) }
+    const base = { plan, explanation, source, note, hasFlood: Boolean(flood), hasZoning: Boolean(zoning), area: area ? { box: area } : null }
 
     // A question about the whole market that the parcel store answers alone
     // goes back as filters: the map, the count and the export already know
@@ -2993,7 +3046,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * map, counted in the report and exported from there, and no geometry
      * to check at all. Before that, it is checked parcel by parcel below.
      */
-    if (!records.length && plan.action !== 'export' && (!needsOverlay(plan) || summary.tagged)) {
+    if (!records.length && (!needsOverlay(plan) || summary.tagged)) {
       return c.json({ ...base, mode: 'filters', tagged: Boolean(summary.tagged) })
     }
 
@@ -3105,6 +3158,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         valueMax: plan.valueMax,
         acresMin: plan.acresMin,
         acresMax: plan.acresMax,
+        box: area,
       }
       if (paged) {
         /*

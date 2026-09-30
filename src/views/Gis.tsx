@@ -19,6 +19,9 @@ import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, viewTooWide, type VesselAnswer } from '../lib/vessels'
+
+/** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
+const AREA_MAX_SPAN = 0.35
 import type {
   AskAnswer,
   AskRow,
@@ -1238,6 +1241,10 @@ export default function Gis({
   const [viewKey, setViewKey] = useState('')
   /** The snapped view and zoom, for the markets that follow the camera. */
   const [viewBox, setViewBox] = useState<{ box: [number, number, number, number]; zoom: number } | null>(null)
+  /** Whether the map view is small enough to ask a question that costs something about. */
+  const viewFitsAsk = Boolean(
+    viewBox && viewBox.box[2] - viewBox.box[0] <= AREA_MAX_SPAN && viewBox.box[3] - viewBox.box[1] <= AREA_MAX_SPAN,
+  )
   /** Set to a market chosen by name, so its opening view is flown to once it loads. */
   const frameNext = useRef<string | null>(null)
   /** A parcel clicked in a neighbouring market, opened once that market has loaded. */
@@ -1295,6 +1302,10 @@ export default function Gis({
   const [zoningDrop, setZoningDrop] = useState<Set<string>>(new Set())
   const [zoningCodes, setZoningCodes] = useState<string[]>([])
   const [floodPick, setFloodPick] = useState<'in' | 'out' | null>(null)
+  /** An area of the map the results are held to, from a question asked about it. */
+  const [areaBox, setAreaBox] = useState<[number, number, number, number] | null>(null)
+  /** Whether a question is about the map view or the whole county. */
+  const [askArea, setAskArea] = useState<'view' | 'county'>('view')
   const [tableOpen, setTableOpen] = useState(false)
 
   // The brain panel: a question and optionally a file, answered on the map or as a file.
@@ -1421,6 +1432,7 @@ export default function Gis({
     setZoningDrop(new Set())
     setZoningCodes([])
     setFloodPick(null)
+    setAreaBox(null)
     setQuery('')
     setOwners(null)
     setOwnerPick(null)
@@ -2352,8 +2364,9 @@ export default function Gis({
       zoningNot: [...zoningDrop].sort(),
       zoningCodes: [...zoningCodes].sort(),
       flood: floodPick,
+      box: areaBox,
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, areaBox])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -3287,7 +3300,13 @@ export default function Gis({
     setAskError(null)
     setAskShown(false)
     try {
-      const answer = await api.gisAsk({ market: active, prompt: askText.trim(), upload: askFile })
+      const answer = await api.gisAsk({
+        market: active,
+        prompt: askText.trim(),
+        upload: askFile,
+        area: askFile ? undefined : askArea,
+        box: askFile || askArea === 'county' ? null : viewRef.current,
+      })
       setAskAnswer(answer)
       if (answer.mode === 'filters') {
         const plan = answer.plan
@@ -3300,6 +3319,7 @@ export default function Gis({
         setZoningDrop(new Set(plan.zoningNot ?? []))
         setZoningCodes(plan.zoningCodes ?? [])
         setFloodPick(plan.flood ?? null)
+        setAreaBox(answer.area?.box ?? null)
       } else if (answer.plan.action === 'export') {
         exportAsk(answer, active, !answer.upload)
       } else {
@@ -3332,6 +3352,9 @@ export default function Gis({
         plan: current.plan,
         source: current.source,
         offset: current.page.next,
+        // The same area as the first page, wherever the map has moved since.
+        area: current.area ? 'view' : askFile ? undefined : 'county',
+        box: current.area?.box ?? null,
       })
       setAskAnswer({
         ...answer,
@@ -3673,11 +3696,41 @@ export default function Gis({
                   void file.text().then((text) => setAskFile({ name: file.name, text }))
                 }}
               />
+              {!askFile ? (
+                <div className="mt-1.5 space-y-1">
+                  <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="radiogroup" aria-label="Where to ask about">
+                    {(
+                      [
+                        ['view', 'This map view'],
+                        ['county', 'Whole county'],
+                      ] as ['view' | 'county', string][]
+                    ).map(([pick, label]) => (
+                      <button
+                        key={pick}
+                        type="button"
+                        role="radio"
+                        aria-checked={askArea === pick}
+                        onClick={() => setAskArea(pick)}
+                        className={`px-2.5 py-1 ${askArea === pick ? 'bg-ink text-white' : 'text-body hover:bg-sunken'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className={`text-[10px] leading-snug ${askArea === 'view' && !viewFitsAsk ? 'text-amber-600' : 'text-faint'}`}>
+                    {askArea === 'county'
+                      ? 'The whole county, for questions the free reader understands. No AI, no cost.'
+                      : viewFitsAsk
+                        ? 'Only what is in the map view now. The AI may read the question.'
+                        : `Zoom in to a smaller area, about ${Math.round(AREA_MAX_SPAN * 100)} km across, to ask about this view.`}
+                  </p>
+                </div>
+              ) : null}
               <div className="mt-1.5 flex items-center gap-2">
                 <button
                   type="button"
                   className="flex-1 rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
-                  disabled={askBusy || (!askText.trim() && !askFile) || !active}
+                  disabled={askBusy || (!askText.trim() && !askFile) || !active || (!askFile && askArea === 'view' && !viewFitsAsk)}
                   onClick={() => void runAsk()}
                 >
                   {askBusy ? (askFile ? 'Checking your list…' : 'Working it out…') : 'Ask'}
@@ -4405,6 +4458,14 @@ export default function Gis({
                   onChange={setValue}
                 />
                 <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
+                {areaBox ? (
+                  <p className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5 text-[11px] text-body">
+                    <span>Only the map area you asked about.</span>
+                    <button type="button" className="text-accent underline" onClick={() => setAreaBox(null)}>
+                      Whole county
+                    </button>
+                  </p>
+                ) : null}
                 <ZoningFloodFilter
                   tagged={Boolean(server?.tagged)}
                   categories={zoningCategoryOptions}
@@ -4459,6 +4520,7 @@ export default function Gis({
                       setZoningDrop(new Set())
                       setZoningCodes([])
                       setFloodPick(null)
+                      setAreaBox(null)
                       setQuery('')
                     }}
                   >
