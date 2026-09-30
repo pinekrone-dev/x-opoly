@@ -38,7 +38,9 @@ export class VesselHubObject {
     if (!/^[a-z0-9-]{2,40}$/.test(slug) || !box.every(Number.isFinite)) {
       return Response.json({ error: 'market and box are required.' }, { status: 400 })
     }
-    const answer = await this.hub.watch(slug, box)
+    // The viewer's own view, when they sent one: only what is on their screen goes back.
+    const view = ['vw', 'vs', 've', 'vn'].map((k) => Number(url.searchParams.get(k)))
+    const answer = await this.hub.watch(slug, box, url.searchParams.has('vw') && view.every(Number.isFinite) ? view : null)
     if (answer.status !== 'off' && !(await this.state.storage.getAlarm())) {
       await this.state.storage.setAlarm(Date.now() + SWEEP_MS)
     }

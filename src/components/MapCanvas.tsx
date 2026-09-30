@@ -373,7 +373,13 @@ interface Props {
    * — "here at county scale" and "here at street scale" are different views of
    * the same point. Existing callers that only read lat and lng are unaffected.
    */
-  onViewChange?: (center: { lat: number; lng: number; zoom: number }) => void
+  onViewChange?: (center: {
+    lat: number
+    lng: number
+    zoom: number
+    /** What is on screen, west-south-east-north, for callers that ask only for what is in view. */
+    bounds?: [number, number, number, number]
+  }) => void
   /**
    * A hook the view fills with "photograph the map, now".
    *
@@ -409,6 +415,24 @@ interface Props {
   anchors?: { start?: { lat: number; lng: number; label?: string } | null; end?: { lat: number; lng: number; label?: string } | null } | null
   /** Labelled radius circles — non-competes, boundaries. */
   zones?: { id: string; label: string; lat: number; lng: number; radiusMiles: number; color: string }[] | null
+  /**
+   * Named places drawn as labels while the map is zoomed out, and hidden
+   * past `placesUntilZoom`: the parcel map's cities, so the map itself is
+   * the way from one market to the next. A click hands the id back.
+   */
+  /**
+   * Other markets' parcel archives, drawn as outlines only.
+   *
+   * The open market is the one with colour, search and filters; a
+   * neighbour in view is drawn as lot lines so the map has no hole where one
+   * county ends and the next begins. A click on a neighbour's lot hands back
+   * its market and parcel id, and the view opens that market on it.
+   */
+  neighbours?: { slug: string; url: string; sourceLayer?: string }[] | null
+  onNeighbourParcel?: (slug: string, id: string | number) => void
+  places?: { id: string; label: string; detail?: string; lat: number; lng: number }[] | null
+  placesUntilZoom?: number
+  onPlace?: (id: string) => void
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
   /**
@@ -583,6 +607,11 @@ export default function MapCanvas({
   stages,
   anchors = null,
   zones = null,
+  neighbours = null,
+  onNeighbourParcel,
+  places = null,
+  placesUntilZoom = 8,
+  onPlace,
   routeIds,
   routeGeometry,
   routeColor = '#14b8a6',
@@ -1227,14 +1256,73 @@ export default function MapCanvas({
 
     const report = () => {
       const center = instance.getCenter()
-      onViewChange({ lat: center.lat, lng: center.lng, zoom: instance.getZoom() })
+      const b = instance.getBounds()
+      onViewChange({
+        lat: center.lat,
+        lng: center.lng,
+        zoom: instance.getZoom(),
+        bounds: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()],
+      })
     }
     instance.on('moveend', report)
     report()
     return () => {
       instance.off('moveend', report)
     }
-  }, [onViewChange])
+    // `loaded` as well: a caller with a stable callback would otherwise
+    // subscribe only to the first map, and never to one rebuilt after a
+    // lost GPU context.
+  }, [onViewChange, loaded])
+
+  /*
+   * The places, as HTML labels rather than map text: the basemaps are raster
+   * and the style carries no glyphs, so a symbol layer would draw nothing.
+   * A couple of dozen markers is nothing to the browser. They are shown and
+   * hidden on zoom rather than rebuilt, and the click handler is read from a
+   * ref so a new callback does not rebuild them either.
+   */
+  const placeHandler = useRef(onPlace)
+  placeHandler.current = onPlace
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !places?.length) return undefined
+    const made = places.map((place) => {
+      const element = document.createElement('button')
+      element.type = 'button'
+      element.className = 'lq-place'
+      element.style.cssText =
+        'display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:0;padding:0;cursor:pointer;font:inherit'
+      const dot = document.createElement('span')
+      dot.style.cssText = 'width:12px;height:12px;border-radius:9999px;background:#0f172a;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.35)'
+      const label = document.createElement('span')
+      label.style.cssText =
+        'white-space:nowrap;border-radius:6px;background:rgba(255,255,255,.95);padding:2px 6px;font-size:11px;font-weight:600;color:#0f172a;box-shadow:0 1px 3px rgba(0,0,0,.25)'
+      label.textContent = place.label
+      if (place.detail) {
+        const detail = document.createElement('span')
+        detail.style.cssText = 'display:block;font-weight:400;color:#5c6377;font-size:10px'
+        detail.textContent = place.detail
+        label.appendChild(detail)
+      }
+      element.append(dot, label)
+      element.setAttribute('aria-label', `Open ${place.label}`)
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        placeHandler.current?.(place.id)
+      })
+      return new maplibregl.Marker({ element, anchor: 'top' }).setLngLat([place.lng, place.lat]).addTo(instance)
+    })
+    const show = () => {
+      const visible = instance.getZoom() < placesUntilZoom
+      for (const marker of made) marker.getElement().style.visibility = visible ? 'visible' : 'hidden'
+    }
+    show()
+    instance.on('zoom', show)
+    return () => {
+      instance.off('zoom', show)
+      for (const marker of made) marker.remove()
+    }
+  }, [loaded, places, placesUntilZoom])
 
   // Draw the tour line.
   useEffect(() => {
@@ -1913,6 +2001,80 @@ export default function MapCanvas({
       instance.off('error', failed)
     }
   }, [loaded, parcels?.url, parcels?.sourceLayer])
+
+  /*
+   * Neighbouring markets' lot lines. Added and removed by slug so panning
+   * along a border neither rebuilds a source nor drops tiles already fetched;
+   * drawn from the same zoom as the open market's parcels, under them, and
+   * clickable through an almost clear fill, since a line alone is a hair's
+   * width to hit.
+   */
+  const neighbourIds = useRef<string[]>([])
+  const neighbourHandler = useRef(onNeighbourParcel)
+  neighbourHandler.current = onNeighbourParcel
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return undefined
+    const wanted = new Map((neighbours ?? []).map((n) => [n.slug, n]))
+    for (const slug of neighbourIds.current) {
+      if (wanted.has(slug)) continue
+      for (const layer of [`nb-${slug}-line`, `nb-${slug}-fill`]) if (instance.getLayer(layer)) instance.removeLayer(layer)
+      if (instance.getSource(`nb-${slug}`)) instance.removeSource(`nb-${slug}`)
+    }
+    neighbourIds.current = [...wanted.keys()]
+    const handlers: [string, (event: maplibregl.MapLayerMouseEvent) => void][] = []
+    for (const [slug, neighbour] of wanted) {
+      const source = `nb-${slug}`
+      const sourceLayer = neighbour.sourceLayer || 'parcels'
+      if (!instance.getSource(source)) {
+        registerPmtiles()
+        instance.addSource(source, { type: 'vector', url: `pmtiles://${neighbour.url}` })
+        const below = instance.getLayer('parcel-fill') ? 'parcel-fill' : insertBefore('parcel-fill')
+        instance.addLayer(
+          { id: `${source}-fill`, type: 'fill', source, 'source-layer': sourceLayer, minzoom: PARCEL_MIN_ZOOM, paint: { 'fill-color': PARCEL_OTHER, 'fill-opacity': 0.04 } },
+          below,
+        )
+        instance.addLayer(
+          {
+            id: `${source}-line`,
+            type: 'line',
+            source,
+            'source-layer': sourceLayer,
+            minzoom: PARCEL_MIN_ZOOM,
+            paint: {
+              'line-color': PARCEL_OTHER,
+              'line-width': ['interpolate', ['linear'], ['zoom'], 12, 0.4, 15, 0.9, 18, 1.6],
+              'line-opacity': 0.45,
+            },
+          },
+          below,
+        )
+      }
+      const click = (event: maplibregl.MapLayerMouseEvent) => {
+        // The open market's own lot wins where the two overlap.
+        if (instance.getLayer('parcel-fill') && instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
+        const id = event.features?.[0]?.id
+        if (id != null) neighbourHandler.current?.(slug, id)
+      }
+      const enter = () => {
+        instance.getCanvas().style.cursor = 'pointer'
+      }
+      const leave = () => {
+        instance.getCanvas().style.cursor = ''
+      }
+      instance.on('click', `${source}-fill`, click)
+      instance.on('mouseenter', `${source}-fill`, enter)
+      instance.on('mouseleave', `${source}-fill`, leave)
+      handlers.push([`${source}-fill`, click], [`${source}-fill`, enter], [`${source}-fill`, leave])
+    }
+    return () => {
+      for (const [layer, fn] of handlers) {
+        instance.off('click', layer, fn)
+        instance.off('mouseenter', layer, fn)
+        instance.off('mouseleave', layer, fn)
+      }
+    }
+  }, [loaded, neighbours])
 
   // Colour is separate from the source so changing the metric does not throw
   // away tiles the browser already has.

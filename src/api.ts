@@ -216,9 +216,17 @@ export const api = {
   /** The brain panel: a question, and optionally a CSV, answered as a plan and its results. */
   gisAsk: (input: { market: string; prompt: string; upload?: { name: string; text: string } | null }) =>
     request<AskAnswer>('/api/gis/ask', json(input)),
+  /** Every market's box and centre, for the map that navigates between them. */
+  gisExtents: () =>
+    request<{ extents: { slug: string; name: string; region?: string; box: [number, number, number, number]; center: [number, number] }[] }>(
+      '/api/gis/extents',
+    ),
   /** Live ship positions in a coastal market. */
-  gisVessels: (market: string) =>
-    request<VesselAnswer>(`/api/gis/vessels?market=${encodeURIComponent(market)}`),
+  gisVessels: (market: string, view?: [number, number, number, number] | null) => {
+    const query = new URLSearchParams({ market })
+    if (view) (['w', 's', 'e', 'n'] as const).forEach((k, i) => query.set(k, String(view[i])))
+    return request<VesselAnswer>(`/api/gis/vessels?${query}`)
+  },
   gisScout: (input: { prompt: string; assetTypes: string[]; valueLabel?: string }) =>
     request<{
       filters: {

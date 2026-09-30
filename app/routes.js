@@ -182,7 +182,7 @@ import {
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
-import { COASTAL_MARKETS, marketBox } from '../src/lib/vessels.ts'
+import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
@@ -424,6 +424,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
             google: Boolean(env.GOOGLE_MAPS_API_KEY),
             sms: smsConfigured(env),
             email: emailConfigured(env),
+            // The live ship feed: its key, and the object that holds the stream.
+            ships: Boolean(env.AISSTREAM_API_KEY && env.VESSELS),
             // Which extraction provider will answer — anthropic, gemini or
             // grok — or null when no key is set. "misconfigured" flags an
             // AI_PROVIDER naming a provider this list does not know.
@@ -2447,6 +2449,37 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   /*
+   * Where every market is, so the map can be the way between them.
+   *
+   * Each market's box comes out of its own parcel archive's header, which
+   * says the extent of the tiles inside it: one small range read per market,
+   * no database, and kept at the edge for six hours, so a day of viewers
+   * costs a few dozen reads at most. A market whose archive cannot be read
+   * is left out rather than guessed at.
+   */
+  app.get('/api/gis/extents', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    return edgeCached(c, 'extents', 6 * 60 * 60, async () => {
+      const listed = await catalogJson('markets.json').catch(() => null)
+      const markets = (Array.isArray(listed) ? listed : listed?.markets ?? []).filter((m) => m?.status === 'live')
+      const extents = await Promise.all(
+        markets.map(async (m) => {
+          try {
+            const header = await archiveFor(`${m.slug}/parcels.pmtiles`).getHeader()
+            const box = [header.minLon, header.minLat, header.maxLon, header.maxLat].map((v) => Math.round(v * 1e4) / 1e4)
+            if (!box.every(Number.isFinite) || box[2] <= box[0] || box[3] <= box[1]) return null
+            return { slug: m.slug, name: m.name, region: m.region, box, center: [header.centerLon, header.centerLat] }
+          } catch {
+            return null
+          }
+        }),
+      )
+      return c.json({ extents: extents.filter(Boolean) })
+    })
+  })
+
+  /*
    * One search: the page, the ids to highlight, and what the whole match adds
    * up to. Three readings of one predicate, so the report can never disagree
    * with the map beside it.
@@ -3046,7 +3079,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * one request to the object rather than one each; the object still hears
    * from each data centre often enough to know the market is being watched.
    */
-  const marketCenters = new Map()
+  const marketBoxes = new Map()
+  const WATER_MARGIN = 0.1
   app.get('/api/gis/vessels', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
@@ -3060,26 +3094,47 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!env.VESSELS || !env.AISSTREAM_API_KEY) {
       return c.json({ status: 'off', note: 'Live ship positions are not switched on here yet.', ships: [] })
     }
-    let center = marketCenters.get(market)
-    if (!center) {
-      const meta = await catalogJson(`${market}/meta.json`).catch(() => null)
-      center = Array.isArray(meta?.center) && meta.center.every(Number.isFinite) ? meta.center : null
-      if (!center) return c.json({ error: 'That market is not published yet.' }, 404)
-      marketCenters.set(market, center)
+    /*
+     * The water listened to is the whole county, from its parcel archive's
+     * own extent plus a margin for the harbour beyond the last lot: Los
+     * Angeles from Malibu through the Port of Long Beach to Catalina. A
+     * market whose archive cannot be read falls back to a box around its
+     * centre.
+     */
+    let box = marketBoxes.get(market)
+    if (!box) {
+      const header = await archiveFor(`${market}/parcels.pmtiles`).getHeader().catch(() => null)
+      const edges = header ? [header.minLon, header.minLat, header.maxLon, header.maxLat] : null
+      if (edges && edges.every(Number.isFinite) && edges[2] > edges[0] && edges[3] > edges[1]) {
+        box = [edges[0] - WATER_MARGIN, edges[1] - WATER_MARGIN, edges[2] + WATER_MARGIN, edges[3] + WATER_MARGIN].map(
+          (v) => Math.round(v * 1e3) / 1e3,
+        )
+      } else {
+        const meta = await catalogJson(`${market}/meta.json`).catch(() => null)
+        const center = Array.isArray(meta?.center) && meta.center.every(Number.isFinite) ? meta.center : null
+        if (!center) return c.json({ error: 'That market is not published yet.' }, 404)
+        box = marketBox(center)
+      }
+      marketBoxes.set(market, box)
     }
-    const [w, s, e, n] = marketBox(center)
+    const [w, s, e, n] = box
+    // The caller's view narrows what comes back, never what is listened to.
+    const asked = ['w', 's', 'e', 'n'].map((k) => Number(c.req.query(k)))
+    const view = asked.every(Number.isFinite) && asked[2] > asked[0] && asked[3] > asked[1] ? snapView(asked) : null
+    const params = { market, w, s, e, n }
+    if (view) Object.assign(params, { vw: view[0], vs: view[1], ve: view[2], vn: view[3] })
     return edgeCached(
       c,
       `vessels/${market}`,
       15,
       async () => {
         const hub = env.VESSELS.get(env.VESSELS.idFromName('ais'))
-        const answer = await hub.fetch(`https://vessels/watch?${new URLSearchParams({ market, w, s, e, n })}`)
+        const answer = await hub.fetch(`https://vessels/watch?${new URLSearchParams(params)}`)
         const body = await answer.json().catch(() => ({ status: 'error', note: 'The ship feed gave no answer.', ships: [] }))
         return c.json(body, answer.ok ? 200 : 502, { 'x-vessels-status': String(body.status ?? '') })
       },
       // Only a streaming answer is worth sharing; "connecting" is a moment.
-      { params: { market }, cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-vessels-status') === 'live' },
+      { params: { market, view: view ? view.join(',') : '' }, cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-vessels-status') === 'live' },
     )
   })
 

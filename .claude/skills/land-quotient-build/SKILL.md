@@ -105,7 +105,8 @@ run with the GitHub Actions tools rather than polling.
 - `app/lib/vessels.js` holds `readMessage` and `VesselHub`: one aisstream.io WebSocket, subscribed to the boxes of markets polled in the last 90 s, closed when nobody polls. Feed rules it obeys: 3 connections per account and per IP, subscribe within 3 s, at most one update a second, no browser connections.
 - `worker/vessels.js` is the Durable Object (`VESSELS` → `VesselHubObject`, one instance named `ais`), swept by a 30 s alarm; nothing is stored.
 - `GET /api/gis/vessels?market=` builds the box from the market's catalogue centre (never from the caller) and edge-caches live answers for 15 s. Without `AISSTREAM_API_KEY` (a Worker secret) it answers `status: 'off'`.
-- The Gis view polls every 20 s while the Ships layer is on and the tab visible. A bad key shows as a close before the first message.
+- The feed listens to each market's whole parcel extent + 0.1° (LA includes Long Beach and Catalina). Viewers stay subscribed 11 min after their last poll; the Gis view polls every 10 min while the Ships layer is on and the tab visible (5 s while connecting, 1 min for the first 4 min, and at once on a pan to new water). Only ships inside the snapped view come back; wider than 0.9° returns a count only. A bad key shows as a close before the first message; `/api/health` reports `integrations.ships`.
+- The parcel map navigates itself: `/api/gis/extents` (parcel archive headers, edge-cached 6 h) gives each market's box; zoomed out (< 9) each market is a clickable label; at zoom ≥ 11 the market under the map centre opens without moving the camera; at ≥ 12 neighbouring markets draw lot lines and a click on one opens that market on that parcel. Layers switched on carry across markets.
 
 ## prospector: the data factory
 

@@ -18,7 +18,7 @@ import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
-import { COASTAL_MARKETS, VESSEL_COLORS, vesselFeatures, type VesselAnswer } from '../lib/vessels'
+import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, viewTooWide, type VesselAnswer } from '../lib/vessels'
 import type {
   AskAnswer,
   AskRow,
@@ -250,6 +250,15 @@ interface PublishedLayer {
   filter?: string
   attribution?: string
   fields?: string[]
+}
+
+/** Where a market is, from its parcel archive's header. */
+interface MarketExtent {
+  slug: string
+  name: string
+  region?: string
+  box: [number, number, number, number]
+  center: [number, number]
 }
 
 interface OwnerIndex {
@@ -1206,6 +1215,31 @@ export default function Gis({
   const [viewBusy, setViewBusy] = useState(false)
   const [viewNote, setViewNote] = useState<{ tone: 'ok' | 'warn'; text: string } | null>(null)
   const here = useRef<{ lat: number; lng: number; zoom: number } | null>(null)
+  /*
+   * What is on screen, snapped to a two-kilometre grid so a nudge of the map
+   * is not a new question. Ships are asked for by it; "wide" when the view
+   * is too big to draw ships for, so panning around at county zoom asks
+   * nothing new.
+   */
+  const viewRef = useRef<[number, number, number, number] | null>(null)
+  const [viewKey, setViewKey] = useState('')
+  /** The snapped view and zoom, for the markets that follow the camera. */
+  const [viewBox, setViewBox] = useState<{ box: [number, number, number, number]; zoom: number } | null>(null)
+  /** Set to a market chosen by name, so its opening view is flown to once it loads. */
+  const frameNext = useRef<string | null>(null)
+  /** A parcel clicked in a neighbouring market, opened once that market has loaded. */
+  const pendingPick = useRef<{ slug: string; id: string | number } | null>(null)
+  const onViewChange = useCallback((where: { lat: number; lng: number; zoom: number; bounds?: [number, number, number, number] }) => {
+    here.current = where
+    if (!where.bounds) return
+    const snapped = snapView(where.bounds)
+    viewRef.current = snapped
+    setViewKey(viewTooWide(snapped) ? 'wide' : snapped.join(','))
+    const zoom = Math.round(where.zoom * 2) / 2
+    setViewBox((current) =>
+      current && current.zoom === zoom && current.box.join(',') === snapped.join(',') ? current : { box: snapped, zoom },
+    )
+  }, [])
   /** Filled by the map while it lives; the export buttons ask at click time. */
   const captureMap = useRef<(() => Promise<HTMLCanvasElement | null>) | null>(null)
   const [snapshotting, setSnapshotting] = useState<'png' | 'pdf' | null>(null)
@@ -1266,7 +1300,9 @@ export default function Gis({
         // then the first in the catalogue.
         const isLive = (slug: string | null | undefined) => live.find((m) => m.slug === slug)?.slug
         const preferred = isLive(lastMarket()) || isLive(defaultMarket)
-        setActive((current) => current || preferred || live[0]?.slug || null)
+        const opening = activeRef.current || preferred || live[0]?.slug || null
+        frameNext.current = opening
+        setActive(opening)
       })
       .catch(() => {
         bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not reach the parcel catalogue.')))
@@ -1278,6 +1314,70 @@ export default function Gis({
   useEffect(() => {
     if (active && markets.some((m) => m.slug === active)) rememberMarket(active)
   }, [active, markets])
+
+  /*
+   * The map as the way between markets.
+   *
+   * Every market's box, from its parcel archive, fetched once. Zoomed out,
+   * each is a named marker to click; zoomed in, the market under the centre
+   * of the map becomes the open one without moving the camera, and the
+   * markets beside it are drawn as lot lines, so a border is not a hole.
+   */
+  const [extents, setExtents] = useState<MarketExtent[]>([])
+  useEffect(() => {
+    api
+      .gisExtents()
+      .then((answer) => setExtents(answer.extents ?? []))
+      .catch(() => setExtents([]))
+  }, [])
+
+  const openMarket = useCallback((slug: string) => {
+    frameNext.current = slug
+    setActive(slug)
+  }, [])
+
+  /*
+   * Only a move of the map switches market, never the arrival of the market
+   * list or a market being opened: the map's own opening view, before the
+   * chosen city has been flown to, would otherwise read as panning into
+   * whatever city that view happens to show.
+   */
+  const extentsRef = useRef<MarketExtent[]>([])
+  extentsRef.current = extents
+  useEffect(() => {
+    const open = activeRef.current
+    const all = extentsRef.current
+    if (!viewBox || viewBox.zoom < 11 || !all.length || !open || frameNext.current) return
+    const [w, s, e, n] = viewBox.box
+    const lng = (w + e) / 2
+    const lat = (s + n) / 2
+    const holds = (x: MarketExtent) => lng >= x.box[0] && lng <= x.box[2] && lat >= x.box[1] && lat <= x.box[3]
+    const current = all.find((x) => x.slug === open)
+    if (current && holds(current)) return
+    const area = (x: MarketExtent) => (x.box[2] - x.box[0]) * (x.box[3] - x.box[1])
+    const next = all.filter(holds).sort((a, b) => area(a) - area(b))[0]
+    if (next && next.slug !== open) setActive(next.slug)
+  }, [viewBox])
+
+  const neighbours = useMemo(() => {
+    if (!viewBox || viewBox.zoom < 12) return null
+    const [w, s, e, n] = viewBox.box
+    const found = extents
+      .filter((x) => x.slug !== active && x.box[0] < e && x.box[2] > w && x.box[1] < n && x.box[3] > s)
+      .slice(0, 4)
+      .map((x) => ({ slug: x.slug, url: `${CATALOG}/${x.slug}/parcels.pmtiles` }))
+    return found.length ? found : null
+  }, [viewBox, extents, active])
+
+  const onNeighbourParcel = useCallback((slug: string, id: string | number) => {
+    pendingPick.current = { slug, id }
+    setActive(slug)
+  }, [])
+
+  const places = useMemo(
+    () => extents.map((x) => ({ id: x.slug, label: x.name, lng: x.center[0], lat: x.center[1] })),
+    [extents],
+  )
 
   // Meta first: it carries where the market opens and how it is coloured.
   useEffect(() => {
@@ -1298,15 +1398,32 @@ export default function Gis({
     setOwners(null)
     setOwnerPick(null)
     setPublished([])
-    setLayerOn({})
+    // Which layers are on, and how they are painted, travel with the viewer:
+    // zoning, flood and permits carry the same ids in every market, so
+    // panning from one county into the next keeps the same map on.
     setLayerData({})
-    setLayerStyle({})
     setLayerFilter({})
     setFiltering(null)
     setLayerColorBy({})
     setError(null)
+    const opened = active
     catalogue(`${active}/meta.json`)
-      .then(setMeta)
+      .then((next: MarketMeta) => {
+        setMeta(next)
+        // A market chosen by name opens on its own view; one reached by
+        // panning into it leaves the camera exactly where it is.
+        if (frameNext.current === opened) {
+          frameNext.current = null
+          setLayerView({ center: next.center, zoom: Math.max(next.zoom, PARCEL_MIN_ZOOM), key: Date.now() })
+        }
+        // A lot clicked in this market while another was open is opened
+        // now, once the switch has cleared the old market's selection.
+        const pick = pendingPick.current
+        if (pick?.slug === opened) {
+          pendingPick.current = null
+          setSelected(pick.id)
+        }
+      })
       .catch(() => {
         bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not load that market.')))
       })
@@ -1652,9 +1769,9 @@ export default function Gis({
   /*
    * Ships, live, where the market has water that ships report from.
    *
-   * Asked for every twenty seconds while the layer is on and the tab is in
-   * view, and never otherwise: the server keeps its feed open only while
-   * someone is asking, so a layer left off costs nothing anywhere.
+   * Asked for while the layer is on and the tab is in view, and never
+   * otherwise: the server keeps its feed open only while someone is asking,
+   * so a layer left off costs nothing anywhere.
    */
   const coastal = Boolean(active && COASTAL_MARKETS.has(active))
   const [vessels, setVessels] = useState<VesselAnswer | null>(null)
@@ -1672,7 +1789,7 @@ export default function Gis({
       }
       let next: VesselAnswer
       try {
-        next = await api.gisVessels(active)
+        next = await api.gisVessels(active, viewRef.current)
       } catch (cause) {
         const body = (cause as { body?: Partial<VesselAnswer> }).body
         next = { status: 'error', note: body?.note ?? (cause as Error).message, ships: [] }
@@ -1681,16 +1798,26 @@ export default function Gis({
       // A failed poll keeps the ships already drawn; they are minutes old at
       // worst, and a map that empties on one bad answer reads as no ships.
       setVessels((current) => (next.status === 'error' && current?.ships.length ? { ...current, status: 'error', note: next.note } : next))
-      // Quicker while the feed is still opening, so the first ships appear
-      // in seconds rather than after a full interval.
-      timer = setTimeout(tick, next.status === 'connecting' ? 5000 : next.status === 'off' ? 30000 : 20000)
+      /*
+       * Every ten minutes while the layer is on and the tab is in view; the
+       * server tracks every boat in between. Quicker only at the start:
+       * seconds while the feed opens, then once a minute for the first few
+       * minutes while ships at anchor, which report every three, fill in.
+       */
+      const young = next.since != null && Date.now() - next.since < 4 * 60 * 1000
+      timer = setTimeout(
+        tick,
+        next.status === 'connecting' ? 5000 : next.status === 'off' ? 60000 : young ? 60000 : 10 * 60 * 1000,
+      )
     }
     void tick()
     return () => {
       stopped = true
       if (timer) clearTimeout(timer)
     }
-  }, [layerOn.vessels, active, coastal])
+    // Re-asked at once when the view moves to new water, rather than at
+    // the next tick.
+  }, [layerOn.vessels, active, coastal, viewKey])
 
   const vesselsGeo = useMemo(() => (vessels ? vesselFeatures(vessels.ships) : null), [vessels])
 
@@ -1707,9 +1834,11 @@ export default function Gis({
         ? 'Not switched on yet'
         : vessels.status === 'error'
           ? 'Feed interrupted'
-          : vessels.status === 'connecting' && !shown
+          : vessels.status === 'connecting' && !shown && !vessels.total
             ? 'Connecting to the feed'
-            : `${shown.toLocaleString()} ${shown === 1 ? 'ship' : 'ships'} reporting`
+            : vessels.tooWide
+              ? `Zoom in to see ${vessels.total ? `${vessels.total.toLocaleString()} ships` : 'ships'}`
+              : `${shown.toLocaleString()} ${shown === 1 ? 'ship' : 'ships'} in view`
     return {
       id: 'vessels',
       label: 'Ships (live)',
@@ -3311,22 +3440,16 @@ export default function Gis({
            * rather than a camera one step too far out. The floor is the gate
            * itself, so the two can never drift apart.
            */
-          view={
-            layerView ??
-            (meta
-              ? {
-                  center: meta.center,
-                  zoom: Math.max(meta.zoom, PARCEL_MIN_ZOOM),
-                  key: active ?? '',
-                }
-              : null)
-          }
+          view={layerView}
+          neighbours={neighbours}
+          onNeighbourParcel={onNeighbourParcel}
+          places={places}
+          placesUntilZoom={9}
+          onPlace={openMarket}
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.
-          onViewChange={(where) => {
-            here.current = where
-          }}
+          onViewChange={onViewChange}
           captureRef={captureMap}
           // A layer feature under a selected parcel joins that parcel's
           // panel as its own section; with no parcel open it gets the panel
@@ -3585,7 +3708,7 @@ export default function Gis({
                 id="gis-market"
                 className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink"
                 value={active ?? ''}
-                onChange={(event) => setActive(event.target.value)}
+                onChange={(event) => openMarket(event.target.value)}
               >
                 {markets.map((entry) => (
                   <option key={entry.slug} value={entry.slug}>
@@ -3904,7 +4027,9 @@ export default function Gis({
                           ? 'Opening the live feed…'
                           : vessels.status === 'off' || vessels.status === 'error'
                             ? vessels.note || 'The live feed is not answering.'
-                            : `Positions as ships broadcast them, refreshed every 20 seconds.${
+                            : vessels.tooWide
+                              ? `${(vessels.total ?? 0).toLocaleString()} ships are reporting across the market. Zoom in to a stretch of water to see them; a whole county of ships at once is only a smear of dots.`
+                              : `Every boat broadcasting in the market is tracked while this layer is on; the map refreshes every 10 minutes, and at once when you move to new water.${
                                 vessels.since && Date.now() - vessels.since < 5 * 60 * 1000
                                   ? ' Ships at anchor report every few minutes, so more appear over the first five.'
                                   : ''

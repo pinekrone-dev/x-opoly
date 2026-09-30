@@ -46,6 +46,38 @@ export function marketBox(center: [number, number]): [number, number, number, nu
   return [lng - REACH.lng, lat - REACH.lat, lng + REACH.lng, lat + REACH.lat]
 }
 
+/**
+ * The widest view, in degrees either way, that ships are drawn for.
+ *
+ * About a city's worth at street-to-district zoom. A whole county of ships is
+ * a smear of dots that says nothing, and it is also the biggest answer the
+ * server would ever send, every twenty seconds; zoomed out, the layer says
+ * how many ships are about and asks to be zoomed in instead.
+ */
+export const VIEW_MAX_SPAN = 0.9
+
+/** The most ships one answer carries, however busy the harbour. */
+export const VIEW_SHIP_CAP = 1500
+
+/**
+ * A view snapped outward to a 0.02 degree grid, about two kilometres.
+ *
+ * Two people looking at nearly the same stretch of water ask the same
+ * question, so the answer can be shared at the edge; a pan of a few hundred
+ * metres does not make a new one.
+ */
+export function snapView(bounds: [number, number, number, number]): [number, number, number, number] {
+  const step = 0.02
+  const down = (v: number) => Math.round(Math.floor(v / step) * step * 100) / 100
+  const up = (v: number) => Math.round(Math.ceil(v / step) * step * 100) / 100
+  return [down(bounds[0]), down(bounds[1]), up(bounds[2]), up(bounds[3])]
+}
+
+/** Whether a view is too wide to draw ships for. */
+export function viewTooWide(bounds: [number, number, number, number]): boolean {
+  return bounds[2] - bounds[0] > VIEW_MAX_SPAN || bounds[3] - bounds[1] > VIEW_MAX_SPAN
+}
+
 /** The groups a ship is coloured by, in legend order. */
 export const VESSEL_COLORS: Record<string, string> = {
   Cargo: '#2a78d6',
@@ -132,6 +164,10 @@ export interface VesselAnswer {
   /** live: streaming; connecting: asked, not yet answered; off: no key here; error: the stream refused. */
   status: 'live' | 'connecting' | 'off' | 'error'
   note?: string | null
+  /** Ships heard anywhere in the market, whether or not they are in view. */
+  total?: number
+  /** The view was wider than ships are drawn for; `ships` is empty and `total` says what is out there. */
+  tooWide?: boolean
   /** When the stream started for this market, epoch milliseconds. */
   since?: number | null
   ships: Ship[]

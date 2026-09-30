@@ -20,12 +20,18 @@
  * connection.
  */
 
-import { marketBox, REACH } from '../../src/lib/vessels.ts'
+import { marketBox, REACH, VIEW_SHIP_CAP, viewTooWide } from '../../src/lib/vessels.ts'
 
 export const STREAM_URL = 'https://stream.aisstream.io/v0/stream'
 
-/** A viewer who stops asking is gone after this long. */
-export const WATCH_MS = 90 * 1000
+/**
+ * A viewer who stops asking is gone after this long.
+ *
+ * Just over the map's ten-minute refresh, so the stream keeps tracking every
+ * boat between one refresh and the next while the layer is on, and closes
+ * about ten minutes after the last viewer switches it off or leaves.
+ */
+export const WATCH_MS = 11 * 60 * 1000
 
 /** A ship silent this long has left, switched off, or sailed out of range. */
 export const FRESH_MS = 20 * 60 * 1000
@@ -172,25 +178,33 @@ export class VesselHub {
     this.opening = null
   }
 
-  /** A viewer's poll: keep their market in the subscription and answer with its ships. */
-  async watch(slug, box) {
+  /**
+   * A viewer's poll: keep their market in the subscription and answer with
+   * its ships. The whole market is listened to, so a pan finds ships that
+   * are already known, but only the ships inside `view` are sent back.
+   */
+  async watch(slug, box, view = null) {
     const now = this.now()
     this.watches.set(slug, { box, until: now + WATCH_MS })
     this.sweep(now)
     await this.ensure()
-    return this.answer(slug, box)
+    return this.answer(slug, box, view)
   }
 
-  answer(slug, box) {
+  answer(slug, box, view = null) {
     if (!this.key) {
       return { status: 'off', note: 'Live ship positions are not switched on here yet.', ships: [] }
     }
     const now = this.now()
+    const tooWide = Boolean(view && viewTooWide(view))
     const ships = []
+    let total = 0
     for (const [m, ship] of this.ships) {
       if (ship.la == null || now - ship.t > FRESH_MS) continue
       if (!inside(box, ship.la, ship.lo)) continue
-      const { s, ...shown } = ship
+      total += 1
+      if (tooWide || (view && !inside(view, ship.la, ship.lo)) || ships.length >= VIEW_SHIP_CAP) continue
+      const { s: _heard, ...shown } = ship
       ships.push({ m, ...shown })
     }
     const status = this.state === 'live' ? 'live' : this.state === 'error' ? 'error' : 'connecting'
@@ -198,6 +212,8 @@ export class VesselHub {
       status,
       note: status === 'error' ? this.error : null,
       since: this.since,
+      total,
+      tooWide,
       ships,
     }
   }
