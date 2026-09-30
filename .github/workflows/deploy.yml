@@ -35,6 +35,10 @@ on:
     branches:
       - main
       - claude/sitemapcre-tool-clone-qyq7jy
+    # A tagging request changes no code, so it starts tag-parcels.yml and
+    # not a deploy.
+    paths-ignore:
+      - ops/**
   workflow_dispatch: # adds a "Run workflow" button in the Actions tab
 
 # One deploy at a time per branch, queued rather than cancelled.

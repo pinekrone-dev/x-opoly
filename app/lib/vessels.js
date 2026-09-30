@@ -36,6 +36,10 @@ export const WATCH_MS = 11 * 60 * 1000
 /** A ship silent this long has left, switched off, or sailed out of range. */
 export const FRESH_MS = 20 * 60 * 1000
 
+/** How far back a ship's trail reaches, and how many points it keeps. */
+export const TRAIL_MS = 30 * 60 * 1000
+export const TRAIL_POINTS = 40
+
 /** More ships than any US port holds at once; a guard, not a budget. */
 export const SHIP_CAP = 20000
 
@@ -204,8 +208,10 @@ export class VesselHub {
       if (!inside(box, ship.la, ship.lo)) continue
       total += 1
       if (tooWide || (view && !inside(view, ship.la, ship.lo)) || ships.length >= VIEW_SHIP_CAP) continue
-      const { s: _heard, ...shown } = ship
-      ships.push({ m, ...shown })
+      const { s: _heard, tr, ...shown } = ship
+      // The trail goes out as [lng, lat] pairs, only when there is one to draw.
+      const trail = (tr ?? []).filter((p) => now - p[2] <= TRAIL_MS).map((p) => [p[0], p[1]])
+      ships.push(trail.length > 1 ? { m, ...shown, tr: trail } : { m, ...shown })
     }
     const status = this.state === 'live' ? 'live' : this.state === 'error' ? 'error' : 'connecting'
     return {
@@ -362,7 +368,20 @@ export class VesselHub {
     if (!known && this.ships.size >= SHIP_CAP) return
     // `s` is when anything was last heard from it, so a name that arrives
     // before the first position is kept until the position comes.
-    this.ships.set(change.mmsi, { ...(known ?? { t: 0 }), ...change.patch, s: this.now() })
+    const next = { ...(known ?? { t: 0 }), ...change.patch, s: this.now() }
+    /*
+     * The trail: where the ship has been over the last half hour, a point
+     * each time it has moved some fifty metres, so a moored ship keeps a
+     * dot and a moving one draws its wake. Kept as [lng, lat, time].
+     */
+    if (change.patch.la != null) {
+      const trail = (known?.tr ?? []).filter((p) => next.t - p[2] <= TRAIL_MS)
+      const last = trail[trail.length - 1]
+      const moved = !last || Math.abs(last[0] - next.lo) + Math.abs(last[1] - next.la) > 0.0005
+      if (moved) trail.push([next.lo, next.la, next.t])
+      next.tr = trail.slice(-TRAIL_POINTS)
+    }
+    this.ships.set(change.mmsi, next)
   }
 
   /**

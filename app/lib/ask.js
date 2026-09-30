@@ -62,6 +62,9 @@ export function areaSmallEnough(box) {
 
 const ACTIONS = new Set(['show', 'export', 'count'])
 
+/** "Under-built", when no share is named: buildings on at most 15% of the lot. */
+export const UNDERBUILT = 0.15
+
 const lower = (value) => String(value ?? '').trim().toLowerCase()
 
 /**
@@ -99,6 +102,9 @@ export function normalizePlan(raw, vocab = {}, headers = []) {
     zoningNot: clamp(raw?.zoningNot, vocab.zoningCategories),
     zoningCodes: clamp(raw?.zoningCodes, vocab.zoningCodes),
     flood: vocab.hasFlood ? flood : null,
+    // What stands on the lot, once the market's parcels carry it.
+    buildings: vocab.hasBuildings && (raw?.buildings === 'vacant' || raw?.buildings === 'built') ? raw.buildings : null,
+    coverageMax: vocab.hasBuildings && raw?.coverageMax != null && Number(raw.coverageMax) > 0 && Number(raw.coverageMax) <= 1 ? Number(raw.coverageMax) : null,
     columns,
     explanation: typeof raw?.explanation === 'string' ? raw.explanation.slice(0, 300) : null,
     // The judgement no column holds, as one yes/no question to rate each
@@ -139,6 +145,10 @@ export function heuristicPlan(prompt, vocab = {}, headers = []) {
       : 'in'
   }
 
+  if (/\b(no|without)\s+(a\s+|any\s+)?(buildings?|structures?)\b|\bunbuilt\b|\bnothing built\b|\bempty (lots?|land|parcels?)\b/i.test(text)) raw.buildings = 'vacant'
+  else if (/\b(with|has|have|having)\s+(a\s+|any\s+)?(buildings?|structures?)\b|\bbuilt[- ]on\b/i.test(text)) raw.buildings = 'built'
+  if (/\bunder-?(built|utili[sz]ed|improved|developed)\b|\blow (lot |site )?coverage\b/i.test(text)) raw.coverageMax = UNDERBUILT
+
   if (/zon(ed|ing|e)\b/i.test(text) || /\bnon-?\w/i.test(text)) {
     const words = lower(text)
     raw.zoningCategories = []
@@ -163,7 +173,7 @@ export function heuristicPlan(prompt, vocab = {}, headers = []) {
 
   const plan = normalizePlan(raw, vocab, headers)
   const empty =
-    base.empty && !plan.flood && !plan.zoningCategories.length && !plan.zoningNot.length && !plan.zoningCodes.length && !headers.length
+    base.empty && !plan.flood && !plan.buildings && plan.coverageMax == null && !plan.zoningCategories.length && !plan.zoningNot.length && !plan.zoningCodes.length && !headers.length
   return { plan, empty }
 }
 
@@ -181,7 +191,9 @@ export function planPrompt(prompt, vocab = {}, upload = null) {
     'keyword (an owner or street name to search, or null), flood ("in" for parcels in a FEMA special flood',
     'hazard area, "out" for parcels outside one, or null), zoningCategories and zoningCodes (arrays, from the',
     'lists given, to include), zoningNot (array of zoning categories to leave out: "anything but residential"',
-    'is zoningNot ["Residential"], not zoningCategories), columns ({address, city, zip, parcel}: the upload header names holding each, or null),',
+    'is zoningNot ["Residential"], not zoningCategories), buildings ("vacant" for lots with no building on them, "built" for',
+    'lots with at least one, or null), coverageMax (for "under-built" or "underutilized" lots: the most of the lot buildings',
+    `may cover, 0 to 1, ${UNDERBUILT} unless a share is named; otherwise null), columns ({address, city, zip, parcel}: the upload header names holding each, or null),`,
     'score (when the request asks for a judgement no column holds, such as suitability for a use, "good for a',
     'car wash", "likely redevelopment", "fits a small warehouse user": one yes/no question to rate each parcel',
     'against, e.g. "Would this parcel suit a drive-through car wash?"; otherwise null),',
@@ -194,6 +206,7 @@ export function planPrompt(prompt, vocab = {}, upload = null) {
     `Zoning categories: ${list(vocab.zoningCategories, 40)}`,
     `Zoning codes: ${list(vocab.zoningCodes, 150)}`,
     `Flood data available: ${vocab.hasFlood ? 'yes' : 'no'}`,
+    `Building footprints available: ${vocab.hasBuildings ? 'yes' : 'no'}`,
   ]
   if (upload) {
     lines.push(`Upload columns: ${list(upload.headers, 60)}`)
@@ -225,6 +238,17 @@ export function passesAttributes(parcel, plan) {
   if (plan.keyword) {
     const hay = `${parcel.ad ?? ''} ${parcel.ow ?? ''} ${parcel.gid ?? ''}`.toLowerCase()
     if (!hay.includes(plan.keyword.toLowerCase())) return `Does not mention "${plan.keyword}"`
+  }
+  if (plan.buildings || plan.coverageMax != null) {
+    if (parcel.bn == null) return 'Buildings not yet mapped for this parcel'
+    if (plan.buildings === 'vacant' && parcel.bn > 0) return `${parcel.bn} ${parcel.bn === 1 ? 'building' : 'buildings'} on the lot`
+    if (plan.buildings === 'built' && !(parcel.bn > 0)) return 'No building on the lot'
+    if (plan.coverageMax != null) {
+      const lot = acres * 4046.86
+      if (!(lot > 0)) return 'Lot size unknown'
+      const share = (Number(parcel.ba) || 0) / lot
+      if (share > plan.coverageMax) return `Buildings cover ${Math.round(share * 100)}% of the lot`
+    }
   }
   return null
 }
@@ -267,6 +291,9 @@ export function describePlan(plan, { upload = false } = {}) {
   if (plan.zoningNot?.length) parts.push(`zoned anything but ${plan.zoningNot.join(' or ')}`)
   if (plan.flood === 'in') parts.push('in a FEMA flood hazard area')
   if (plan.flood === 'out') parts.push('outside FEMA flood hazard areas')
+  if (plan.buildings === 'vacant') parts.push('with no building on the lot')
+  if (plan.buildings === 'built') parts.push('with a building on the lot')
+  if (plan.coverageMax != null) parts.push(`with buildings covering ${Math.round(plan.coverageMax * 100)}% of the lot or less`)
   if (plan.keyword) parts.push(`mentioning "${plan.keyword}"`)
   const what = upload ? 'Matching your list to parcels' : 'Finding parcels'
   const verb = plan.action === 'export' ? ', as a file' : plan.action === 'count' ? ', counted' : ', on the map'

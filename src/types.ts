@@ -538,6 +538,8 @@ export interface MarketStatus {
   breaks?: number[]
   /** Every parcel carries its zoning and flood tags, so those are filters. */
   tagged?: boolean
+  /** Every parcel carries what stands on it, from Overture's footprints. */
+  btagged?: boolean
   builtAt?: string | null
 }
 
@@ -555,6 +557,10 @@ export interface ParcelQuery {
   zoningCodes?: string[]
   /** Inside or outside FEMA's special flood hazard area. */
   flood?: 'in' | 'out' | null
+  /** No building on the lot, or at least one. */
+  buildings?: 'vacant' | 'built' | null
+  /** Buildings cover at most this share of the lot, 0 to 1. */
+  coverageMax?: number | null
   /** Only parcels touching this area of the map, west-south-east-north. */
   box?: [number, number, number, number] | null
 }
@@ -592,6 +598,10 @@ export interface AskPlan {
   score?: string | null
   zoningCodes: string[]
   flood: 'in' | 'out' | null
+  /** No building on the lot ("vacant"), or at least one ("built"). */
+  buildings?: 'vacant' | 'built' | null
+  /** Under-built: buildings cover at most this share of the lot. */
+  coverageMax?: number | null
   columns: { address: string | null; city: string | null; zip: string | null; parcel: string | null } | null
   explanation: string | null
 }
@@ -613,6 +623,10 @@ export interface AskRow {
   floodZone: string | null
   floodStatus: 'in' | 'partly' | 'out' | null
   baseFloodElevation: number | null
+  /** Buildings on the lot and their footprint in square metres, once the market is tagged. */
+  buildings?: number | null
+  footprint?: number | null
+  tallest?: number | null
   /** 'likely' when Jev settled a near match on an uploaded address. */
   match: 'exact' | 'street' | 'likely' | 'none'
   passes: boolean

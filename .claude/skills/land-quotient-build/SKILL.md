@@ -113,6 +113,14 @@ run with the GitHub Actions tools rather than polling.
 - Search filters: `zc`, `znot`, `zn`, `flood=in|out` query params. "Anything but X" (`zoningNot`) requires a mapped district. Ask answers zoning/flood questions as whole-county filters once `tagged`; before that it checks parcel by parcel (CHECK_LIMIT).
 - UI: Filter tab zoning chips cycle any → only → anything but; flood Any/Outside/Inside. "Open as a table" (Report tab and Ask) shows the current search 200 rows a page with CSV export.
 
+### Buildings (Overture footprints)
+
+- `src/lib/buildings.ts`: `OVERTURE_BUILDINGS_URL` (Overture's own public PMTiles, CORS `*`, z0-14, layer `building`, ODbL; pin the release in `OVERTURE_RELEASE`), `buildingsFor(boxes, readTile)` → `{count, area m², tallest m}` per box (null = a tile could not be read, which is unknown, not vacant). A building goes to the smallest box holding its centre; clipped copies in a neighbour tile's buffer are skipped.
+- Parcel card "Buildings" section reads it client-side for the open lot, in every market. The map's Buildings layer draws the same archive straight from Overture from zoom 14 (an extra layer whose `tiles` is an absolute URL is used as-is).
+- Tags: `parcels.bn` (count), `ba` (footprint m²), `bh` (tallest m); `parcel_markets.btagged`. Written only from GitHub Actions in this repo (`.github/workflows/tag-parcels.yml` → `scripts/tag-buildings.mjs`): pages `action=boxes`, walks z14 tiles in map order, posts `action=building-tags` 5000 rows at a time (`&done=1` last). Never on the Worker: the store is not in map order, so a Worker batch refetches the same tiles thousands of times.
+- Start a run: edit `ops/tag-request.json` on the live branch (`{"markets": [...], "what": "zoning,buildings", "reset": false}`); that path is ignored by deploy.yml. `what=zoning` also drives the Worker's zoning/flood tag pass from here, free (this repo is public).
+- Filters: `bld=vacant|built`, `cov=0..1` (buildings cover at most that share of the lot; untagged lots never pass). Ask plan `buildings` / `coverageMax` ("no building", "empty lots", "underutilized" → 15%), only once `btagged`; exports carry buildings, footprint sq ft, tallest ft; Jev ratings are told what stands on the lot.
+
 ### Ask paging and limits
 
 - An answer whose plan the AI wrote (`source: 'ai'`) comes back `AI_PAGE` = 100 records at a time with `page: { size, offset, next, total }`; the client's "Next 100" posts the same `plan`, `source` and `offset`, so no second model call is made. Upload rows page by file row; a market-wide question pages by parcels that pass, walking the store 200 at a time up to `CHECK_LIMIT`.

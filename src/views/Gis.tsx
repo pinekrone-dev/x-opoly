@@ -18,7 +18,8 @@ import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
-import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, viewTooWide, type VesselAnswer } from '../lib/vessels'
+import { OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
+import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 
 /** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
 const AREA_MAX_SPAN = 0.35
@@ -254,6 +255,26 @@ interface PublishedLayer {
   filter?: string
   attribution?: string
   fields?: string[]
+}
+
+/*
+ * Every building outline Overture holds, in every market, straight from
+ * Overture's own public archive: nothing of ours is stored or served for it.
+ * Drawn from street zoom in, where outlines are worth seeing and a screen
+ * needs only a handful of tiles.
+ */
+const BUILDINGS_LAYER: PublishedLayer = {
+  id: 'buildings',
+  label: 'Buildings',
+  kind: 'polygon',
+  color: '#57534e',
+  file: '',
+  tiles: OVERTURE_BUILDINGS_URL,
+  sourceLayer: 'building',
+  minzoom: 14,
+  note: 'Outlines from street zoom in',
+  fields: ['height', 'num_floors', 'class', 'subtype'],
+  attribution: OVERTURE_ATTRIBUTION,
 }
 
 /** Where a market is, from its parcel archive's header. */
@@ -906,8 +927,21 @@ const CSV_COLUMNS: [string, string][] = [
   ['zc', 'Zoning category'],
   ['zn', 'Zoning'],
   ['fz', 'Flood hazard area'],
+  ['bn', 'Buildings'],
+  ['ba', 'Building footprint (sq ft)'],
+  ['bh', 'Tallest building (ft)'],
   ['tr', 'Census tract'],
 ]
+
+/** A building tag as the file writes it: footprint in square feet, height in feet. */
+function buildingCell(key: string, value: unknown): string | number | null {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  if (!Number.isFinite(n)) return null
+  if (key === 'ba') return Math.round(n * 10.7639)
+  if (key === 'bh') return Math.round(n * 3.28084)
+  return n
+}
 
 /** A flood tag as words, for the table and the file. */
 function floodWords(value: unknown): string {
@@ -951,7 +985,11 @@ function exportCsv(rows: Record<string, string | number | null>[], slug: string)
   }
   const header = CSV_COLUMNS.map(([, label]) => label).join(',')
   const body = rows
-    .map((row) => CSV_COLUMNS.map(([key]) => cell(key === 'fz' ? floodWords(row[key]) : row[key] ?? null)).join(','))
+    .map((row) =>
+      CSV_COLUMNS.map(([key]) =>
+        cell(key === 'fz' ? floodWords(row[key]) : key === 'bn' || key === 'ba' || key === 'bh' ? buildingCell(key, row[key]) : row[key] ?? null),
+      ).join(','),
+    )
     .join('\n')
   const blob = new Blob([`${header}\n${body}\n`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -986,6 +1024,7 @@ function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
     ['zip', 'Zip'],
     ...(answer.hasZoning ? ([['zoning', 'Zoning'], ['zoningCategory', 'Zoning category']] as [keyof AskRow, string][]) : []),
     ...(answer.hasFlood ? ([['floodZone', 'FEMA flood zone'], ['baseFloodElevation', 'Base flood elevation (ft)']] as [keyof AskRow, string][]) : []),
+    ...(rows.some((row) => row.buildings != null) ? ([['buildings', 'Buildings'], ['footprint', 'Building footprint (sq ft)']] as [keyof AskRow, string][]) : []),
     ['passes', 'Meets the question'],
     ...(answer.scored ? ([['score', 'Score (Jev)']] as [keyof AskRow, string][]) : []),
     ['why', 'Why'],
@@ -997,7 +1036,13 @@ function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
       [
         ...inputs.map((key) => row.input?.[key] ?? ''),
         ...added.map(([key]) =>
-          key === 'passes' ? (row.passes ? 'Yes' : 'No') : key === 'score' ? (row.score != null ? `${Math.round(row.score * 100)}%` : '') : row[key],
+          key === 'passes'
+            ? row.passes ? 'Yes' : 'No'
+            : key === 'score'
+              ? row.score != null ? `${Math.round(row.score * 100)}%` : ''
+              : key === 'footprint'
+                ? buildingCell('ba', row.footprint)
+                : row[key],
         ),
       ]
         .map(cell)
@@ -1305,6 +1350,8 @@ export default function Gis({
   const [zoningDrop, setZoningDrop] = useState<Set<string>>(new Set())
   const [zoningCodes, setZoningCodes] = useState<string[]>([])
   const [floodPick, setFloodPick] = useState<'in' | 'out' | null>(null)
+  const [buildingPick, setBuildingPick] = useState<'vacant' | 'built' | null>(null)
+  const [coverageMax, setCoverageMax] = useState<number | null>(null)
   /** An area of the map the results are held to, from a question asked about it. */
   const [areaBox, setAreaBox] = useState<[number, number, number, number] | null>(null)
   /** Whether a question is about the map view or the whole county. */
@@ -1435,6 +1482,8 @@ export default function Gis({
     setZoningDrop(new Set())
     setZoningCodes([])
     setFloodPick(null)
+    setBuildingPick(null)
+    setCoverageMax(null)
     setAreaBox(null)
     setQuery('')
     setOwners(null)
@@ -1862,6 +1911,7 @@ export default function Gis({
   }, [layerOn.vessels, active, coastal, viewKey])
 
   const vesselsGeo = useMemo(() => (vessels ? vesselFeatures(vessels.ships) : null), [vessels])
+  const trailsGeo = useMemo(() => (vessels ? vesselTrails(vessels.ships) : null), [vessels])
 
   const vesselsLayer = useMemo((): PublishedLayer => {
     const counts = new Map<string, number>()
@@ -1912,9 +1962,9 @@ export default function Gis({
     return (field?.values ?? []).map(([name]) => name).filter(Boolean)
   }, [published])
 
-  /** Every layer the panel and the map treat alike: published, comps and ships. */
+  /** Every layer the panel and the map treat alike: published, comps, buildings and ships. */
   const shownLayers = useMemo(
-    () => [...published, compsLayer, ...(coastal ? [vesselsLayer] : [])],
+    () => [...published, compsLayer, BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])],
     [published, compsLayer, coastal, vesselsLayer],
   )
 
@@ -2040,7 +2090,9 @@ export default function Gis({
           data: layer.tiles ? null : shownData[layer.id],
           // Through this origin, like the parcels and for the same reason: a
           // cross-origin refusal on a tile archive is silent.
-          tiles: layer.tiles ? `${CATALOG}/${active}/${layer.tiles}` : null,
+          // An archive published by someone else (Overture's buildings) is
+          // read from where it lives, and allows it.
+          tiles: layer.tiles ? (/^https:/.test(layer.tiles) ? layer.tiles : `${CATALOG}/${active}/${layer.tiles}`) : null,
           sourceLayer: layer.sourceLayer ?? layer.id,
           minzoom: layer.minzoom ?? null,
           maxzoom: layer.maxzoom ?? null,
@@ -2059,8 +2111,29 @@ export default function Gis({
                 ['literal', layerFilter[layer.id]],
               ] as FilterSpecification)
             : null,
-        })),
-    [shownLayers, layerOn, shownData, layerStyle, categoryPaint, layerFilter, active],
+        }))
+        // Each ship's wake, drawn under its dot while the ships are on.
+        .concat(
+          layerOn.vessels && trailsGeo?.features.length
+            ? [
+                {
+                  id: 'vessel-trails',
+                  kind: 'line' as const,
+                  data: trailsGeo,
+                  tiles: null,
+                  sourceLayer: 'vessel-trails',
+                  minzoom: null,
+                  maxzoom: null,
+                  color: '#0e7490',
+                  opacity: 0.35,
+                  fields: ['Name', 'Type', 'MMSI'],
+                  categories: null,
+                  filter: null,
+                },
+              ]
+            : [],
+        ),
+    [shownLayers, layerOn, shownData, layerStyle, categoryPaint, layerFilter, active, trailsGeo],
   )
 
   /*
@@ -2367,9 +2440,11 @@ export default function Gis({
       zoningNot: [...zoningDrop].sort(),
       zoningCodes: [...zoningCodes].sort(),
       flood: floodPick,
+      buildings: buildingPick,
+      coverageMax,
       box: areaBox,
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, areaBox])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, areaBox])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -2926,6 +3001,28 @@ export default function Gis({
       live = false
     }
   }, [floodLayer, selectedBox, active])
+
+  /*
+   * What stands on the open parcel, from Overture's building footprints: the
+   * same ranged read as the flood card, against Overture's own public archive
+   * rather than ours, so it costs this site nothing and works in every market.
+   */
+  const [buildings, setBuildings] = useState<{ box: string; answer: BuildingSummary | null; failed: boolean } | null>(null)
+  useEffect(() => {
+    if (!selectedBox) {
+      setBuildings(null)
+      return undefined
+    }
+    const key = selectedBox.join(',')
+    let live = true
+    setBuildings({ box: key, answer: null, failed: false })
+    buildingsFor([selectedBox], tileReader(OVERTURE_BUILDINGS_URL, 'building'))
+      .then(([answer]) => live && setBuildings({ box: key, answer, failed: answer == null }))
+      .catch(() => live && setBuildings({ box: key, answer: null, failed: true }))
+    return () => {
+      live = false
+    }
+  }, [selectedBox])
   const onExtrasNear = useCallback((found: Record<string, Record<string, unknown>[]> | null) => {
     setNearby(found)
   }, [])
@@ -3322,6 +3419,8 @@ export default function Gis({
         setZoningDrop(new Set(plan.zoningNot ?? []))
         setZoningCodes(plan.zoningCodes ?? [])
         setFloodPick(plan.flood ?? null)
+        setBuildingPick(plan.buildings ?? null)
+        setCoverageMax(plan.coverageMax ?? null)
         setAreaBox(answer.area?.box ?? null)
       } else if (answer.plan.action === 'export') {
         exportAsk(answer, active, !answer.upload)
@@ -4508,6 +4607,20 @@ export default function Gis({
                   onClearCodes={() => setZoningCodes([])}
                   onFlood={setFloodPick}
                 />
+                {server?.btagged ? (
+                  <BuildingFilter
+                    pick={buildingPick}
+                    coverage={coverageMax}
+                    onPick={(next) => {
+                      setBuildingPick(next)
+                      if (next === 'vacant') setCoverageMax(null)
+                    }}
+                    onCoverage={(next) => {
+                      setCoverageMax(next)
+                      if (next != null && buildingPick === 'vacant') setBuildingPick(null)
+                    }}
+                  />
+                ) : null}
                 <div className="flex items-center justify-between border-t border-line pt-2">
                   <span className="text-xs text-muted">
                     {/*
@@ -4838,6 +4951,22 @@ export default function Gis({
                   </PanelSection>
                 )}
 
+                {/* What stands on it, from Overture's footprints, in every market. */}
+                {buildings && buildings.box === selectedBox?.join(',') && (
+                  <PanelSection title="Buildings">
+                    <p className="text-xs text-body">
+                      {buildings.failed
+                        ? 'The building map could not be read just now.'
+                        : !buildings.answer
+                          ? 'Checking building footprints…'
+                          : describeBuildings(buildings.answer, Number(parcel.ac) || null)}
+                    </p>
+                    <p className="mt-1.5 text-[11px] leading-snug text-faint">
+                      {OVERTURE_ATTRIBUTION}. Matched by the lot's outline box, so a building on a crooked boundary can read as next door.
+                    </p>
+                  </PanelSection>
+                )}
+
                 {/* Who holds it, from the pipeline's resolved groups: the
                     portfolio is one holder across spelling variants, the
                     back office one mailing address across many entity
@@ -4914,7 +5043,7 @@ export default function Gis({
                 {nearby &&
                   shownLayers
                     // Flood has its own section above, and a ship passing is not a fact about a parcel.
-                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id) && layer.id !== 'vessels')
+                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id) && layer.id !== 'vessels' && layer.id !== 'buildings')
                     .map((layer) => {
                       const hits = nearby[layer.id] ?? []
                       const order = layer.fields?.length ? layer.fields : null
@@ -5251,6 +5380,57 @@ function ZoningFloodFilter({
   )
 }
 
+/** What stands on the lot, from the building tags: any, none, some, and how little. */
+function BuildingFilter({
+  pick,
+  coverage,
+  onPick,
+  onCoverage,
+}: {
+  pick: 'vacant' | 'built' | null
+  coverage: number | null
+  onPick: (next: 'vacant' | 'built' | null) => void
+  onCoverage: (next: number | null) => void
+}) {
+  const segment = (active: boolean) => `px-2.5 py-1 ${active ? 'bg-ink text-white' : 'text-body hover:bg-sunken'}`
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-body">Buildings on the lot</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]">
+          {(
+            [
+              [null, 'Any'],
+              ['vacant', 'None'],
+              ['built', 'Some'],
+            ] as ['vacant' | 'built' | null, string][]
+          ).map(([next, label]) => (
+            <button key={label} type="button" onClick={() => onPick(next)} aria-pressed={pick === next} className={segment(pick === next)}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-1 text-[11px] text-body">
+          Covering at most
+          <select
+            value={coverage == null ? '' : String(coverage)}
+            onChange={(event) => onCoverage(event.target.value ? Number(event.target.value) : null)}
+            className="rounded border border-line bg-surface px-1 py-0.5 text-[11px]"
+          >
+            <option value="">any share</option>
+            {[0.1, 0.15, 0.25, 0.4].map((share) => (
+              <option key={share} value={share}>
+                {Math.round(share * 100)}% of the lot
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <p className="mt-1 text-[10px] text-faint">From Overture's mapped footprints. A small outbuilding counts as a building.</p>
+    </div>
+  )
+}
+
 /*
  * The current results as a table, over the map.
  *
@@ -5310,6 +5490,11 @@ function ResultsTable({
     ['ac', 'Acres', (r) => (r.ac != null ? String(Math.round(Number(r.ac) * 100) / 100) : '')],
     ['zn', 'Zoning', (r) => [r.zn, r.zc ? `(${r.zc})` : null].filter(Boolean).join(' ')],
     ['fz', 'Flood', (r) => floodWords(r.fz)],
+    [
+      'bn',
+      'Buildings',
+      (r) => (r.bn == null ? '' : Number(r.bn) ? `${r.bn} · ${Number(buildingCell('ba', r.ba) ?? 0).toLocaleString()} sq ft` : 'None'),
+    ],
     ['gid', 'Parcel', (r) => String(r.gid ?? r.id ?? '')],
   ]
   return (

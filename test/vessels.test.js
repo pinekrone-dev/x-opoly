@@ -199,6 +199,22 @@ describe('one connection for everyone', () => {
     assert.equal(county.total, 2)
   })
 
+  test('a moving ship leaves a trail of where it has been; a still one does not', async () => {
+    const { hub, sockets, advance } = rig()
+    await hub.watch('new-york-ny', NYC)
+    sockets[0].feed(position(111, 40.68, -74.02))
+    sockets[0].feed(position(222, 40.7, -74.0))
+    advance(60000)
+    sockets[0].feed(position(111, 40.69, -74.01))
+    sockets[0].feed(position(222, 40.7, -74.0))
+    const answer = await hub.watch('new-york-ny', NYC, [-74.1, 40.6, -73.95, 40.75])
+    const moving = answer.ships.find((s) => s.m === 111)
+    const still = answer.ships.find((s) => s.m === 222)
+    assert.equal(moving.tr.length, 2)
+    assert.deepEqual(moving.tr[0], [-74.02, 40.68])
+    assert.equal(still.tr, undefined)
+  })
+
   test('a second market joins the same connection, with the update held to once a second', async () => {
     const { hub, sockets, advance } = rig()
     await hub.watch('new-york-ny', NYC)

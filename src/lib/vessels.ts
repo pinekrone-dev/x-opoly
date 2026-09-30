@@ -159,6 +159,8 @@ export interface Ship {
   imo?: number | null
   /** When the position was reported, epoch milliseconds. */
   t: number
+  /** Where it has been over the last half hour, [lng, lat], oldest first. */
+  tr?: [number, number][]
 }
 
 export interface VesselAnswer {
@@ -203,5 +205,20 @@ export function vesselFeatures(ships: Ship[], now = Date.now()): GeoJSON.Feature
         'Last report': ago(now - ship.t),
       },
     })),
+  }
+}
+
+/** Each ship's last half hour as a line, for the ships that have moved. */
+export function vesselTrails(ships: Ship[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: ships
+      .filter((ship) => (ship.tr?.length ?? 0) > 1)
+      .map((ship) => ({
+        type: 'Feature' as const,
+        id: ship.m,
+        geometry: { type: 'LineString' as const, coordinates: [...(ship.tr ?? []), [ship.lo, ship.la]] },
+        properties: { Name: ship.n || '', MMSI: String(ship.m), Type: shipGroup(ship.ty) },
+      })),
   }
 }
