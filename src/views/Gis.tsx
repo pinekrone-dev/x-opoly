@@ -1019,6 +1019,31 @@ const money = (n: number) => {
   return `$${Math.round(n).toLocaleString()}`
 }
 
+/*
+ * The market this browser last had open, so the map reopens where the broker
+ * left it. Kept in the browser rather than on the account: it changes on
+ * every switch, and a database write per click would cost more than it is
+ * worth. Storage can be blocked or throw; then the map opens on the account's
+ * default as before.
+ */
+const LAST_MARKET_KEY = 'lq.gis.lastMarket'
+
+function lastMarket(): string | null {
+  try {
+    return window.localStorage.getItem(LAST_MARKET_KEY)
+  } catch {
+    return null
+  }
+}
+
+function rememberMarket(slug: string) {
+  try {
+    window.localStorage.setItem(LAST_MARKET_KEY, slug)
+  } catch {
+    /* storage blocked: nothing to remember with */
+  }
+}
+
 export default function Gis({
   tiles,
   basemaps,
@@ -1236,15 +1261,23 @@ export default function Gis({
       .then((d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
-        // The URL's market first, then the one chosen in settings if it is
-        // still live, then the first in the catalogue.
-        const preferred = live.find((m) => m.slug === defaultMarket)?.slug
+        // The URL's market first, then the last one opened in this browser,
+        // then the one chosen in settings, each only if it is still live,
+        // then the first in the catalogue.
+        const isLive = (slug: string | null | undefined) => live.find((m) => m.slug === slug)?.slug
+        const preferred = isLive(lastMarket()) || isLive(defaultMarket)
         setActive((current) => current || preferred || live[0]?.slug || null)
       })
       .catch(() => {
         bundleIsStale().then((outdated) => (outdated ? setStale(true) : setError('Could not reach the parcel catalogue.')))
       })
   }, [])
+
+  // Remembered once the catalogue confirms it, so a slug typed into the URL
+  // that is not a market never becomes where the map opens.
+  useEffect(() => {
+    if (active && markets.some((m) => m.slug === active)) rememberMarket(active)
+  }, [active, markets])
 
   // Meta first: it carries where the market opens and how it is coloured.
   useEffect(() => {
