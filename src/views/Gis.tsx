@@ -26,6 +26,7 @@ import type {
   Deal,
   MapView,
   MarketStatus,
+  ParcelQuery,
   ParcelRow,
   ParcelSearch,
   Place,
@@ -899,8 +900,18 @@ const CSV_COLUMNS: [string, string][] = [
   ['lv', 'Land value'],
   ['iv', 'Improvements'],
   ['ac', 'Acres'],
+  ['zc', 'Zoning category'],
+  ['zn', 'Zoning'],
+  ['fz', 'Flood hazard area'],
   ['tr', 'Census tract'],
 ]
+
+/** A flood tag as words, for the table and the file. */
+function floodWords(value: unknown): string {
+  if (value === 1 || value === '1') return 'Yes'
+  if (value === 0 || value === '0') return 'No'
+  return ''
+}
 
 /*
  * The most rows one export writes.
@@ -936,7 +947,9 @@ function exportCsv(rows: Record<string, string | number | null>[], slug: string)
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
   }
   const header = CSV_COLUMNS.map(([, label]) => label).join(',')
-  const body = rows.map((row) => CSV_COLUMNS.map(([key]) => cell(row[key] ?? null)).join(',')).join('\n')
+  const body = rows
+    .map((row) => CSV_COLUMNS.map(([key]) => cell(key === 'fz' ? floodWords(row[key]) : row[key] ?? null)).join(','))
+    .join('\n')
   const blob = new Blob([`${header}\n${body}\n`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -1273,6 +1286,16 @@ export default function Gis({
   const [assets, setAssets] = useState<Set<string>>(new Set())
   const [value, setValue] = useState({ min: '', max: '' })
   const [acres, setAcres] = useState({ min: '', max: '' })
+  /*
+   * Zoning and flood, from the tags every parcel carries once its market has
+   * been tagged: categories to keep, categories to leave out, district codes
+   * the brain panel named, and in or out of FEMA's flood hazard area.
+   */
+  const [zoningKeep, setZoningKeep] = useState<Set<string>>(new Set())
+  const [zoningDrop, setZoningDrop] = useState<Set<string>>(new Set())
+  const [zoningCodes, setZoningCodes] = useState<string[]>([])
+  const [floodPick, setFloodPick] = useState<'in' | 'out' | null>(null)
+  const [tableOpen, setTableOpen] = useState(false)
 
   // The brain panel: a question and optionally a file, answered on the map or as a file.
   const [askText, setAskText] = useState('')
@@ -1394,6 +1417,10 @@ export default function Gis({
     setAssets(new Set())
     setValue({ min: '', max: '' })
     setAcres({ min: '', max: '' })
+    setZoningKeep(new Set())
+    setZoningDrop(new Set())
+    setZoningCodes([])
+    setFloodPick(null)
     setQuery('')
     setOwners(null)
     setOwnerPick(null)
@@ -1863,6 +1890,13 @@ export default function Gis({
     }
   }, [vessels, vesselsGeo])
 
+  /** The zoning categories this market's zoning layer publishes, commonest first. */
+  const zoningCategoryOptions = useMemo(() => {
+    const zoning = published.find((l) => l.id === 'zoning')
+    const field = zoning?.categories?.find((option) => option.field === 'Category')
+    return (field?.values ?? []).map(([name]) => name).filter(Boolean)
+  }, [published])
+
   /** Every layer the panel and the map treat alike: published, comps and ships. */
   const shownLayers = useMemo(
     () => [...published, compsLayer, ...(coastal ? [vesselsLayer] : [])],
@@ -2314,8 +2348,12 @@ export default function Gis({
       acresMin: lo(acres.min),
       acresMax: lo(acres.max),
       owner: ownerPick ? { kind: ownerPick.kind, id: String(ownerPick.id) } : null,
+      zoningCategories: [...zoningKeep].sort(),
+      zoningNot: [...zoningDrop].sort(),
+      zoningCodes: [...zoningCodes].sort(),
+      flood: floodPick,
     }
-  }, [query, assets, value, acres, ownerPick])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -3257,6 +3295,11 @@ export default function Gis({
         setValue({ min: plan.valueMin != null ? String(plan.valueMin) : '', max: plan.valueMax != null ? String(plan.valueMax) : '' })
         setAcres({ min: plan.acresMin != null ? String(plan.acresMin) : '', max: plan.acresMax != null ? String(plan.acresMax) : '' })
         setQuery(plan.keyword ?? '')
+        // Zoning and flood become filters too, once the market is tagged.
+        setZoningKeep(new Set(plan.zoningCategories ?? []))
+        setZoningDrop(new Set(plan.zoningNot ?? []))
+        setZoningCodes(plan.zoningCodes ?? [])
+        setFloodPick(plan.flood ?? null)
       } else if (answer.plan.action === 'export') {
         exportAsk(answer, active, !answer.upload)
       } else {
@@ -3510,6 +3553,22 @@ export default function Gis({
         stats are.
       */}
 
+      {tableOpen && active && (server?.ready ?? false) ? (
+        <ResultsTable
+          market={active}
+          filters={serverQuery}
+          count={summary.count}
+          valueLabel={meta?.valueLabel || 'Value'}
+          exporting={exporting}
+          onExport={() => void exportRows()}
+          onPick={(id) => {
+            setTableOpen(false)
+            pickFromSearch(id)
+          }}
+          onClose={() => setTableOpen(false)}
+        />
+      ) : null}
+
       {/* Said over the map rather than instead of it. An out-of-date tab and
           an unreachable catalogue are both worth telling someone about, and
           neither is a reason to take away a map that works. */}
@@ -3656,10 +3715,29 @@ export default function Gis({
                   {askAnswer.note ? ` ${askAnswer.note}` : ''}
                 </p>
                 {askAnswer.mode === 'filters' ? (
-                  <p className="text-xs text-body">
-                    <strong className="text-ink">{summary.count.toLocaleString()}</strong> parcels match. The filters are set in the
-                    Filter tab, where you can adjust them.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-xs text-body">
+                      <strong className="text-ink">{summary.count.toLocaleString()}</strong> parcels match, all highlighted on the
+                      map. The filters are set in the Filter tab, where you can adjust them.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50"
+                        onClick={() => setTableOpen(true)}
+                      >
+                        Open as a table
+                      </button>
+                      <button
+                        type="button"
+                        disabled={exporting}
+                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50 disabled:opacity-50"
+                        onClick={() => void exportRows()}
+                      >
+                        {exporting ? 'Collecting rows…' : `Download ${Math.min(summary.count, CSV_LIMIT).toLocaleString()} as CSV`}
+                      </button>
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <p className="text-xs text-body">
@@ -4327,6 +4405,36 @@ export default function Gis({
                   onChange={setValue}
                 />
                 <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
+                <ZoningFloodFilter
+                  tagged={Boolean(server?.tagged)}
+                  categories={zoningCategoryOptions}
+                  hasFlood={published.some((l) => l.id === 'flood-zones')}
+                  keep={zoningKeep}
+                  drop={zoningDrop}
+                  codes={zoningCodes}
+                  flood={floodPick}
+                  onCycle={(category) => {
+                    // Any, then only this, then anything but this, then any again.
+                    if (zoningKeep.has(category)) {
+                      setZoningKeep((current) => {
+                        const next = new Set(current)
+                        next.delete(category)
+                        return next
+                      })
+                      setZoningDrop((current) => new Set(current).add(category))
+                    } else if (zoningDrop.has(category)) {
+                      setZoningDrop((current) => {
+                        const next = new Set(current)
+                        next.delete(category)
+                        return next
+                      })
+                    } else {
+                      setZoningKeep((current) => new Set(current).add(category))
+                    }
+                  }}
+                  onClearCodes={() => setZoningCodes([])}
+                  onFlood={setFloodPick}
+                />
                 <div className="flex items-center justify-between border-t border-line pt-2">
                   <span className="text-xs text-muted">
                     {/*
@@ -4347,6 +4455,10 @@ export default function Gis({
                       setAssets(new Set())
                       setValue({ min: '', max: '' })
                       setAcres({ min: '', max: '' })
+                      setZoningKeep(new Set())
+                      setZoningDrop(new Set())
+                      setZoningCodes([])
+                      setFloodPick(null)
                       setQuery('')
                     }}
                   >
@@ -4397,6 +4509,13 @@ export default function Gis({
                     </dl>
                   </div>
                 )}
+                <button
+                  type="button"
+                  className="w-full rounded-md border border-line px-2 py-1.5 text-xs font-medium text-ink hover:bg-sunken"
+                  onClick={() => setTableOpen(true)}
+                >
+                  Open as a table
+                </button>
                 <button
                   type="button"
                   disabled={exporting}
@@ -4947,6 +5066,240 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between gap-3">
       <dt className="text-muted">{label}</dt>
       <dd className="text-right text-body">{value}</dd>
+    </div>
+  )
+}
+
+/*
+ * Zoning and flood in the Filter tab.
+ *
+ * Each zoning category cycles through any, only this, and anything but this,
+ * which is the whole of "zoned anything but residential" in one click. Only
+ * offered once the market's parcels carry their tags; before that the brain
+ * panel checks zoning and flood parcel by parcel instead, and says so here.
+ */
+function ZoningFloodFilter({
+  tagged,
+  categories,
+  hasFlood,
+  keep,
+  drop,
+  codes,
+  flood,
+  onCycle,
+  onClearCodes,
+  onFlood,
+}: {
+  tagged: boolean
+  categories: string[]
+  hasFlood: boolean
+  keep: Set<string>
+  drop: Set<string>
+  codes: string[]
+  flood: 'in' | 'out' | null
+  onCycle: (category: string) => void
+  onClearCodes: () => void
+  onFlood: (next: 'in' | 'out' | null) => void
+}) {
+  if (!categories.length && !hasFlood) return null
+  if (!tagged) {
+    return (
+      <p className="rounded-md bg-sunken px-2 py-1.5 text-[11px] text-muted">
+        Zoning and flood filters arrive once this market's parcels have been tagged. Until then, ask in the Ask tab and each
+        parcel is checked there.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      {categories.length ? (
+        <div>
+          <p className="mb-1 text-[11px] font-medium text-body">Zoning</p>
+          <p className="mb-1.5 text-[10px] text-faint">Click once for only this, twice for anything but this.</p>
+          <div className="flex flex-wrap gap-1">
+            {categories.map((category) => {
+              const state = keep.has(category) ? 'keep' : drop.has(category) ? 'drop' : 'any'
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => onCycle(category)}
+                  aria-pressed={state !== 'any'}
+                  title={state === 'keep' ? 'Only this' : state === 'drop' ? 'Anything but this' : 'Any'}
+                  className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                    state === 'keep'
+                      ? 'border-brand bg-brand/10 text-ink'
+                      : state === 'drop'
+                        ? 'border-amber-500 bg-amber-50 text-amber-800 line-through'
+                        : 'border-line text-body hover:border-brand/50'
+                  }`}
+                >
+                  {state === 'drop' ? `Not ${category}` : category}
+                </button>
+              )
+            })}
+          </div>
+          {codes.length ? (
+            <p className="mt-1.5 text-[11px] text-muted">
+              Districts: {codes.join(', ')}{' '}
+              <button type="button" className="text-accent underline" onClick={onClearCodes}>
+                Clear
+              </button>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {hasFlood ? (
+        <div>
+          <p className="mb-1 text-[11px] font-medium text-body">FEMA flood hazard area</p>
+          <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]">
+            {(
+              [
+                [null, 'Any'],
+                ['out', 'Outside'],
+                ['in', 'Inside'],
+              ] as ['in' | 'out' | null, string][]
+            ).map(([pick, label]) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => onFlood(pick)}
+                aria-pressed={flood === pick}
+                className={`px-2.5 py-1 ${flood === pick ? 'bg-ink text-white' : 'text-body hover:bg-sunken'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/*
+ * The current results as a table, over the map.
+ *
+ * The same search the map and the report read, two hundred rows a page from
+ * the server, so the table, the highlight and the count are one answer. The
+ * export beside it writes the same rows to a file.
+ */
+function ResultsTable({
+  market,
+  filters,
+  count,
+  valueLabel,
+  exporting,
+  onExport,
+  onPick,
+  onClose,
+}: {
+  market: string
+  filters: ParcelQuery
+  count: number
+  valueLabel: string
+  exporting: boolean
+  onExport: () => void
+  onPick: (id: string | number) => void
+  onClose: () => void
+}) {
+  const [rows, setRows] = useState<Record<string, string | number | null>[]>([])
+  const [busy, setBusy] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
+  const key = JSON.stringify(filters)
+  const load = useCallback(
+    async (offset: number) => {
+      setBusy(true)
+      setFailed(null)
+      try {
+        const page = await api.parcels.search(market, filters, { limit: 200, offset })
+        const got = page.rows as Record<string, string | number | null>[]
+        setRows((current) => (offset === 0 ? got : [...current, ...got]))
+      } catch (cause) {
+        setFailed(cause instanceof Error ? cause.message : 'The rows could not be loaded.')
+      } finally {
+        setBusy(false)
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [market, key],
+  )
+  useEffect(() => {
+    setRows([])
+    void load(0)
+  }, [load])
+  const columns: [string, string, (row: Record<string, string | number | null>) => string][] = [
+    ['ad', 'Address', (r) => String(r.ad ?? '')],
+    ['ow', 'Owner', (r) => String(r.ow ?? '')],
+    ['at', 'Asset type', (r) => String(r.at ?? '')],
+    ['mv', valueLabel, (r) => (r.mv != null ? money(Number(r.mv)) : '')],
+    ['ac', 'Acres', (r) => (r.ac != null ? String(Math.round(Number(r.ac) * 100) / 100) : '')],
+    ['zn', 'Zoning', (r) => [r.zn, r.zc ? `(${r.zc})` : null].filter(Boolean).join(' ')],
+    ['fz', 'Flood', (r) => floodWords(r.fz)],
+    ['gid', 'Parcel', (r) => String(r.gid ?? r.id ?? '')],
+  ]
+  return (
+    <div className="absolute inset-3 z-[650] flex flex-col overflow-hidden rounded-lg border border-line bg-surface shadow-xl">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-3 py-2">
+        <p className="text-xs text-body">
+          <strong className="text-ink">{count.toLocaleString()}</strong> parcels · {rows.length.toLocaleString()} shown, most valuable first
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={exporting}
+            onClick={onExport}
+            className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50 disabled:opacity-50"
+          >
+            {exporting ? 'Collecting rows…' : `Download ${Math.min(count, CSV_LIMIT).toLocaleString()} as CSV`}
+          </button>
+          <button type="button" onClick={onClose} className="rounded-md px-2 py-1 text-[11px] text-muted hover:text-ink" aria-label="Close the table">
+            Close
+          </button>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="w-full border-collapse text-left text-[11px]">
+          <thead className="sticky top-0 bg-sunken text-[10px] uppercase tracking-wider text-muted">
+            <tr>
+              {columns.map(([id, label]) => (
+                <th key={id} className="whitespace-nowrap px-2 py-1.5 font-semibold">
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={String(row.id)}
+                className="cursor-pointer border-t border-line hover:bg-sunken"
+                onClick={() => row.id != null && onPick(row.id)}
+              >
+                {columns.map(([id, , read]) => (
+                  <td key={id} className="max-w-[16rem] truncate px-2 py-1 text-body">
+                    {read(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {failed ? <p className="px-3 py-2 text-[11px] text-amber-600">{failed}</p> : null}
+      </div>
+      <div className="flex items-center justify-between border-t border-line px-3 py-2">
+        <p className="text-[10px] text-faint">Click a row to open the parcel.</p>
+        {rows.length < count ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void load(rows.length)}
+            className="rounded-md bg-ink px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+          >
+            {busy ? 'Loading…' : 'Show 200 more'}
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }

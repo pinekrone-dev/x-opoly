@@ -536,6 +536,8 @@ export interface MarketStatus {
   assets?: { value: string; count: number }[]
   /** Quintile value breaks for the choropleth, computed at publish time. */
   breaks?: number[]
+  /** Every parcel carries its zoning and flood tags, so those are filters. */
+  tagged?: boolean
   builtAt?: string | null
 }
 
@@ -547,6 +549,12 @@ export interface ParcelQuery {
   acresMin?: number | null
   acresMax?: number | null
   owner?: { kind: 'p' | 'b'; id: string } | null
+  /** Zoning categories to keep, and to leave out; from the parcel tags. */
+  zoningCategories?: string[]
+  zoningNot?: string[]
+  zoningCodes?: string[]
+  /** Inside or outside FEMA's special flood hazard area. */
+  flood?: 'in' | 'out' | null
 }
 
 export interface ParcelSearch {
@@ -576,6 +584,8 @@ export interface AskPlan {
   acresMax: number | null
   keyword: string | null
   zoningCategories: string[]
+  /** Zoning categories to leave out ("anything but residential"). */
+  zoningNot: string[]
   zoningCodes: string[]
   flood: 'in' | 'out' | null
   columns: { address: string | null; city: string | null; zip: string | null; parcel: string | null } | null
@@ -606,6 +616,8 @@ export interface AskRow {
 
 export interface AskAnswer {
   mode: 'filters' | 'set'
+  /** The market's parcels carry zoning and flood tags, so those are filters too. */
+  tagged?: boolean
   plan: AskPlan
   explanation: string
   source: 'ai' | 'rules'

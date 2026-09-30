@@ -175,6 +175,21 @@ const PARCEL_ADDED_COLUMNS = [
   // How far a reindex has got, as the last rowid mirrored, so the work can
   // be spread over as many days as the write budget wants.
   ['parcel_markets', 'fts_cursor', 'INTEGER NOT NULL DEFAULT 0'],
+  /*
+   * What the map's own layers say about each parcel, written once by
+   * tagMarket so that zoning and flood are filters like any other column:
+   * `zc` the zoning category, `zn` the district code (both '' where the
+   * parcel was checked and no district is mapped, NULL where it was never
+   * read), `fz` 1 inside FEMA's special flood hazard area, 0 outside, NULL
+   * unknown. A publish upserts its own columns only, so these survive it.
+   */
+  ['parcels', 'zc', 'TEXT'],
+  ['parcels', 'zn', 'TEXT'],
+  ['parcels', 'fz', 'INTEGER'],
+  // Whether a full tagging pass has finished, and how far the current one got.
+  ['parcel_markets', 'tagged', 'INTEGER NOT NULL DEFAULT 0'],
+  ['parcel_markets', 'tag_cursor', 'INTEGER NOT NULL DEFAULT 0'],
+  ['parcel_markets', 'tagged_at', 'TEXT'],
 ]
 
 /*
@@ -304,6 +319,59 @@ export async function reindexMarket(db, market, { budget = REINDEX_BUDGET } = {}
     cursor = hi
   }
   return { indexed: indexedRows, cursor, done: false }
+}
+
+/** Parcels one tagging request checks, by default. */
+export const TAG_BUDGET = 1000
+
+/**
+ * Tag the next stretch of a market's parcels with their zoning and flood.
+ *
+ * `check(parcels)` is the same geometry the parcel card and the brain panel
+ * use (lib/overlays.js), handed in so this file stays free of tile reading.
+ * Rows are walked in rowid order from where the last request stopped, and
+ * only a parcel whose tags actually changed is written: the first pass
+ * writes each parcel once, and a monthly pass after the layers refresh
+ * writes only the few that moved. When a pass reaches the end the market is
+ * marked tagged, which is what turns zoning and flood into search filters.
+ */
+export async function tagMarket(db, market, { check, budget = TAG_BUDGET, reset = false, now = () => new Date() } = {}) {
+  await ensureParcelSchema(db)
+  const state = await db.get('SELECT n, tag_cursor FROM parcel_markets WHERE market = ?', [market])
+  if (!state || !Number(state.n)) return { checked: 0, changed: 0, cursor: null, done: true, missing: true }
+  const cursor = reset ? 0 : Number(state.tag_cursor) || 0
+  const cap = Math.min(Math.max(1, Number(budget) || TAG_BUDGET), 5000)
+  const rows = await db.all(
+    'SELECT rowid AS r, w, s, e, n, zc, zn, fz FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+    [market, cursor, cap],
+  )
+  const finish = async () => {
+    await db.run('UPDATE parcel_markets SET tagged = 1, tag_cursor = 0, tagged_at = ? WHERE market = ?', [now().toISOString(), market])
+    forgetSummary(market)
+  }
+  if (!rows.length) {
+    await finish()
+    return { checked: 0, changed: 0, cursor: null, done: true }
+  }
+  const checks = await check(rows.map((row) => ({ bb: [row.w, row.s, row.e, row.n].map(Number) })))
+  const statements = []
+  rows.forEach((row, i) => {
+    const answer = checks[i] ?? {}
+    // Unreadable stays unknown (NULL) rather than being written as "none".
+    const zc = answer.zoning ? answer.zoning.category ?? '' : row.zc ?? null
+    const zn = answer.zoning ? answer.zoning.code ?? '' : row.zn ?? null
+    const fz = answer.flood ? (answer.flood.status === 'out' ? 0 : 1) : row.fz ?? null
+    if (zc === (row.zc ?? null) && zn === (row.zn ?? null) && fz === (row.fz == null ? null : Number(row.fz))) return
+    statements.push(['UPDATE parcels SET zc = ?, zn = ?, fz = ? WHERE rowid = ?', [zc, zn, fz, row.r]])
+  })
+  const last = rows[rows.length - 1].r
+  // The tags and the cursor land together, so a request that dies between
+  // them re-checks the same stretch rather than skipping it.
+  statements.push(['UPDATE parcel_markets SET tag_cursor = ? WHERE market = ?', [last, market]])
+  await db.batch(statements)
+  const done = rows.length < cap
+  if (done) await finish()
+  return { checked: rows.length, changed: statements.length - 1, cursor: done ? null : last, done }
 }
 
 /**
@@ -715,6 +783,8 @@ export async function marketSummary(db, market) {
           breaks: parse(row.breaks, []),
           builtAt: row.built_at || null,
           fts: Number(row.fts ?? 0) === 1,
+          // Zoning and flood are filters once a tagging pass has finished.
+          tagged: Number(row.tagged ?? 0) === 1,
         }
   // A missing market is remembered too: the app asks about every market it
   // lists, and the ones not published here would otherwise cost a read each.
@@ -726,6 +796,10 @@ export async function marketSummary(db, market) {
 export function hydrate(row) {
   const out = { id: row.pid }
   for (const key of PARCEL_COLUMNS) out[key] = row[key] ?? null
+  // The tags, when the row was read with them.
+  if ('zc' in row) out.zc = row.zc ?? null
+  if ('zn' in row) out.zn = row.zn ?? null
+  if ('fz' in row) out.fz = row.fz == null ? null : Number(row.fz)
   if (row.rest) {
     try {
       Object.assign(out, JSON.parse(row.rest))
@@ -779,6 +853,34 @@ function where(market, filters = {}, { fts = false } = {}) {
   range('mv', filters.valueMin, filters.valueMax)
   range('ac', filters.acresMin, filters.acresMax)
 
+  /*
+   * Zoning and flood, from the tags. "Anything but residential" means zoned,
+   * and zoned something else: a parcel with no district mapped, or never
+   * read, is not evidence either way, so it is left out rather than counted
+   * as passing.
+   */
+  const zoningIn = (filters.zoningCategories || []).filter(Boolean)
+  const zoningOut = (filters.zoningNot || []).filter(Boolean)
+  const codes = (filters.zoningCodes || []).filter(Boolean)
+  if (zoningIn.length || codes.length) {
+    const either = []
+    if (zoningIn.length) {
+      either.push(`zc IN (${zoningIn.map(() => '?').join(',')})`)
+      params.push(...zoningIn)
+    }
+    if (codes.length) {
+      either.push(`zn IN (${codes.map(() => '?').join(',')})`)
+      params.push(...codes)
+    }
+    clauses.push(either.length > 1 ? `(${either.join(' OR ')})` : either[0])
+  }
+  if (zoningOut.length) {
+    clauses.push(`zc <> '' AND zc NOT IN (${zoningOut.map(() => '?').join(',')})`)
+    params.push(...zoningOut)
+  }
+  if (filters.flood === 'in') clauses.push('fz = 1')
+  if (filters.flood === 'out') clauses.push('fz = 0')
+
   if (filters.owner && filters.owner.id) {
     clauses.push(filters.owner.kind === 'b' ? 'bo = ?' : 'po = ?')
     params.push(String(filters.owner.id))
@@ -813,6 +915,8 @@ export function filtersActive(filters = {}) {
   if ((filters.query || '').trim()) return true
   if ((filters.assets || []).filter((a) => a !== '').length) return true
   if (filters.owner && filters.owner.id) return true
+  if ((filters.zoningCategories || []).length || (filters.zoningNot || []).length || (filters.zoningCodes || []).length) return true
+  if (filters.flood === 'in' || filters.flood === 'out') return true
   return [filters.valueMin, filters.valueMax, filters.acresMin, filters.acresMax].some(
     (v) => v != null && Number.isFinite(v),
   )
@@ -825,7 +929,7 @@ export function filtersActive(filters = {}) {
  * and what the whole matching set adds up to — the three things the panel
  * needs, from one predicate, in one round trip from the browser's side.
  */
-const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest'
+const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz'
 
 export async function searchParcels(
   db,
@@ -950,7 +1054,7 @@ export async function searchParcels(
 export async function getParcel(db, market, id) {
   await ensureParcelSchema(db)
   const row = await db.get(
-    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest
+    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz
        FROM parcels WHERE market = ? AND pid = ?`,
     [market, String(id)],
   )

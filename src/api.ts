@@ -335,6 +335,10 @@ export const api = {
         params.set('owner', filters.owner.id)
         params.set('ownerKind', filters.owner.kind)
       }
+      if (filters.zoningCategories?.length) params.set('zc', filters.zoningCategories.join(','))
+      if (filters.zoningNot?.length) params.set('znot', filters.zoningNot.join(','))
+      if (filters.zoningCodes?.length) params.set('zn', filters.zoningCodes.join(','))
+      if (filters.flood) params.set('flood', filters.flood)
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))
       return request<ParcelSearch>(`/api/gis/parcels?${params.toString()}`)
