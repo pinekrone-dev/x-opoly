@@ -21,6 +21,7 @@ export const COASTAL_MARKETS = new Set([
   'fort-lauderdale-fl',
   'houston-tx',
   'jersey-city-nj',
+  'lake-county-il',
   'los-angeles-ca',
   'miami-fl',
   'new-york-ny',
