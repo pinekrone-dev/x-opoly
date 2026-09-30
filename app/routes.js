@@ -174,6 +174,7 @@ import {
   sealMarket,
   tagMarket,
   listBoxes,
+  parcelGrid,
   putBuildingTags,
   hydrate,
   ftsQuery,
@@ -2502,6 +2503,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         }),
       )
       return c.json({ extents: extents.filter(Boolean) })
+    })
+  })
+
+  /*
+   * The market summed into kilometre cells, for the map zoomed out past the
+   * point where lots can be told apart. Made once per version of the market
+   * (kept as one row), then kept at the edge; the caller's `v` names the
+   * version so a republish is a new edge key.
+   */
+  app.get('/api/gis/grid', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    return edgeCached(c, 'grid', 12 * 60 * 60, async () => {
+      const grid = await parcelGrid(parcelsFor(market), market).catch(() => null)
+      if (!grid) return c.json({ error: 'This market has no parcels published here.' }, 404)
+      return c.json(grid)
     })
   })
 

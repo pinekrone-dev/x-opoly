@@ -121,6 +121,11 @@ run with the GitHub Actions tools rather than polling.
 - Start a run: edit `ops/tag-request.json` on the live branch (`{"markets": [...], "what": "zoning,buildings", "reset": false}`); that path is ignored by deploy.yml. `what=zoning` also drives the Worker's zoning/flood tag pass from here, free (this repo is public).
 - Filters: `bld=vacant|built`, `cov=0..1` (buildings cover at most that share of the lot; untagged lots never pass). Ask plan `buildings` / `coverageMax` ("no building", "empty lots", "underutilized" → 15%), only once `btagged`; exports carry buildings, footprint sq ft, tallest ft; Jev ratings are told what stands on the lot.
 
+### Zoomed-out summary grid
+
+- `GET /api/gis/grid?market=&v=` → `parcelGrid` (app/lib/parcels.js): one `GROUP BY` over the market into 0.01° cells (indexed from -180/-90): parcels, value, acres, in-flood / flood-read, vacant / buildings-read. Kept in D1 table `parcel_grids` (one row per market) keyed by `builtAt|taggedAt|btaggedAt|cell`, so a county is scanned once per republish or re-tag; edge-cached 12 h under the client's `v`.
+- `src/lib/grid.ts` shades cells in up to five quintile bands (value per acre, parcels, flood share once `tagged`, no-building share once `btagged`). The Gis view's "Parcel summary" layer is on by default, drawn as GeoJSON with layer `maxzoom` = `PARCEL_MIN_ZOOM` (13), so it gives way to lots by itself.
+
 ### Ask paging and limits
 
 - An answer whose plan the AI wrote (`source: 'ai'`) comes back `AI_PAGE` = 100 records at a time with `page: { size, offset, next, total }`; the client's "Next 100" posts the same `plan`, `source` and `offset`, so no second model call is made. Upload rows page by file row; a market-wide question pages by parcels that pass, walking the store 200 at a time up to `CHECK_LIMIT`.

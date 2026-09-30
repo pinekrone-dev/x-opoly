@@ -32,6 +32,7 @@ import type { BookStyle,
   TourRequest,
 } from './types'
 import type { VesselAnswer } from './lib/vessels'
+import type { ParcelGrid } from './lib/grid'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -232,6 +233,8 @@ export const api = {
     request<{ extents: { slug: string; name: string; region?: string; box: [number, number, number, number]; center: [number, number] }[] }>(
       '/api/gis/extents',
     ),
+  /** The market summed into kilometre cells, for the map zoomed out. `v` names the version so a republish is fetched fresh. */
+  gisGrid: (market: string, v: string) => request<ParcelGrid>(`/api/gis/grid?${new URLSearchParams({ market, v })}`),
   /** Live ship positions in a coastal market. */
   gisVessels: (market: string, view?: [number, number, number, number] | null) => {
     const query = new URLSearchParams({ market })
