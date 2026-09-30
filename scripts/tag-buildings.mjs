@@ -163,7 +163,10 @@ async function tagMarket(slug) {
       tagged += 1
       if (answer.count) built += 1
     })
-    if (pending.length >= FLUSH) await flush()
+    if (pending.length >= FLUSH) {
+      await flush()
+      console.log(`  ${slug}: ${tagged.toLocaleString()} of ${boxes.length.toLocaleString()} tagged, ${tiles.fetched().toLocaleString()} tiles read`)
+    }
   }
   await flush(true)
   const minutes = ((Date.now() - started) / 60000).toFixed(1)
@@ -194,6 +197,7 @@ async function tagZoning(slug, reset) {
     }
     checked += Number(answer.checked) || 0
     changed += Number(answer.changed) || 0
+    if (checked && checked % 50000 < 2000) console.log(`  ${slug}: zoning and flood, ${checked.toLocaleString()} checked`)
     if (answer.done) {
       console.log(`  ${slug}: zoning and flood ${answer.already ? 'already tagged' : `tagged, ${checked.toLocaleString()} checked, ${changed.toLocaleString()} written`}`)
       return
