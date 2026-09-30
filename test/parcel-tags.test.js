@@ -62,6 +62,13 @@ describe('tagging a market', () => {
     assert.equal((await marketSummary(db, 'tampa-fl')).tagged, true)
   })
 
+  test('asking again without a fresh pass reads nothing', async () => {
+    const before = checked
+    const again = await tagMarket(db, 'tampa-fl', { check, budget: 100 })
+    assert.equal(again.already, true)
+    assert.equal(checked, before)
+  })
+
   test('a second pass writes nothing that has not changed', async () => {
     const again = await tagMarket(db, 'tampa-fl', { check, budget: 100, reset: true })
     assert.equal(again.checked, 5)

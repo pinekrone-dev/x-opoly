@@ -337,8 +337,13 @@ export const TAG_BUDGET = 1000
  */
 export async function tagMarket(db, market, { check, budget = TAG_BUDGET, reset = false, now = () => new Date() } = {}) {
   await ensureParcelSchema(db)
-  const state = await db.get('SELECT n, tag_cursor FROM parcel_markets WHERE market = ?', [market])
+  const state = await db.get('SELECT n, tagged, tag_cursor FROM parcel_markets WHERE market = ?', [market])
   if (!state || !Number(state.n)) return { checked: 0, changed: 0, cursor: null, done: true, missing: true }
+  // A finished pass is not walked again unless a fresh one is asked for:
+  // a second run for the same market costs one read, not a county.
+  if (!reset && Number(state.tagged) === 1 && !Number(state.tag_cursor)) {
+    return { checked: 0, changed: 0, cursor: null, done: true, already: true }
+  }
   const cursor = reset ? 0 : Number(state.tag_cursor) || 0
   const cap = Math.min(Math.max(1, Number(budget) || TAG_BUDGET), 5000)
   const rows = await db.all(
