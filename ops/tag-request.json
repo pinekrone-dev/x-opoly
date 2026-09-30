@@ -1,5 +1,6 @@
 {
   "markets": ["dupage-il", "lake-county-il", "will-il"],
   "what": "zoning,buildings",
-  "reset": false
+  "reset": false,
+  "note": "re-run after the batch-size fix"
 }
