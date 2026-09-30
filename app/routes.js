@@ -182,6 +182,7 @@ import {
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
+import { COASTAL_MARKETS, marketBox } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
@@ -3032,6 +3033,54 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       },
       truncated,
     })
+  })
+
+  /*
+   * Ships in a coastal market, live.
+   *
+   * One Durable Object holds the only connection to the AIS feed and answers
+   * for every market; see lib/vessels.js. The box is built here from the
+   * market's own centre, never taken from the caller, so the feed is only
+   * ever asked about water a market covers. A live answer is kept at the
+   * edge for fifteen seconds, which is what lets a room full of viewers cost
+   * one request to the object rather than one each; the object still hears
+   * from each data centre often enough to know the market is being watched.
+   */
+  const marketCenters = new Map()
+  app.get('/api/gis/vessels', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'vessels', 400, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    if (!COASTAL_MARKETS.has(market)) {
+      return c.json({ status: 'off', note: 'No shipping reports from this market.', ships: [] }, 404)
+    }
+    if (!env.VESSELS || !env.AISSTREAM_API_KEY) {
+      return c.json({ status: 'off', note: 'Live ship positions are not switched on here yet.', ships: [] })
+    }
+    let center = marketCenters.get(market)
+    if (!center) {
+      const meta = await catalogJson(`${market}/meta.json`).catch(() => null)
+      center = Array.isArray(meta?.center) && meta.center.every(Number.isFinite) ? meta.center : null
+      if (!center) return c.json({ error: 'That market is not published yet.' }, 404)
+      marketCenters.set(market, center)
+    }
+    const [w, s, e, n] = marketBox(center)
+    return edgeCached(
+      c,
+      `vessels/${market}`,
+      15,
+      async () => {
+        const hub = env.VESSELS.get(env.VESSELS.idFromName('ais'))
+        const answer = await hub.fetch(`https://vessels/watch?${new URLSearchParams({ market, w, s, e, n })}`)
+        const body = await answer.json().catch(() => ({ status: 'error', note: 'The ship feed gave no answer.', ships: [] }))
+        return c.json(body, answer.ok ? 200 : 502, { 'x-vessels-status': String(body.status ?? '') })
+      },
+      // Only a streaming answer is worth sharing; "connecting" is a moment.
+      { params: { market }, cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-vessels-status') === 'live' },
+    )
   })
 
   /*

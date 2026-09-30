@@ -18,6 +18,9 @@ import { isHtml, previewForPath, rewritePreview, sharePreview, withPreviewOrigin
 import { sendTrialReminders } from '../app/lib/billing.js'
 import { emailConfigured, sendEmail, trialReminderEmail } from '../app/lib/email.js'
 
+// The live ship feed's one connection, bound as VESSELS in wrangler.toml.
+export { VesselHubObject } from './vessels.js'
+
 /**
  * Built once per environment and reused for the life of the isolate.
  *

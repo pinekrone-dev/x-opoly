@@ -285,4 +285,5 @@ export const LAYER_ICONS = {
   pipeline: <><path d="M4 21h16M6 21V7l10-3v17" /><path d="M6 7L3 8M16 8l4 2v11" /></>,
   forecasts: <><path d="M3 18l5-6 4 3 5-7" /><path d="M13 8h4v4" /><path d="M3 21h18" /></>,
   entitlements: <><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v4h4" /><circle cx="12" cy="14" r="2.5" /><path d="M12 16.5V19" /></>,
+  ships: <><path d="M3 14h18l-3 5H6z" /><path d="M6 14V9h12v5" /><path d="M12 9V4M9 6h6" /></>,
 }

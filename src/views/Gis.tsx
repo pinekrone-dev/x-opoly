@@ -18,6 +18,7 @@ import { navigate } from '../lib/router'
 import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
+import { COASTAL_MARKETS, VESSEL_COLORS, vesselFeatures, type VesselAnswer } from '../lib/vessels'
 import type {
   AskAnswer,
   AskRow,
@@ -317,6 +318,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   'school-districts': LAYER_ICONS.zoning,
   txdot: LAYER_ICONS.absorption,
   comps: LAYER_ICONS.comps,
+  vessels: LAYER_ICONS.ships,
 }
 
 /*
@@ -1614,14 +1616,104 @@ export default function Gis({
     [compsGeo, comps],
   )
 
-  /** Every layer the panel and the map treat alike: published plus comps. */
-  const shownLayers = useMemo(() => [...published, compsLayer], [published, compsLayer])
+  /*
+   * Ships, live, where the market has water that ships report from.
+   *
+   * Asked for every twenty seconds while the layer is on and the tab is in
+   * view, and never otherwise: the server keeps its feed open only while
+   * someone is asking, so a layer left off costs nothing anywhere.
+   */
+  const coastal = Boolean(active && COASTAL_MARKETS.has(active))
+  const [vessels, setVessels] = useState<VesselAnswer | null>(null)
+  useEffect(() => {
+    if (!layerOn.vessels || !active || !coastal) {
+      setVessels(null)
+      return undefined
+    }
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      if (document.hidden) {
+        timer = setTimeout(tick, 5000)
+        return
+      }
+      let next: VesselAnswer
+      try {
+        next = await api.gisVessels(active)
+      } catch (cause) {
+        const body = (cause as { body?: Partial<VesselAnswer> }).body
+        next = { status: 'error', note: body?.note ?? (cause as Error).message, ships: [] }
+      }
+      if (stopped) return
+      // A failed poll keeps the ships already drawn; they are minutes old at
+      // worst, and a map that empties on one bad answer reads as no ships.
+      setVessels((current) => (next.status === 'error' && current?.ships.length ? { ...current, status: 'error', note: next.note } : next))
+      // Quicker while the feed is still opening, so the first ships appear
+      // in seconds rather than after a full interval.
+      timer = setTimeout(tick, next.status === 'connecting' ? 5000 : next.status === 'off' ? 120000 : 20000)
+    }
+    void tick()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [layerOn.vessels, active, coastal])
 
-  /** The same, for geometry: comps come from the workspace, not the catalog. */
-  const shownData = useMemo(
-    () => (compsGeo ? { ...layerData, comps: compsGeo } : layerData),
-    [layerData, compsGeo],
+  const vesselsGeo = useMemo(() => (vessels ? vesselFeatures(vessels.ships) : null), [vessels])
+
+  const vesselsLayer = useMemo((): PublishedLayer => {
+    const counts = new Map<string, number>()
+    for (const feature of vesselsGeo?.features ?? []) {
+      const type = String(feature.properties?.Type ?? '')
+      counts.set(type, (counts.get(type) ?? 0) + 1)
+    }
+    const shown = vesselsGeo?.features.length ?? 0
+    const note = !vessels
+      ? 'Live AIS positions'
+      : vessels.status === 'off'
+        ? 'Not switched on yet'
+        : vessels.status === 'error'
+          ? 'Feed interrupted'
+          : vessels.status === 'connecting' && !shown
+            ? 'Connecting to the feed'
+            : `${shown.toLocaleString()} ${shown === 1 ? 'ship' : 'ships'} reporting`
+    return {
+      id: 'vessels',
+      label: 'Ships (live)',
+      kind: 'point',
+      color: '#0e7490',
+      file: '',
+      note,
+      categories: [
+        {
+          field: 'Type',
+          values: Object.keys(VESSEL_COLORS)
+            .filter((type) => counts.has(type))
+            .map((type): [string, number] => [type, counts.get(type) ?? 0]),
+          colors: VESSEL_COLORS,
+        },
+      ],
+      fields: [
+        'Name', 'Type', 'Status', 'Speed', 'Course', 'Heading', 'Destination',
+        'Length', 'Call sign', 'IMO', 'MMSI', 'Last report',
+      ],
+      attribution: 'AIS position reports relayed by aisstream.io',
+    }
+  }, [vessels, vesselsGeo])
+
+  /** Every layer the panel and the map treat alike: published, comps and ships. */
+  const shownLayers = useMemo(
+    () => [...published, compsLayer, ...(coastal ? [vesselsLayer] : [])],
+    [published, compsLayer, coastal, vesselsLayer],
   )
+
+  /** The same, for geometry: comps come from the workspace and ships from the feed, not the catalog. */
+  const shownData = useMemo(() => {
+    const out = { ...layerData }
+    if (compsGeo) out.comps = compsGeo
+    if (vesselsGeo) out.vessels = vesselsGeo
+    return out
+  }, [layerData, compsGeo, vesselsGeo])
 
   /*
    * What each loaded layer could be coloured by, and how.
@@ -3773,6 +3865,19 @@ export default function Gis({
                         switching a layer on ought to hand over the records
                         as well, because a hundred and eight city lots with
                         asking prices are a list somebody wants to read. */}
+                    {layer.id === 'vessels' && (
+                      <p className="text-[11px] text-muted">
+                        {!vessels
+                          ? 'Opening the live feed…'
+                          : vessels.status === 'off' || vessels.status === 'error'
+                            ? vessels.note || 'The live feed is not answering.'
+                            : `Positions as ships broadcast them, refreshed every 20 seconds.${
+                                vessels.since && Date.now() - vessels.since < 5 * 60 * 1000
+                                  ? ' Ships at anchor report every few minutes, so more appear over the first five.'
+                                  : ''
+                              }`}
+                      </p>
+                    )}
                     {layer.id === 'comps' && (
                       <CompsImport
                         comps={comps}
@@ -4397,7 +4502,8 @@ export default function Gis({
                     rail is a section here, with no further click. */}
                 {nearby &&
                   shownLayers
-                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id))
+                    // Flood has its own section above, and a ship passing is not a fact about a parcel.
+                    .filter((layer) => layerOn[layer.id] && !(floodLayer && layer.id === floodLayer.id) && layer.id !== 'vessels')
                     .map((layer) => {
                       const hits = nearby[layer.id] ?? []
                       const order = layer.fields?.length ? layer.fields : null
