@@ -3270,6 +3270,45 @@ export default function Gis({
     }
   }
 
+  /*
+   * The next hundred of an answer the AI planned. The plan goes back with
+   * the request, so the question is not read again; the new rows join the
+   * ones already here, so the list, the map and the CSV hold every page
+   * fetched so far.
+   */
+  async function moreAsk() {
+    const current = askAnswer
+    if (!active || askBusy || current?.page?.next == null) return
+    setAskBusy(true)
+    setAskError(null)
+    try {
+      const answer = await api.gisAsk({
+        market: active,
+        prompt: askText.trim(),
+        upload: askFile,
+        plan: current.plan,
+        source: current.source,
+        offset: current.page.next,
+      })
+      setAskAnswer({
+        ...answer,
+        explanation: current.explanation,
+        note: current.note,
+        rows: [...(current.rows ?? []), ...(answer.rows ?? [])],
+        ids: [...(current.ids ?? []), ...(answer.ids ?? [])],
+        counts: {
+          rows: (current.counts?.rows ?? 0) + (answer.counts?.rows ?? 0),
+          matched: (current.counts?.matched ?? 0) + (answer.counts?.matched ?? 0),
+          passing: (current.counts?.passing ?? 0) + (answer.counts?.passing ?? 0),
+        },
+      })
+    } catch (cause) {
+      setAskError(cause instanceof Error ? cause.message : 'The next hundred could not be fetched.')
+    } finally {
+      setAskBusy(false)
+    }
+  }
+
   async function addToCrm() {
     if (!parcel || !active || selected == null) return
     setSaving(true)
@@ -3637,6 +3676,27 @@ export default function Gis({
                       )}
                     </p>
                     {askAnswer.truncated ? <p className="text-[11px] text-amber-600">{askAnswer.truncated}</p> : null}
+                    {askAnswer.page ? (
+                      <div className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5">
+                        <p className="text-[11px] text-muted">
+                          {askAnswer.page.next != null
+                            ? `AI answers come 100 at a time.${
+                                askAnswer.page.total != null ? ` ${askAnswer.page.total.toLocaleString()} ${askAnswer.upload ? 'rows in the file' : 'parcels to look through'}.` : ''
+                              }`
+                            : 'That is every record for this question.'}
+                        </p>
+                        {askAnswer.page.next != null ? (
+                          <button
+                            type="button"
+                            className="shrink-0 rounded-md bg-ink px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                            disabled={askBusy}
+                            onClick={() => void moreAsk()}
+                          >
+                            {askBusy ? 'Working…' : 'Next 100'}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
@@ -3655,7 +3715,7 @@ export default function Gis({
                       </button>
                     </div>
                     <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-md border border-line">
-                      {(askAnswer.rows ?? []).slice(0, 100).map((row) => (
+                      {(askAnswer.page ? askAnswer.rows ?? [] : (askAnswer.rows ?? []).slice(0, 100)).map((row) => (
                         <li key={`${row.index}-${row.id ?? 'none'}`}>
                           <button
                             type="button"
@@ -3685,7 +3745,7 @@ export default function Gis({
                         </li>
                       ))}
                     </ul>
-                    {(askAnswer.rows?.length ?? 0) > 100 ? (
+                    {!askAnswer.page && (askAnswer.rows?.length ?? 0) > 100 ? (
                       <p className="text-[11px] text-muted">The first 100 are listed; the CSV has all {askAnswer.rows?.length.toLocaleString()}.</p>
                     ) : null}
                   </>

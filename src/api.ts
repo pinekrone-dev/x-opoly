@@ -214,7 +214,15 @@ export const api = {
 
   /** A parcel hunt in plain English, answered as the GIS view's own filters. */
   /** The brain panel: a question, and optionally a CSV, answered as a plan and its results. */
-  gisAsk: (input: { market: string; prompt: string; upload?: { name: string; text: string } | null }) =>
+  gisAsk: (input: {
+    market: string
+    prompt: string
+    upload?: { name: string; text: string } | null
+    /** The next page of an earlier answer: its plan and where to start. */
+    plan?: AskAnswer['plan']
+    source?: AskAnswer['source']
+    offset?: number
+  }) =>
     request<AskAnswer>('/api/gis/ask', json(input)),
   /** Every market's box and centre, for the map that navigates between them. */
   gisExtents: () =>

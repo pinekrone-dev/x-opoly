@@ -99,6 +99,13 @@ run with the GitHub Actions tools rather than polling.
   - `pivot` (zoning only): `[{city, count, categories: [{category, count, codes: [[code, count]…]}]}]` — the tree behind the filter icon.
 - Parcel rows reach D1 `PARCELS` through `POST /api/gis/ingest`, authenticated by the runner's GitHub OIDC token; no credential is stored on either side.
 
+### Ask paging and limits
+
+- An answer whose plan the AI wrote (`source: 'ai'`) comes back `AI_PAGE` = 100 records at a time with `page: { size, offset, next, total }`; the client's "Next 100" posts the same `plan`, `source` and `offset`, so no second model call is made. Upload rows page by file row; a market-wide question pages by parcels that pass, walking the store 200 at a time up to `CHECK_LIMIT`.
+- Answers the free rules planned come back whole (up to `UPLOAD_ROWS` / `CHECK_LIMIT`), as before.
+- Only questions that call the AI are rate-limited (`ask-ai`, 30 per 10 min per person); every ask has the same 600 per 10 min runaway guard as the parcel search.
+- Map-filter answers (`mode: 'filters'`) are not paged: the AI only wrote the filters, and the parcels come from the ordinary free search.
+
 ### Ships (live AIS)
 
 - `src/lib/vessels.ts` is shared vocabulary: `COASTAL_MARKETS` (14 markets with NOAA-verified traffic), `marketBox` (centre ± 0.6° lat / 0.75° lng), type groups and colours.

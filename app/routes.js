@@ -109,12 +109,14 @@ import { askJson, resolveProvider } from './lib/ai.js'
 import { BOOK_STYLE_PROMPT, normalizeBookStyle } from './lib/bookstyle.js'
 import { heuristicScout, runScout } from './lib/scout.js'
 import {
+  AI_PAGE,
   CHECK_LIMIT,
   UPLOAD_ROWS,
   aiPlan,
   describePlan,
   heuristicPlan,
   needsOverlay,
+  normalizePlan,
   passesAttributes,
   passesOverlay,
 } from './lib/ask.js'
@@ -2862,10 +2864,16 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   app.post('/api/gis/ask', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    const throttled = limited(c, 'ask', 30, 10 * 60 * 1000)
-    if (throttled) return throttled
+    // A guard against runaway loops, the same as the parcel search's. The
+    // limit that matters, on questions the AI reads, is applied below.
+    const guarded = limited(c, 'ask', 600, 10 * 60 * 1000)
+    if (guarded) return guarded
 
     const body = await c.req.json().catch(() => ({}))
+    // The next page of an earlier answer: its plan comes back with it, so
+    // the question is not read again.
+    const offset = Math.max(0, Math.floor(Number(body?.offset) || 0))
+    const given = body?.plan && typeof body.plan === 'object' ? body.plan : null
     const market = /^[a-z0-9-]{2,40}$/.test(String(body?.market ?? '')) ? body.market : null
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     const prompt = String(body?.prompt ?? '').trim().slice(0, 1000)
@@ -2912,7 +2920,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     let note = null
     const provider = resolveProvider(env)
     const ruled = heuristicPlan(prompt, vocab, headers)
-    if (provider && prompt) {
+    if (given) {
+      // Clamped again, like any plan: it came from the browser this time.
+      plan = normalizePlan(given, vocab, headers)
+      source = body?.source === 'ai' ? 'ai' : 'rules'
+    } else if (provider && prompt) {
+      // Questions the AI reads are the ones with a cost, so they are the
+      // ones limited: thirty in ten minutes per person.
+      const throttled = limited(c, 'ask-ai', 30, 10 * 60 * 1000)
+      if (throttled) return throttled
       const overspent = await afforded(c, 'scout')
       if (overspent) return overspent
       try {
@@ -2940,7 +2956,47 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       return c.json({ ...base, mode: 'filters' })
     }
 
-    let candidates = []
+    /*
+     * An answer the AI planned comes back a hundred records at a time, and
+     * says where the next hundred start; one the rules planned comes back
+     * whole. Either way every record below is run by code, not the model.
+     */
+    const paged = source === 'ai'
+    const toRow = (candidate, check) => {
+      const parcel = candidate.parcel
+      const reason = !parcel ? candidate.why : passesAttributes(parcel, plan) ?? passesOverlay(check, plan)
+      return {
+        index: candidate.index,
+        input: candidate.record,
+        id: parcel?.id ?? null,
+        address: parcel?.ad ?? null,
+        owner: parcel?.ow ?? null,
+        parcelNumber: parcel?.gid ?? null,
+        assetType: parcel?.at ?? null,
+        value: parcel?.mv ?? null,
+        acres: parcel?.ac ?? null,
+        zip: parcel?.zp ?? null,
+        zoning: check.zoning?.code ?? null,
+        zoningCategory: check.zoning?.category ?? null,
+        floodZone: check.flood ? (check.flood.status === 'out' ? 'None' : check.flood.zones.join(', ') || check.flood.zone) : null,
+        floodStatus: check.flood?.status ?? null,
+        baseFloodElevation: check.flood?.bfe ?? null,
+        match: candidate.match,
+        passes: Boolean(parcel) && !reason,
+        why: reason || candidate.why || 'Passes',
+      }
+    }
+    const checkAll = async (candidates) => {
+      const found = candidates.filter((c) => c.parcel)
+      const checks = await checkParcels(found.map((c) => c.parcel), { flood, zoning })
+      const checkOf = new Map(found.map((c, i) => [c, checks[i]]))
+      return candidates.map((candidate) => toRow(candidate, checkOf.get(candidate) ?? { flood: null, zoning: null }))
+    }
+
+    let rows = []
+    let matchedCount = 0
+    let next = null
+    let total = null
     let truncated = cut ? `Only the first ${UPLOAD_ROWS.toLocaleString()} rows of the file were read.` : null
     if (records.length) {
       if (!plan.columns?.address && !plan.columns?.parcel) {
@@ -2973,9 +3029,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       }
       const key = (value) => String(value ?? '').replace(/[^A-Za-z0-9]/g, '').toUpperCase()
       const cols = plan.columns
+      // A page of the file when the AI planned it; the whole file otherwise.
+      total = records.length
+      const from = paged ? Math.min(offset, records.length) : 0
+      const upto = paged ? Math.min(from + AI_PAGE, records.length) : records.length
+      if (paged && upto < records.length) next = upto
       const matched = []
-      for (let i = 0; i < records.length; i += 20) {
-        const slice = records.slice(i, i + 20)
+      for (let i = from; i < upto; i += 20) {
+        const slice = records.slice(i, Math.min(i + 20, upto))
         const done = await Promise.all(
           slice.map(async (record, j) => {
             const index = i + j
@@ -2992,7 +3053,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         )
         matched.push(...done)
       }
-      candidates = matched
+      matchedCount = matched.filter((m) => m.parcel).length
+      rows = await checkAll(matched)
     } else {
       // The whole market, filtered by the store, then checked by geometry.
       const filters = {
@@ -3003,55 +3065,58 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         acresMin: plan.acresMin,
         acresMax: plan.acresMax,
       }
-      const first = await searchParcels(store, market, filters, { limit: 1000, summary })
-      const rows = [...first.rows]
-      while (rows.length < Math.min(first.count, CHECK_LIMIT)) {
-        const page = await searchParcels(store, market, filters, { limit: 1000, offset: rows.length, summary })
-        if (!page.rows.length) break
-        rows.push(...page.rows)
+      if (paged) {
+        /*
+         * A hundred parcels that meet the question, found by walking the
+         * store's matches in value order from where the last page stopped,
+         * two hundred at a time, and never past the same ceiling a whole
+         * answer has.
+         */
+        let cursor = Math.min(offset, CHECK_LIMIT)
+        let count = null
+        while (rows.length < AI_PAGE && cursor < Math.min(count ?? CHECK_LIMIT, CHECK_LIMIT)) {
+          const page = await searchParcels(store, market, filters, { limit: 200, offset: cursor, summary })
+          count = page.count
+          if (!page.rows.length) break
+          const checked = await checkAll(
+            page.rows.map((row, i) => ({ index: cursor + i, record: null, parcel: row.bb ? row : hydrate(row), match: 'exact', why: null })),
+          )
+          for (const row of checked) {
+            cursor = row.index + 1
+            matchedCount += 1
+            if (row.passes) rows.push(row)
+            if (rows.length >= AI_PAGE) break
+          }
+        }
+        total = count
+        if (count != null && cursor < Math.min(count, CHECK_LIMIT)) next = cursor
+        if (count != null && count > CHECK_LIMIT && next == null) {
+          truncated = `${count.toLocaleString()} parcels matched the filters; the ${CHECK_LIMIT.toLocaleString()} most valuable were checked. Narrow the question to check them all.`
+        }
+      } else {
+        const first = await searchParcels(store, market, filters, { limit: 1000, summary })
+        const found = [...first.rows]
+        while (found.length < Math.min(first.count, CHECK_LIMIT)) {
+          const page = await searchParcels(store, market, filters, { limit: 1000, offset: found.length, summary })
+          if (!page.rows.length) break
+          found.push(...page.rows)
+        }
+        if (first.count > CHECK_LIMIT) {
+          truncated = `${first.count.toLocaleString()} parcels matched the filters; the ${CHECK_LIMIT.toLocaleString()} most valuable were checked. Narrow the question to check them all.`
+        }
+        total = first.count
+        const candidates = found.slice(0, CHECK_LIMIT).map((row, index) => ({
+          index,
+          record: null,
+          parcel: row.bb ? row : hydrate(row),
+          match: 'exact',
+          why: null,
+        }))
+        matchedCount = candidates.length
+        rows = await checkAll(candidates)
       }
-      if (first.count > CHECK_LIMIT) {
-        truncated = `${first.count.toLocaleString()} parcels matched the filters; the ${CHECK_LIMIT.toLocaleString()} most valuable were checked. Narrow the question to check them all.`
-      }
-      candidates = rows.slice(0, CHECK_LIMIT).map((row, index) => ({
-        index,
-        record: null,
-        parcel: row.bb ? row : hydrate(row),
-        match: 'exact',
-        why: null,
-      }))
     }
 
-    const found = candidates.filter((c) => c.parcel)
-    const checks = await checkParcels(found.map((c) => c.parcel), { flood, zoning })
-    const checkOf = new Map(found.map((c, i) => [c, checks[i]]))
-    const rows = candidates.map((candidate) => {
-      const parcel = candidate.parcel
-      const check = checkOf.get(candidate) ?? { flood: null, zoning: null }
-      const reason = !parcel
-        ? candidate.why
-        : passesAttributes(parcel, plan) ?? passesOverlay(check, plan)
-      return {
-        index: candidate.index,
-        input: candidate.record,
-        id: parcel?.id ?? null,
-        address: parcel?.ad ?? null,
-        owner: parcel?.ow ?? null,
-        parcelNumber: parcel?.gid ?? null,
-        assetType: parcel?.at ?? null,
-        value: parcel?.mv ?? null,
-        acres: parcel?.ac ?? null,
-        zip: parcel?.zp ?? null,
-        zoning: check.zoning?.code ?? null,
-        zoningCategory: check.zoning?.category ?? null,
-        floodZone: check.flood ? (check.flood.status === 'out' ? 'None' : check.flood.zones.join(', ') || check.flood.zone) : null,
-        floodStatus: check.flood?.status ?? null,
-        baseFloodElevation: check.flood?.bfe ?? null,
-        match: candidate.match,
-        passes: Boolean(parcel) && !reason,
-        why: reason || candidate.why || 'Passes',
-      }
-    })
     const passing = rows.filter((r) => r.passes)
     return c.json({
       ...base,
@@ -3061,9 +3126,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       ids: passing.map((r) => r.id),
       counts: {
         rows: rows.length,
-        matched: found.length,
+        matched: matchedCount,
         passing: passing.length,
       },
+      // Where this answer sits in the whole: the page it is, and where the
+      // next one starts, or null when this is the last.
+      page: paged ? { size: AI_PAGE, offset, next, total } : null,
       truncated,
     })
   })

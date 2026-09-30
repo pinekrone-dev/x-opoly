@@ -616,5 +616,11 @@ export interface AskAnswer {
   rows?: AskRow[]
   ids?: string[]
   counts?: { rows: number; matched: number; passing: number }
+  /**
+   * Set when the AI planned the answer: it comes a hundred at a time, and
+   * `next` is where the next hundred start (null on the last page). The next
+   * page is asked for with the same plan, so the AI is not asked again.
+   */
+  page?: { size: number; offset: number; next: number | null; total: number | null } | null
   truncated?: string | null
 }
