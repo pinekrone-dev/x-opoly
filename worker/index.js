@@ -190,7 +190,10 @@ export default {
      * is only here that the two runtimes disagree about who answers, and only
      * here that a route can exist and never be reached.
      */
-    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/')) {
+    // The public market pages and the sitemap are written by the app too,
+    // from the live market list, so a new county is listed with no deploy.
+    const pages = /^\/markets\/[a-z0-9-]{2,40}\/?$/.test(url.pathname) || url.pathname === '/sitemap.xml'
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages) {
       if (env.DB) {
         // Let the request through even if migrating failed: routes that do not
         // touch the database still work, and the ones that do will report the
