@@ -122,3 +122,41 @@ export async function usageToday(db, teamId, env, { now = Date.now() } = {}) {
     read: { used: used.read ?? 0, cap: budgetFor(env, 'read') },
   }
 }
+
+/*
+ * Parcel rows a workspace may be served in a day.
+ *
+ * The other half of keeping the county data from being carried off whole. A
+ * person working a market reads a few pages, opens a few dozen cards and
+ * exports a list or two; a script pages the search to the end of the county.
+ * Counting rows served per workspace per day (not requests per address, which
+ * a script holds itself under) is what tells the two apart. Fifty thousand
+ * is ten full exports; Los Angeles alone is two and a half million.
+ */
+export const DEFAULT_ROW_BUDGET = 50000
+
+export function rowBudget(env = {}) {
+  const n = Number(env.PARCEL_ROW_BUDGET)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : DEFAULT_ROW_BUDGET
+}
+
+/**
+ * Adds `amount` rows to the workspace's count for today and says whether it
+ * is still within the day's allowance. One statement: the counter is bumped
+ * and read back together.
+ */
+export async function spendRows(db, { teamId, amount, env, now = Date.now() }) {
+  const cap = rowBudget(env)
+  if (!teamId || !(amount > 0)) return { allowed: true, cap, used: 0 }
+  const row = await db.get(
+    `INSERT INTO ai_usage (team_id, day, kind, count) VALUES (?, ?, 'rows', ?)
+     ON CONFLICT(team_id, day, kind) DO UPDATE SET count = count + excluded.count
+     RETURNING count`,
+    [teamId, today(now), Math.ceil(amount)],
+  )
+  const used = Number(row?.count ?? amount)
+  if (used <= cap) return { allowed: true, cap, used }
+  const day = today(now)
+  const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
+  return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
+}

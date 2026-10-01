@@ -121,6 +121,12 @@ run with the GitHub Actions tools rather than polling.
 - Start a run: edit `ops/tag-request.json` on the live branch (`{"markets": [...], "what": "zoning,buildings", "reset": false}`); that path is ignored by deploy.yml. `what=zoning` also drives the Worker's zoning/flood tag pass from here, free (this repo is public).
 - Filters: `bld=vacant|built`, `cov=0..1` (buildings cover at most that share of the lot; untagged lots never pass). Ask plan `buildings` / `coverageMax` ("no building", "empty lots", "underutilized" → 15%), only once `btagged`; exports carry buildings, footprint sq ft, tallest ft; Jev ratings are told what stands on the lot.
 
+### Data access (scraping guard)
+
+- `/catalog/*`: only `markets.json` and `<market>/meta.json` are public. Everything else (tiles, lite tiles, index, details, owners, layers) needs a signed-in account whose team passes the subscription gate; answers are `cache-control: private` with no CORS header. Per-account burst limits: 20,000 ranged reads/hour, 6 whole county files/hour (index, details, parcels.geojson, whole pmtiles), 600 other files/hour.
+- Daily row allowance per workspace (`PARCEL_ROW_BUDGET`, default 50,000; `ai_usage` kind `rows`): rows served by `/api/gis/parcels`, each `/api/gis/parcel` card, and Ask set-mode rows. Over it → 429 `code: 'row_budget'`, resets midnight UTC. The operator's team is not counted.
+- The public bucket domain `data.realestateaistudio.com` still serves every file to anyone (it is the Prospector public site's origin). Closing it is a Cloudflare dashboard change and a product decision.
+
 ### Comping a customer (no card)
 
 - A team whose `billing.status` is `'comped'` passes the subscription gate and reads as `exempt` in Settings, with no Stripe customer. Set it in D1 (DB `sitesurvey-cre`): `INSERT INTO billing (team_id, status, updated_at) VALUES (<owner user id>, 'comped', <now>) ON CONFLICT(team_id) DO UPDATE SET status = 'comped'`. Takes effect within 5 minutes on warm isolates. Never put a customer's email in `STRIPE_EXEMPT_EMAILS` via the repo (it is public).
