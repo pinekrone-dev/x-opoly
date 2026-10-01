@@ -60,8 +60,18 @@ async function post(path, body, what) {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', 'user-agent': AGENT },
       body: JSON.stringify(body),
     }).catch((error) => ({ ok: false, status: 0, text: async () => error.message }))
-    if (answer.ok) return answer.json()
-    const detail = (await answer.text()).slice(0, 300)
+    if (answer.ok) {
+      // A connection dropped mid-answer is retried like one refused outright.
+      const body = await answer.json().catch((error) => ({ __dropped: error.message }))
+      if (!body?.__dropped) return body
+      if (attempt < 5) {
+        console.error(`  ${what}: answer cut off (${body.__dropped}), retrying`)
+        await new Promise((resolve) => setTimeout(resolve, attempt * 5000))
+        continue
+      }
+      throw new Error(`${what}: answer cut off (${body.__dropped})`)
+    }
+    const detail = (await answer.text().catch(() => '')).slice(0, 300)
     if (answer.status === 401 && attempt < 5) {
       await mint()
       continue
