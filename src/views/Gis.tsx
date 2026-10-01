@@ -54,7 +54,6 @@ import type {
  * same place means a new county appears here with no site deploy between
  * the pipeline and the customer.
  */
-const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
 
 /*
  * One address for everything the pipeline publishes, overridable so the map
@@ -78,9 +77,7 @@ const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
  * is what made it so hard to see.
  *
  * The app now serves the same files itself, so there is no cross-origin
- * request left to refuse. CATALOG_DEFAULT stays as the address the server
- * reads from, and as the fallback below for anything serving this bundle
- * without that route.
+ * request left to refuse.
  */
 const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
 /** A fetch that treats an error page as the failure it is, not as JSON. */
@@ -90,21 +87,12 @@ const asJson = (r: Response) => {
 }
 
 /*
- * A catalogue file, from this origin, or from the data domain if this origin
- * does not serve one.
- *
- * The fallback is for a deployment running this bundle without the catalogue
- * route — a preview, an older Worker, the dev server. It is deliberately a
- * fallback rather than the first choice: the direct fetch is the one that can
- * be refused cross-origin, and the whole point is not to depend on it.
+ * A catalogue file, from this origin only. The catalogue is behind sign-in
+ * now, and the public data domain it once fell back to is being closed, so
+ * there is nowhere else to read it from.
  */
 async function catalogue(path: string, init?: RequestInit) {
-  try {
-    return await asJson(await fetch(`${CATALOG}/${path}`, init))
-  } catch (first) {
-    if (CATALOG === CATALOG_DEFAULT) throw first
-    return asJson(await fetch(`${CATALOG_DEFAULT}/${path}`, init))
-  }
+  return asJson(await fetch(`${CATALOG}/${path}`, init))
 }
 
 /*

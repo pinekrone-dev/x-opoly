@@ -32,7 +32,6 @@ export interface Market {
 }
 
 const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
-const CATALOG_DEFAULT = 'https://data.realestateaistudio.com'
 
 async function asJson(r: Response) {
   if (!r.ok) throw new Error(`${r.status}`)
@@ -40,13 +39,7 @@ async function asJson(r: Response) {
 }
 
 export async function fetchMarkets(): Promise<Market[]> {
-  let doc: { markets?: Market[] } | Market[]
-  try {
-    doc = await asJson(await fetch(`${CATALOG}/markets.json`, { cache: 'no-cache' }))
-  } catch (first) {
-    if (CATALOG === CATALOG_DEFAULT) throw first
-    doc = await asJson(await fetch(`${CATALOG_DEFAULT}/markets.json`, { cache: 'no-cache' }))
-  }
+  const doc: { markets?: Market[] } | Market[] = await asJson(await fetch(`${CATALOG}/markets.json`, { cache: 'no-cache' }))
   const list = Array.isArray(doc) ? doc : (doc.markets ?? [])
   return list.filter((m) => m.status === 'live')
 }
