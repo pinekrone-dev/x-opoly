@@ -1,6 +1,6 @@
 {
-  "markets": ["houston-tx", "new-york-ny", "miami-fl", "fort-lauderdale-fl", "chicago-il", "los-angeles-ca", "orange-county-ca", "san-diego-ca", "tampa-fl", "philadelphia-pa", "boston-ma", "jersey-city-nj", "washington-dc", "phoenix-az", "dallas-tx", "detroit-mi", "minneapolis-mn", "denver-co", "las-vegas-nv", "austin-tx", "nashville-tn", "dupage-il", "lake-county-il", "will-il"],
+  "markets": ["los-angeles-ca"],
   "what": "buildings",
   "reset": false,
-  "note": "re-run with condominium units sharing their building; writes only rows that change"
+  "note": "LA again: its condo re-run was cut off by a dropped connection"
 }
