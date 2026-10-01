@@ -180,7 +180,7 @@ import {
   ftsQuery,
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
-import { spend, sweepUsage, usageToday } from './lib/aibudget.js'
+import { spend, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -2069,9 +2069,61 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return archive
   }
 
+  /*
+   * Who may read the catalogue.
+   *
+   * The list of markets and each market's summary are public: the marketing
+   * pages show them, and they say nothing a brochure would not. Everything
+   * else (the parcel tiles, the county index, owners, layers) is the product,
+   * so it needs a signed-in account with an active subscription, the same as
+   * the API. The answer is remembered for a minute per session so a map
+   * drawing fifty tiles asks the database once, not fifty times.
+   */
+  const publicCatalogFile = (parts) =>
+    (parts.length === 1 && parts[0] === 'markets.json') || (parts.length === 2 && parts[1] === 'meta.json')
+  const catalogViewers = new Map()
+  const catalogViewer = async (c) => {
+    if (!(await hasUsers())) return { id: 'setup' }
+    const token = tokenFrom(c)
+    if (!token) return null
+    const held = catalogViewers.get(token)
+    if (held && held.until > Date.now()) return held.viewer
+    let viewer = null
+    const user = await sessionUser(db, token).catch(() => null)
+    if (user) {
+      const paying =
+        !stripeConfigured(env) ||
+        (await teamIsExempt(user.teamId, user.email)) ||
+        (await billingState(db, env, user.teamId).catch(() => ({ active: false }))).active
+      if (paying) viewer = { id: user.id }
+    }
+    if (catalogViewers.size > 5000) catalogViewers.clear()
+    catalogViewers.set(token, { viewer, until: Date.now() + 60 * 1000 })
+    return viewer
+  }
+
   app.get('/catalog/*', async (c) => {
     const path = new URL(c.req.url).pathname.replace(/^\/catalog\//, '')
     const parts = path.split('/')
+
+    const open = publicCatalogFile(parts)
+    if (!open) {
+      const viewer = await catalogViewer(c)
+      if (!viewer) return c.json({ error: 'Sign in to see the map data.' }, 401)
+      /*
+       * Burst limits per account, on top of the daily row allowance the API
+       * keeps. A map reads tiles by byte range, thousands an hour at most;
+       * a whole county file is downloaded once a session, if at all.
+       */
+      const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles)$/.test(parts[1])
+      const throttled = ranged
+        ? limited(c, 'catalog-range', 20000, 60 * 60 * 1000, viewer.id)
+        : whole
+          ? limited(c, 'catalog-county', 6, 60 * 60 * 1000, viewer.id)
+          : limited(c, 'catalog-file', 600, 60 * 60 * 1000, viewer.id)
+      if (throttled) return throttled
+    }
 
     /*
      * The lite map's tiles: the same parcel archive, served one tile at a
@@ -2120,8 +2172,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return new Response(JSON.stringify({ type: 'FeatureCollection', features }), {
           headers: {
             'content-type': 'application/geo+json',
-            'cache-control': 'public, max-age=86400',
-            'access-control-allow-origin': '*',
+            // Signed-in data: the browser may keep it, a shared cache may not.
+            'cache-control': 'private, max-age=86400',
           },
         })
       } catch (cause) {
@@ -2156,11 +2208,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const browserTtl = key === 'markets.json' || /\/layers\.json$/.test(key) || /\.pmtiles$/.test(key) ? 300 : 86400
     const headers = {
       'content-type': contentType,
-      'cache-control': `public, max-age=${browserTtl}`,
-      // Harmless here and useful everywhere: this is public county data, and
-      // saying so means a preview deployment on another hostname can read it
-      // too rather than rediscovering this same failure.
-      'access-control-allow-origin': '*',
+      // The public files may be kept and read anywhere; the rest is for the
+      // signed-in browser that asked, and no shared cache or other site.
+      'cache-control': `${open ? 'public' : 'private'}, max-age=${browserTtl}`,
+      ...(open ? { 'access-control-allow-origin': '*' } : {}),
       // Announced on every answer, not only on ranged ones: a client decides
       // whether to ask for a range by looking at a plain response first.
       'accept-ranges': 'bytes',
@@ -2543,6 +2594,30 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * up to. Three readings of one predicate, so the report can never disagree
    * with the map beside it.
    */
+  /*
+   * Charges parcel rows served to the workspace's daily allowance, and turns
+   * the answer into a 429 once the allowance is spent. The operator's own
+   * team is not counted. Charged after the rows are found, so the request
+   * that crosses the line is refused rather than served.
+   */
+  const chargeRows = async (c, amount) => {
+    const user = c.get('user')
+    if (!user || !(amount > 0)) return null
+    if (await teamIsExempt(user.teamId, user.email)) return null
+    const verdict = await spendRows(db, { teamId: user.teamId, amount, env }).catch(() => ({ allowed: true }))
+    if (verdict.allowed) return null
+    c.header('Retry-After', String(verdict.retryAfterSeconds))
+    return c.json(
+      {
+        error:
+          `This workspace has viewed its ${verdict.cap.toLocaleString()} parcel records for today. ` +
+          'The allowance resets at midnight UTC. Write to us if you need more for a project.',
+        code: 'row_budget',
+      },
+      429,
+    )
+  }
+
   app.get('/api/gis/parcels', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
@@ -2561,7 +2636,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * the whole county — so after the first visitor it costs the store
      * nothing. Keyed on the market and the filters, never on who asked.
      */
-    return edgeCached(c, `parcels/${market}`, 10 * 60, async () => {
+    const answer = await edgeCached(c, `parcels/${market}`, 10 * 60, async () => {
       try {
         const found = await searchParcels(parcelsFor(market), market, parcelFilters(c), {
           limit: Number(c.req.query('limit')) || undefined,
@@ -2588,6 +2663,13 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return c.json({ error: `The parcel search failed: ${cause.message}.` }, 500)
       }
     })
+    if (answer.status !== 200) return answer
+    const served = await answer
+      .clone()
+      .json()
+      .then((body) => (Array.isArray(body?.rows) ? body.rows.length : 0))
+      .catch(() => 0)
+    return (await chargeRows(c, served)) ?? answer
   })
 
   /** One parcel, for the card. Everything the county published about it. */
@@ -2600,6 +2682,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!id) return c.json({ error: 'id is required.' }, 400)
     const found = await getParcel(parcelsFor(market), market, id).catch(() => null)
     if (!found) return notFound(c, 'No such parcel in that market.')
+    const spent = await chargeRows(c, 1)
+    if (spent) return spent
     return c.json({ parcel: found })
   })
 
@@ -3354,6 +3438,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
 
     const passing = rows.filter((r) => r.passes)
+    const spent = await chargeRows(c, rows.filter((r) => r.id).length)
+    if (spent) return spent
     return c.json({
       ...base,
       jev: jev.enabled ? jev.spent() : null,
