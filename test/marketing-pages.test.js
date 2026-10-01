@@ -36,8 +36,11 @@ describe('public pages', () => {
     }
   })
 
-  test('the sitemap names every public page and nothing private', () => {
-    const xml = fs.readFileSync('public/sitemap.xml', 'utf8')
+  test('the sitemap names every public page and nothing private', async () => {
+    // Written live from the market list, so a new county is listed with no deploy.
+    const { sitemapXml } = await import('../app/lib/marketPages.js')
+    const xml = sitemapXml([{ slug: 'austin-tx', status: 'live' }])
+    assert.ok(xml.includes('<loc>https://landquotient.com/markets/austin-tx</loc>'), 'each market has its page')
     for (const p of ['/', '/investors', '/developers', '/investment-sales', '/markets', '/pricing', '/faq', '/gis']) {
       assert.ok(xml.includes(`<loc>https://landquotient.com${p}</loc>`), `sitemap has ${p}`)
     }

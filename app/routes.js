@@ -180,6 +180,7 @@ import {
   ftsQuery,
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
+import { liveMarkets, marketPage, sitemapXml } from './lib/marketPages.js'
 import { spend, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
@@ -3040,6 +3041,32 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     })
     return answer.ok ? answer.json() : null
   }
+
+  /*
+   * The public page for each market, and the sitemap listing them: what
+   * search engines and AI assistants read about a county. Written from the
+   * market list's published totals only, never a parcel, and kept at the
+   * edge for an hour.
+   */
+  app.get('/markets/:slug', async (c) => {
+    const slug = c.req.param('slug')
+    if (!/^[a-z0-9-]{2,40}$/.test(slug)) return c.notFound()
+    return edgeCached(c, 'market-page', 60 * 60, async () => {
+      const markets = liveMarkets(await catalogJson('markets.json').catch(() => null))
+      const market = markets.find((m) => m.slug === slug)
+      if (!market) return c.html('<!doctype html><title>Market not found</title><p>No such market. <a href="/markets">All markets</a></p>', 404)
+      return c.html(marketPage(market, markets.filter((m) => m.slug !== slug)), 200, { 'cache-control': 'public, max-age=3600' })
+    })
+  })
+
+  app.get('/markets/:slug/', (c) => c.redirect(`/markets/${c.req.param('slug')}`, 301))
+
+  app.get('/sitemap.xml', async (c) =>
+    edgeCached(c, 'sitemap', 60 * 60, async () => {
+      const markets = liveMarkets(await catalogJson('markets.json').catch(() => null))
+      return c.body(sitemapXml(markets), 200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' })
+    }),
+  )
 
   app.post('/api/gis/ask', async (c) => {
     const user = c.get('user')

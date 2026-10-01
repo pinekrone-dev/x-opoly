@@ -68,7 +68,7 @@ export class R2Shim {
   async put(key, bytes, options = {}) {
     // The etag changes with the bytes, as R2's does: a rebuilt archive is a
     // new version, which is what the catalogue keys its ranges by.
-    const stored = new Uint8Array(bytes)
+    const stored = typeof bytes === 'string' ? new TextEncoder().encode(bytes) : new Uint8Array(bytes)
     let hash = 0
     for (const byte of stored) hash = (hash * 31 + byte) >>> 0
     this.objects.set(key, {
@@ -106,6 +106,12 @@ export class R2Shim {
       body: new Blob([slice]).stream(),
       async arrayBuffer() {
         return slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength)
+      },
+      async text() {
+        return new TextDecoder().decode(slice)
+      },
+      async json() {
+        return JSON.parse(new TextDecoder().decode(slice))
       },
     }
   }

@@ -198,9 +198,14 @@ export default function Markets({
                     ))}
                   </div>
 
-                  <a className="mt-5 text-[13px] font-medium text-brand-deep underline" href={`/gis/${m.slug}`}>
-                    Open {m.name} on the map
-                  </a>
+                  <div className="mt-5 flex flex-wrap gap-x-4 gap-y-1 text-[13px] font-medium">
+                    <a className="text-brand-deep underline" href={`/gis/${m.slug}`}>
+                      Open {m.name} on the map
+                    </a>
+                    <a className="text-muted underline" href={`/markets/${m.slug}`}>
+                      About {m.name}'s data
+                    </a>
+                  </div>
                 </article>
               )
             })}
