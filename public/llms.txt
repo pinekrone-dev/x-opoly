@@ -1,0 +1,33 @@
+# Land Quotient
+
+> Land Quotient is a parcel map and site-selection tool for commercial real estate: every assessor parcel in a county on one map, with zoning, FEMA flood zones, building footprints and owner portfolios on each lot, and plain-English questions answered across the whole county.
+
+Land Quotient is built for commercial brokers, developers, investment-sales teams and investors who need to find sites and owners quickly. It is a paid web app (a free trial is available) at https://landquotient.com.
+
+## What it does
+
+- Every parcel in a county on one map, with the county's own assessment record: owner of record, assessed value, land use, lot size.
+- Zoning districts and FEMA flood hazard areas on each parcel, usable as county-wide filters ("outside the flood zone, zoned anything but residential").
+- Building footprints on each lot: how many buildings, footprint and share of the lot covered, so vacant and under-built sites can be found.
+- Owner portfolios: one holder across its many entity names and mailing addresses.
+- Ask: type a question in plain English, see the matching parcels highlighted, open them as a table and export a list.
+- Live ship positions for coastal markets, permits, traffic counts and census overlays where published.
+
+## Markets
+
+Austin (Travis County, TX); Washington, DC; Nashville (Davidson County, TN); Orange County, CA; Broward County, FL; Houston (Harris County, TX); Las Vegas (Clark County, NV); Phoenix (Maricopa County, AZ); New York City; North Jersey (Hudson, Bergen, Essex, Union, Passaic and Middlesex counties); Denver, CO; Tampa (Hillsborough County, FL); Minneapolis (Hennepin County, MN); Detroit, MI; Miami-Dade County, FL; Dallas County, TX; Philadelphia, PA; Los Angeles County, CA; San Diego County, CA; Boston (Suffolk County, MA); Chicago (Cook County, IL); DuPage County, IL; Lake County, IL; Will County, IL.
+
+## Pages
+
+- [Home](https://landquotient.com/): what Land Quotient is and who it is for
+- [GIS parcel map](https://landquotient.com/gis): the map, layers and filters
+- [Markets](https://landquotient.com/markets): every county covered, with parcel counts
+- [For brokers and investment sales](https://landquotient.com/investment-sales)
+- [For developers](https://landquotient.com/developers)
+- [For investors](https://landquotient.com/investors)
+- [Pricing](https://landquotient.com/pricing)
+- [FAQ](https://landquotient.com/faq)
+
+## Data
+
+Parcel records come from each county's published assessment roll; zoning from city and county GIS; flood zones from FEMA's National Flood Hazard Layer; building footprints from Overture Maps (OpenStreetMap contributors and others, ODbL). Parcel-level data is available to signed-in subscribers in the app; it is not offered as a bulk download.

@@ -1,7 +1,11 @@
+# Land Quotient. Marketing pages are open to every search engine and AI
+# assistant; the app and its parcel data sit behind sign-in.
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /catalog/
 Disallow: /survey/
 Disallow: /s/
 Disallow: /settings
+
 Sitemap: https://landquotient.com/sitemap.xml
