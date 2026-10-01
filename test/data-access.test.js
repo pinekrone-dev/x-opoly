@@ -19,6 +19,22 @@ import { createServer } from '../server/index.js'
 import { putParcels, sealMarket, forgetParcelSchema } from '../app/lib/parcels.js'
 import { nodeAdapter } from '../app/lib/sql.js'
 import { createUser } from '../app/lib/auth.js'
+import { generateKeyPairSync, createSign } from 'node:crypto'
+import { resetKeyCache } from '../app/lib/oidc.js'
+
+// A GitHub Actions token, signed by a key the test hands the app as GitHub's.
+const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
+const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'test-key', alg: 'RS256', use: 'sig' }
+const b64url = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v)).toString('base64url')
+function actionsToken(repository = 'pinekrone-dev/prospector') {
+  const now = Math.floor(Date.now() / 1000)
+  const head = b64url({ alg: 'RS256', kid: 'test-key', typ: 'JWT' })
+  const body = b64url({ iss: 'https://token.actions.githubusercontent.com', aud: 'landquotient-ingest', repository, exp: now + 300, nbf: now - 30 })
+  const signer = createSign('RSA-SHA256')
+  signer.update(`${head}.${body}`)
+  return `${head}.${body}.${signer.sign(privateKey).toString('base64url')}`
+}
+const JWKS_FETCH = async () => new Response(JSON.stringify({ keys: [jwk] }), { headers: { 'content-type': 'application/json' } })
 import { useTempData } from './helpers.js'
 
 const ctx = { waitUntil: (p) => p, passThroughOnException() {} }
@@ -33,7 +49,8 @@ describe('the catalogue behind sign-in', () => {
     await bucket.put('austin-tx/index.json', JSON.stringify({ n: 1 }))
     await bucket.put('austin-tx/owners.json', JSON.stringify({ p: {} }))
     await bucket.put('austin-tx/parcels.pmtiles', new TextEncoder().encode('x'.repeat(2000)))
-    env = await workerEnv({ PROSPECTOR_DATA: bucket })
+    env = await workerEnv({ PROSPECTOR_DATA: bucket, JWKS_FETCH })
+    resetKeyCache()
     // The first account claims the instance; after that the catalogue is closed.
     const joined = await worker.fetch(
       new Request('http://localhost/api/auth/register', {
@@ -71,6 +88,14 @@ describe('the catalogue behind sign-in', () => {
     assert.match(index.headers.get('cache-control'), /^private/)
     assert.equal(index.headers.get('access-control-allow-origin'), null)
     assert.equal((await read('austin-tx/parcels.pmtiles', { cookie, range: 'bytes=0-99' })).status, 206)
+  })
+
+  test('the data pipeline reads with its GitHub Actions token; a forged one is refused', async () => {
+    const piped = await read('austin-tx/owners.json', { authorization: `Bearer ${actionsToken()}` })
+    assert.equal(piped.status, 200)
+    const stranger = await read('austin-tx/owners.json', { authorization: `Bearer ${actionsToken('someone/else')}` })
+    assert.equal(stranger.status, 401, 'a token from another repository is not the pipeline')
+    assert.equal((await read('austin-tx/owners.json', { authorization: 'Bearer nonsense' })).status, 401)
   })
 
   test('a whole county file is downloaded a handful of times an hour, not on a loop', async () => {

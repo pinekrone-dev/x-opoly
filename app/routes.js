@@ -2085,6 +2085,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   const catalogViewers = new Map()
   const catalogViewer = async (c) => {
     if (!(await hasUsers())) return { id: 'setup' }
+    // The data pipeline reads the catalogue it publishes (layers, tracts,
+    // archive headers) from GitHub Actions, proving itself with the run's
+    // own OIDC token, the same proof the ingest door takes.
+    const bearer = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
+    if (bearer) {
+      try {
+        await verifyActionsToken(bearer, { audience: INGEST_AUDIENCE, repositories: INGEST_REPOS, fetchImpl: env.JWKS_FETCH })
+        return { id: 'pipeline', pipeline: true }
+      } catch {
+        return null
+      }
+    }
     const token = tokenFrom(c)
     if (!token) return null
     const held = catalogViewers.get(token)
@@ -2118,7 +2130,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
       const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles)$/.test(parts[1])
-      const throttled = ranged
+      const throttled = viewer.pipeline
+        ? null
+        : ranged
         ? limited(c, 'catalog-range', 20000, 60 * 60 * 1000, viewer.id)
         : whole
           ? limited(c, 'catalog-county', 6, 60 * 60 * 1000, viewer.id)
