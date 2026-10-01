@@ -125,18 +125,29 @@ export async function buildingsFor(
   )
   const boxArea = (box: [number, number, number, number]) => (box[2] - box[0]) * (box[3] - box[1])
   for (const building of found.values()) {
-    let owner = -1
+    // The smallest box holding the centre, and every box identical to it:
+    // the units of a condominium are separate parcels drawn as one outline,
+    // and the tower stands on each of them.
+    let owners: number[] = []
+    let least = Infinity
     for (const i of building.candidates) {
       const box = boxes[i]
       if (!box || !out[i]) continue
       if (building.lng < box[0] || building.lng > box[2] || building.lat < box[1] || building.lat > box[3]) continue
-      if (owner < 0 || boxArea(box) < boxArea(boxes[owner] as [number, number, number, number])) owner = i
+      const area = boxArea(box)
+      if (area < least) {
+        least = area
+        owners = [i]
+      } else if (area === least && owners.length && box.every((v, k) => v === (boxes[owners[0]] as number[])[k])) {
+        owners.push(i)
+      }
     }
-    if (owner < 0) continue
-    const summary = out[owner] as BuildingSummary
-    summary.count += 1
-    summary.area += building.area
-    if (building.height != null && (summary.tallest == null || building.height > summary.tallest)) summary.tallest = building.height
+    for (const owner of owners) {
+      const summary = out[owner] as BuildingSummary
+      summary.count += 1
+      summary.area += building.area
+      if (building.height != null && (summary.tallest == null || building.height > summary.tallest)) summary.tallest = building.height
+    }
   }
   for (const summary of out) {
     if (!summary) continue
