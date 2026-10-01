@@ -94,6 +94,13 @@ describe('buildings on a lot', () => {
     assert.equal(new Set(reads).size, 1, 'the one tile is read once for all three lots')
   })
 
+  test('condominium units drawn as one outline all stand under the same tower', async () => {
+    const [a, b, other] = await buildingsFor([leftLot, [...leftLot], rightLot], readTile)
+    assert.equal(a.count, 2)
+    assert.deepEqual(b, a, 'an identical box gets the same buildings, not none')
+    assert.equal(other.count, 1)
+  })
+
   test('an unread tile is unknown, and an empty one is vacant', async () => {
     const [far] = await buildingsFor([[lngOf(TX + 5), latOf(TY + 6), lngOf(TX + 5) + 0.0001, latOf(TY + 6) + 0.0001]], readTile)
     assert.equal(far, null)
