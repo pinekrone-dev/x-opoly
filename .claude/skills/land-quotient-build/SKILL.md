@@ -125,7 +125,13 @@ run with the GitHub Actions tools rather than polling.
 
 - `/catalog/*`: only `markets.json` and `<market>/meta.json` are public. Everything else (tiles, lite tiles, index, details, owners, layers) needs a signed-in account whose team passes the subscription gate; answers are `cache-control: private` with no CORS header. Per-account burst limits: 20,000 ranged reads/hour, 6 whole county files/hour (index, details, parcels.geojson, whole pmtiles), 600 other files/hour.
 - Daily row allowance per workspace (`PARCEL_ROW_BUDGET`, default 50,000; `ai_usage` kind `rows`): rows served by `/api/gis/parcels`, each `/api/gis/parcel` card, and Ask set-mode rows. Over it → 429 `code: 'row_budget'`, resets midnight UTC. The operator's team is not counted.
-- The public bucket domain `data.realestateaistudio.com` still serves every file to anyone (it is the Prospector public site's origin). Closing it is a Cloudflare dashboard change and a product decision.
+- The pipeline (prospector repo) reads the catalogue at `https://landquotient.com/catalog` with its GitHub OIDC token (`pipeline/catalog_access.py`, `CATALOG_BASE`); `/catalog` accepts that token like the ingest door. The app never reads the public bucket domain.
+- `data.realestateaistudio.com` (the bucket's public custom domain) is to be closed in the Cloudflare dashboard (R2 → prospector-data → Settings → Custom Domains); the files stay in the bucket.
+
+### SEO
+
+- `/markets/<slug>`: server-rendered county page from markets.json aggregates only (no parcel rows), with Dataset/FAQPage/BreadcrumbList JSON-LD; `/sitemap.xml` is generated from the live market list (`app/lib/marketPages.js`, routed by worker/index.js). `public/llms.txt` describes the product for AI assistants; robots disallows `/api/` and `/catalog/`.
+- Prospector (prospector.realestateaistudio.com) is retired into these pages: `site/_redirects` in the prospector repo 301s each county to `/markets/<slug>` and everything else to `/markets`. It deploys via prospector's `deploy-site.yml`, which needs the `CF_TOKEN` repo secret.
 
 ### Comping a customer (no card)
 
