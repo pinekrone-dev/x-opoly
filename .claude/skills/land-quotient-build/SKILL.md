@@ -121,6 +121,10 @@ run with the GitHub Actions tools rather than polling.
 - Start a run: edit `ops/tag-request.json` on the live branch (`{"markets": [...], "what": "zoning,buildings", "reset": false}`); that path is ignored by deploy.yml. `what=zoning` also drives the Worker's zoning/flood tag pass from here, free (this repo is public).
 - Filters: `bld=vacant|built`, `cov=0..1` (buildings cover at most that share of the lot; untagged lots never pass). Ask plan `buildings` / `coverageMax` ("no building", "empty lots", "underutilized" → 15%), only once `btagged`; exports carry buildings, footprint sq ft, tallest ft; Jev ratings are told what stands on the lot.
 
+### Comping a customer (no card)
+
+- A team whose `billing.status` is `'comped'` passes the subscription gate and reads as `exempt` in Settings, with no Stripe customer. Set it in D1 (DB `sitesurvey-cre`): `INSERT INTO billing (team_id, status, updated_at) VALUES (<owner user id>, 'comped', <now>) ON CONFLICT(team_id) DO UPDATE SET status = 'comped'`. Takes effect within 5 minutes on warm isolates. Never put a customer's email in `STRIPE_EXEMPT_EMAILS` via the repo (it is public).
+
 ### Zoomed-out summary grid
 
 - `GET /api/gis/grid?market=&v=` → `parcelGrid` (app/lib/parcels.js): one `GROUP BY` over the market into 0.01° cells (indexed from -180/-90): parcels, value, acres, in-flood / flood-read, vacant / buildings-read. Kept in D1 table `parcel_grids` (one row per market) keyed by `builtAt|taggedAt|btaggedAt|cell`, so a county is scanned once per republish or re-tag; edge-cached 12 h under the client's `v`.

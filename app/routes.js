@@ -592,13 +592,27 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * their collaborators ride along — and any owner email named in
    * STRIPE_EXEMPT_EMAILS. Cached per isolate; neither answer changes.
    */
+  /*
+   * A third door: a team the operator has comped, marked in the database
+   * (billing.status = 'comped') rather than in configuration, so a customer's
+   * address never has to be written into the code or a deploy. A "no" is
+   * remembered for five minutes only, so a team comped while the isolate is
+   * warm is let in within minutes.
+   */
+  const EXEMPT_RECHECK = 5 * 60 * 1000
   const teamIsExempt = async (teamId, fallbackEmail) => {
-    if (!exemptTeams.has(teamId)) {
-      const owner = await db.get('SELECT email FROM users WHERE id = ?', [teamId])
-      const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
-      exemptTeams.set(teamId, teamId === first?.id || isExemptEmail(env, owner?.email ?? fallbackEmail))
-    }
-    return exemptTeams.get(teamId)
+    const held = exemptTeams.get(teamId)
+    if (held === true) return true
+    if (held && held.until > Date.now()) return false
+    const owner = await db.get(
+      'SELECT u.email, b.status FROM users u LEFT JOIN billing b ON b.team_id = u.id WHERE u.id = ?',
+      [teamId],
+    )
+    const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
+    const exempt =
+      teamId === first?.id || owner?.status === 'comped' || isExemptEmail(env, owner?.email ?? fallbackEmail)
+    exemptTeams.set(teamId, exempt ? true : { until: Date.now() + EXEMPT_RECHECK })
+    return exempt
   }
 
   /**

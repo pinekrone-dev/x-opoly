@@ -202,8 +202,9 @@ describe('tenant isolation', () => {
 })
 
 describe('the subscription gate', () => {
+  let dave
   test('an unexempt team gets 402 on the app, but can still reach auth and billing', async () => {
-    const dave = client()
+    dave = client()
     await registerVerified(dave, { name: 'Dave', email: 'dave@example.com', password: 'a long enough password' })
 
     const gated = await dave('/api/surveys')
@@ -214,6 +215,28 @@ describe('the subscription gate', () => {
     const billing = await dave('/api/billing')
     assert.equal(billing.status, 200, 'and reach the payment page')
     assert.equal(billing.body.active, false)
+  })
+
+  test('a team the operator comped in the database gets in without a card', async () => {
+    // Dave, from the test above, is still behind the gate.
+    const comped = dave
+    assert.equal((await comped('/api/surveys')).status, 402)
+
+    const { DatabaseSync } = await import('node:sqlite')
+    const raw = new DatabaseSync(`${temp.directory}/test.db`)
+    const { id } = raw.prepare('SELECT id FROM users WHERE email = ?').get('dave@example.com')
+    raw.prepare("INSERT INTO billing (team_id, status, updated_at) VALUES (?, 'comped', ?)").run(id, new Date().toISOString())
+    raw.close()
+
+    // Comped while this isolate was warm: the remembered "no" lapses in minutes.
+    const realNow = Date.now
+    Date.now = () => realNow() + 6 * 60 * 1000
+    try {
+      assert.equal((await comped('/api/surveys')).status, 200)
+      assert.equal((await comped('/api/billing')).body.status, 'exempt', 'and the account pages read it as never paying')
+    } finally {
+      Date.now = realNow
+    }
   })
 
   test("the operator's own team never sees the gate, with no env list needed", async () => {
