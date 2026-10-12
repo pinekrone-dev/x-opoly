@@ -157,6 +157,42 @@ export async function buildingsFor(
   return out
 }
 
+/*
+ * How tall to draw a building when the map is tilted.
+ *
+ * The same reading as the card's: Overture's height where it has one, else
+ * its floor count at FLOOR_METRES a floor. Most footprints carry neither, and
+ * a flat outline under a tilted camera reads as a hole in the city, so those
+ * stand one ordinary storey tall instead. The card still says nothing about a
+ * height it was never given; this is only how the drawing stands up.
+ */
+export const UNKNOWN_HEIGHT_METRES = 4
+
+const positive = (field: string) => ['all', ['has', field], ['>', ['to-number', ['get', field], 0], 0]]
+
+export const BUILDING_HEIGHT_EXPRESSION = [
+  'case',
+  positive('height'),
+  ['to-number', ['get', 'height']],
+  positive('num_floors'),
+  ['*', ['to-number', ['get', 'num_floors']], FLOOR_METRES],
+  UNKNOWN_HEIGHT_METRES,
+] as const
+
+/** Where a building's drawn walls start: above a podium it sits on, else the ground. */
+export const BUILDING_BASE_EXPRESSION = [
+  'case',
+  positive('min_height'),
+  ['to-number', ['get', 'min_height']],
+  0,
+] as const
+
+/** How far the camera tilts for the 3D view, in degrees from straight down. */
+export const TILTED_PITCH = 55
+
+/** Below this the view is treated as flat and the buildings lie down again. */
+export const FLAT_PITCH = 5
+
 /** How much of a lot its buildings cover, 0 to 1, when the lot's size is known. */
 export function coverage(summary: BuildingSummary | null, acres: number | null | undefined): number | null {
   const lot = Number(acres) * 4046.86

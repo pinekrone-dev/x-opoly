@@ -6,6 +6,7 @@ import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
 import LiteMap from './LiteMap'
+import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, FLAT_PITCH, TILTED_PITCH } from '../lib/buildings'
 
 /*
  * The map engine.
@@ -340,6 +341,71 @@ export interface ExtraLayer {
    * decides which reach the screen.
    */
   filter?: maplibregl.FilterSpecification | null
+  /**
+   * Stand the outlines up as 3D blocks once the map is tilted.
+   *
+   * Only for a footprint layer whose features carry a height (Overture's
+   * buildings). Flat, the layer draws as it always did; tilted past
+   * FLAT_PITCH, the blocks appear and the flat fill steps aside.
+   */
+  extrude?: boolean
+}
+
+/**
+ * Shows the 3D blocks of every extruding layer while the view is tilted, and
+ * its flat fill while it is not. Never both: see the 3D view effect.
+ */
+function applyTilt(instance: maplibregl.Map, layers: ExtraLayer[]) {
+  const tilted = instance.getPitch() > FLAT_PITCH
+  for (const layer of layers) {
+    if (!layer.extrude) continue
+    const extrude = `x-${layer.id}-extrude`
+    const fill = `x-${layer.id}-fill`
+    if (instance.getLayer(extrude)) instance.setLayoutProperty(extrude, 'visibility', tilted ? 'visible' : 'none')
+    if (instance.getLayer(fill)) instance.setLayoutProperty(fill, 'visibility', tilted ? 'none' : 'visible')
+  }
+}
+
+/**
+ * The "3D" button, styled as one of MapLibre's own so it sits in the zoom
+ * group's column. Tilts to TILTED_PITCH; pressed again, lies the view flat
+ * and faces north, which is the way back a lost viewer reaches for.
+ */
+class TiltControl implements maplibregl.IControl {
+  private box: HTMLDivElement | null = null
+  private button: HTMLButtonElement | null = null
+
+  onAdd(map: maplibregl.Map) {
+    const box = document.createElement('div')
+    box.className = 'maplibregl-ctrl maplibregl-ctrl-group'
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.textContent = '3D'
+    button.style.fontWeight = '700'
+    button.style.fontSize = '11px'
+    button.addEventListener('click', () => {
+      if (map.getPitch() > FLAT_PITCH) map.easeTo({ pitch: 0, bearing: 0, duration: 800 })
+      else map.easeTo({ pitch: TILTED_PITCH, duration: 800 })
+    })
+    box.appendChild(button)
+    this.box = box
+    this.button = button
+    return box
+  }
+
+  onRemove() {
+    this.box?.remove()
+    this.box = null
+    this.button = null
+  }
+
+  setActive(on: boolean) {
+    if (!this.button) return
+    this.button.title = on ? 'Flat view' : '3D view: tilt the map and stand the buildings up'
+    this.button.setAttribute('aria-label', this.button.title)
+    this.button.setAttribute('aria-pressed', String(on))
+    this.button.style.color = on ? '#0d9488' : ''
+  }
 }
 
 /** Values come from other people's databases, so they are never markup. */
@@ -408,6 +474,14 @@ interface Props {
    * belong — the same right-hand card a parcel uses.
    */
   onExtraPick?: (pick: { layerId: string; properties: Record<string, unknown> }) => void
+  /**
+   * A "3D" button beside the zoom buttons that tilts the camera, so layers
+   * marked `extrude` stand up. Off by default: the survey map has nothing to
+   * stand up and a button that does nothing visible is a button to ignore.
+   */
+  tiltControl?: boolean
+  /** Told when the view tilts past FLAT_PITCH or lies flat again, by any means. */
+  onTilt?: (tilted: boolean) => void
   /** The survey's pipeline, for pin colours that match the sidebar. */
   stages?: { id: string; color: string }[]
   /** Tour start and end, drawn as their own flags — a tour begins at the
@@ -602,6 +676,8 @@ export default function MapCanvas({
   onViewChange,
   captureRef,
   onExtraPick,
+  tiltControl = false,
+  onTilt,
   nearBox = null,
   onExtrasNear,
   stages,
@@ -1459,7 +1535,7 @@ export default function MapCanvas({
 
     for (const id of extraIds.current) {
       if (live.has(id)) continue
-      for (const suffix of ['fill', 'line', 'point']) {
+      for (const suffix of ['fill', 'line', 'point', 'extrude']) {
         const layerId = `x-${id}-${suffix}`
         if (instance.getLayer(layerId)) instance.removeLayer(layerId)
       }
@@ -1511,6 +1587,10 @@ export default function MapCanvas({
               : [
                   { id: `x-${layer.id}-fill`, type: 'fill', source, ...within, ...from, paint: {} },
                   { id: `x-${layer.id}-line`, type: 'line', source, ...within, ...from, paint: {} },
+                  // Hidden until the view tilts; see applyTilt.
+                  ...(layer.extrude
+                    ? [{ id: `x-${layer.id}-extrude`, type: 'fill-extrusion', source, ...within, ...from, layout: { visibility: 'none' }, paint: {} } as maplibregl.LayerSpecification]
+                    : []),
                 ]
         for (const spec of specs) instance.addLayer(spec, insertBefore(spec.id))
       }
@@ -1520,6 +1600,7 @@ export default function MapCanvas({
       const fill = `x-${layer.id}-fill`
       const line = `x-${layer.id}-line`
       const point = `x-${layer.id}-point`
+      const extrude = `x-${layer.id}-extrude`
 
       /*
        * One colour, or one per category. A match expression reads the
@@ -1544,7 +1625,15 @@ export default function MapCanvas({
         instance.setPaintProperty(line, 'line-width', layer.kind === 'line' ? 2.5 : 1)
         instance.setPaintProperty(line, 'line-opacity', Math.min(1, layer.opacity + 0.2))
       }
-      for (const id of [fill, line, point]) {
+      if (instance.getLayer(extrude)) {
+        instance.setPaintProperty(extrude, 'fill-extrusion-color', paintColor as string)
+        instance.setPaintProperty(extrude, 'fill-extrusion-height', BUILDING_HEIGHT_EXPRESSION as never)
+        instance.setPaintProperty(extrude, 'fill-extrusion-base', BUILDING_BASE_EXPRESSION as never)
+        // Solid enough to read as buildings, never fully opaque, so the lot
+        // lines and anything picked underneath still show between them.
+        instance.setPaintProperty(extrude, 'fill-extrusion-opacity', Math.min(0.85, layer.opacity + 0.15))
+      }
+      for (const id of [fill, line, point, extrude]) {
         if (instance.getLayer(id)) instance.setFilter(id, layer.filter ?? null)
       }
       if (instance.getLayer(point)) {
@@ -1562,7 +1651,48 @@ export default function MapCanvas({
         ])
       }
     }
+    // A layer switched on while the view is already tilted stands up at once.
+    applyTilt(instance, wanted)
   }, [loaded, extras])
+
+  /*
+   * The 3D view: a button that tilts the camera, and the buildings that stand
+   * up when it does.
+   *
+   * Tilting is the trigger rather than the button, so a right-drag, a
+   * two-finger swipe or a pasted URL carrying a pitch all get the same
+   * buildings the button does. The flat fill steps aside while they stand,
+   * because a footprint painted under its own block reads as a shadow cast
+   * in the wrong direction.
+   */
+  const tiltedRef = useRef(false)
+  // Read at pitch time rather than captured, so the button is made once per
+  // map and not torn down and re-added every time a layer is switched.
+  const tiltExtras = useRef(extras)
+  tiltExtras.current = extras
+  const tiltCallback = useRef(onTilt)
+  tiltCallback.current = onTilt
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded) return undefined
+    const control = tiltControl ? new TiltControl() : null
+    if (control) instance.addControl(control, 'top-left')
+    const sync = () => {
+      const tilted = instance.getPitch() > FLAT_PITCH
+      control?.setActive(tilted)
+      applyTilt(instance, tiltExtras.current ?? [])
+      if (tilted !== tiltedRef.current) {
+        tiltedRef.current = tilted
+        tiltCallback.current?.(tilted)
+      }
+    }
+    sync()
+    instance.on('pitch', sync)
+    return () => {
+      instance.off('pitch', sync)
+      if (control && instance.hasControl(control)) instance.removeControl(control)
+    }
+  }, [loaded, tiltControl])
 
   /*
    * What the extra layers hold at the selected parcel.
@@ -1589,7 +1719,7 @@ export default function MapCanvas({
       const b = instance.project([e, n])
       const layers: string[] = []
       for (const layer of wanted) {
-        for (const suffix of ['fill', 'point', 'line']) {
+        for (const suffix of ['fill', 'point', 'line', 'extrude']) {
           const id = `x-${layer.id}-${suffix}`
           if (instance.getLayer(id)) layers.push(id)
         }
@@ -1653,7 +1783,7 @@ export default function MapCanvas({
         // feature's fields are ever read out now; a popup here would be a
         // second, worse copy of it that covers the map while it does so.
       }
-      for (const suffix of ['fill', 'line', 'point']) {
+      for (const suffix of ['fill', 'line', 'point', 'extrude']) {
         const id = `x-${layer.id}-${suffix}`
         if (instance.getLayer(id)) {
           instance.on('click', id, open)

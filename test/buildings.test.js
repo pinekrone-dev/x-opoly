@@ -13,7 +13,8 @@ import assert from 'node:assert/strict'
 import test, { before, describe } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 
-import { BUILDING_ZOOM, buildingsFor, coverage, describeBuildings } from '../src/lib/buildings.ts'
+import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, BUILDING_ZOOM, UNKNOWN_HEIGHT_METRES, buildingsFor, coverage, describeBuildings } from '../src/lib/buildings.ts'
+import { expression } from '@maplibre/maplibre-gl-style-spec'
 import { filtersActive, listBoxes, marketSummary, putBuildingTags, putParcels, searchParcels, sealMarket } from '../app/lib/parcels.js'
 import { UNDERBUILT, describePlan, heuristicPlan, normalizePlan, passesAttributes } from '../app/lib/ask.js'
 import { parcelState } from '../app/lib/jev.js'
@@ -265,5 +266,38 @@ describe('the zoomed-out summary grid', () => {
     const [ring] = value.geo.features[0].geometry.coordinates
     assert.ok(Math.abs(ring[1][0] - ring[0][0] - GRID_CELL) < 1e-9)
     assert.equal(gridFeatures({ ...tagged, cells: [] }, 'value'), null)
+  })
+})
+
+// The 3D view stands each footprint up from these two expressions. They run in
+// MapLibre's own evaluator here, because a typo in an expression does not
+// throw on the map: the layer is quietly never drawn.
+describe('3D building heights', () => {
+  const compile = (spec) => {
+    const out = expression.createExpression(spec)
+    assert.equal(out.result, 'success', JSON.stringify(out.value))
+    return (properties) => out.value.evaluate({ zoom: 16 }, { type: 'Polygon', properties })
+  }
+  const height = compile(BUILDING_HEIGHT_EXPRESSION)
+  const base = compile(BUILDING_BASE_EXPRESSION)
+
+  test('a published height is drawn as published', () => {
+    assert.equal(height({ height: 38.5, num_floors: 3 }), 38.5)
+  })
+
+  test('floors stand in for a height that is missing or zero', () => {
+    assert.equal(height({ num_floors: 4 }), 4 * 3.2)
+    assert.equal(height({ height: 0, num_floors: 2 }), 2 * 3.2)
+    assert.equal(height({ height: '12', num_floors: 2 }), 12)
+  })
+
+  test('a footprint with neither stands one storey tall, not flat', () => {
+    assert.equal(height({}), UNKNOWN_HEIGHT_METRES)
+    assert.equal(height({ height: null, num_floors: 'n/a' }), UNKNOWN_HEIGHT_METRES)
+  })
+
+  test('walls start above a podium when one is published, else at the ground', () => {
+    assert.equal(base({ min_height: 6 }), 6)
+    assert.equal(base({}), 0)
   })
 })

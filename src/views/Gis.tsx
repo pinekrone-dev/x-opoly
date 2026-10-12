@@ -204,6 +204,8 @@ interface CategoryOption {
 interface PublishedLayer {
   id: string
   label: string
+  /** Stand the outlines up as 3D blocks when the map is tilted (buildings only). */
+  extrude?: boolean
   note?: string
   kind: 'point' | 'polygon' | 'line'
   color: string
@@ -264,6 +266,7 @@ const BUILDINGS_LAYER: PublishedLayer = {
   note: 'Outlines from street zoom in',
   fields: ['height', 'num_floors', 'class', 'subtype'],
   attribution: OVERTURE_ATTRIBUTION,
+  extrude: true,
 }
 
 /** Where a market is, from its parcel archive's header. */
@@ -1288,6 +1291,15 @@ export default function Gis({
   const frameNext = useRef<string | null>(null)
   /** A parcel clicked in a neighbouring market, opened once that market has loaded. */
   const pendingPick = useRef<{ slug: string; id: string | number } | null>(null)
+  /*
+   * Tilting the map is asking to see the city in 3D, so the buildings come on
+   * with it. Lying it flat leaves them as the viewer has them; switching a
+   * layer off behind someone's back is not the map's call.
+   */
+  const onTilt = useCallback((tilted: boolean) => {
+    if (tilted) setLayerOn((current) => (current.buildings ? current : { ...current, buildings: true }))
+  }, [])
+
   const onViewChange = useCallback((where: { lat: number; lng: number; zoom: number; bounds?: [number, number, number, number] }) => {
     here.current = where
     if (!where.bounds) return
@@ -2133,6 +2145,7 @@ export default function Gis({
           color: layerStyle[layer.id]?.color ?? layer.color,
           opacity: layerStyle[layer.id]?.opacity ?? 0.7,
           fields: layer.fields,
+          extrude: layer.extrude ?? false,
           categories: categoryPaint[layer.id]
             ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
             : null,
@@ -2161,6 +2174,7 @@ export default function Gis({
                   color: '#0e7490',
                   opacity: 0.35,
                   fields: ['Name', 'Type', 'MMSI'],
+                  extrude: false,
                   categories: null,
                   filter: null,
                 },
@@ -3695,6 +3709,8 @@ export default function Gis({
           // A layer feature under a selected parcel joins that parcel's
           // panel as its own section; with no parcel open it gets the panel
           // to itself. Either way it is the panel, not a card over the map.
+          tiltControl
+          onTilt={onTilt}
           onExtraPick={(pick) => {
             setFeaturePick(pick)
           }}
