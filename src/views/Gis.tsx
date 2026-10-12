@@ -19,7 +19,7 @@ import { composeMapImage, saveCanvasPdf, saveCanvasPng } from '../lib/mapExport'
 import { floodAt, zoneMeaning, type FloodAnswer } from '../lib/flood'
 import { floodZoom, tileReader } from '../lib/floodTiles'
 import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '../lib/grid'
-import { OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
+import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 
 /** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
@@ -206,6 +206,8 @@ interface PublishedLayer {
   label: string
   /** Stand the outlines up as 3D blocks when the map is tilted (buildings only). */
   extrude?: boolean
+  /** The archive's layer of building parts, drawn tilted so towers show their steps. */
+  extrudeParts?: string
   note?: string
   kind: 'point' | 'polygon' | 'line'
   color: string
@@ -267,6 +269,7 @@ const BUILDINGS_LAYER: PublishedLayer = {
   fields: ['height', 'num_floors', 'class', 'subtype'],
   attribution: OVERTURE_ATTRIBUTION,
   extrude: true,
+  extrudeParts: BUILDING_PART_LAYER,
 }
 
 /** Where a market is, from its parcel archive's header. */
@@ -2146,6 +2149,7 @@ export default function Gis({
           opacity: layerStyle[layer.id]?.opacity ?? 0.7,
           fields: layer.fields,
           extrude: layer.extrude ?? false,
+          extrudeParts: layer.extrudeParts ?? null,
           categories: categoryPaint[layer.id]
             ? { field: categoryPaint[layer.id].field, colors: categoryPaint[layer.id].colors }
             : null,
@@ -2175,6 +2179,7 @@ export default function Gis({
                   opacity: 0.35,
                   fields: ['Name', 'Type', 'MMSI'],
                   extrude: false,
+                  extrudeParts: null,
                   categories: null,
                   filter: null,
                 },

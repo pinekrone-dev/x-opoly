@@ -187,6 +187,35 @@ export const BUILDING_BASE_EXPRESSION = [
   0,
 ] as const
 
+/*
+ * Stepped towers.
+ *
+ * Overture splits a building whose tiers differ in height (a tower on a
+ * podium, a setback skyscraper) into parts, each with its own height and
+ * base, in a second layer of the same archive. Drawn tilted, the parts are
+ * the building; the whole outline is drawn only for a building that has none,
+ * or a block the full height of its tallest tier would swallow the steps.
+ */
+export const BUILDING_PART_LAYER = 'building_part'
+
+/** Buildings to stand up whole: those not already drawn as their parts. */
+export const WHOLE_BUILDING_FILTER = ['!=', ['to-string', ['get', 'has_parts']], 'true'] as const
+
+/*
+ * The colour a building is mapped with, where someone has mapped one: its
+ * walls, else its roof. Anything that is not a colour (a typo, an empty
+ * string, a word MapLibre does not know) falls through to the layer's own
+ * colour, so an unmapped building looks exactly as it did before.
+ */
+export function buildingColor(fallback: unknown): unknown {
+  return [
+    'to-color',
+    ['coalesce', ['get', 'facade_color'], ''],
+    ['coalesce', ['get', 'roof_color'], ''],
+    fallback,
+  ]
+}
+
 /** How far the camera tilts for the 3D view, in degrees from straight down. */
 export const TILTED_PITCH = 55
 

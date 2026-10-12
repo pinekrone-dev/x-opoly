@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import test, { before, describe } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 
-import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, BUILDING_ZOOM, UNKNOWN_HEIGHT_METRES, buildingsFor, coverage, describeBuildings } from '../src/lib/buildings.ts'
+import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, BUILDING_ZOOM, UNKNOWN_HEIGHT_METRES, WHOLE_BUILDING_FILTER, buildingColor, buildingsFor, coverage, describeBuildings } from '../src/lib/buildings.ts'
 import { expression } from '@maplibre/maplibre-gl-style-spec'
 import { filtersActive, listBoxes, marketSummary, putBuildingTags, putParcels, searchParcels, sealMarket } from '../app/lib/parcels.js'
 import { UNDERBUILT, describePlan, heuristicPlan, normalizePlan, passesAttributes } from '../app/lib/ask.js'
@@ -299,5 +299,23 @@ describe('3D building heights', () => {
   test('walls start above a podium when one is published, else at the ground', () => {
     assert.equal(base({ min_height: 6 }), 6)
     assert.equal(base({}), 0)
+  })
+
+  // Overture's own shapes: has_parts is a boolean in the tiles, colours are hex.
+  test('a building drawn as its parts is not also drawn whole', () => {
+    const whole = compile(WHOLE_BUILDING_FILTER)
+    assert.equal(whole({ has_parts: true }), false)
+    assert.equal(whole({ has_parts: false }), true)
+    assert.equal(whole({}), true)
+  })
+
+  test('a mapped wall colour wins, then the roof, then the layer colour', () => {
+    const color = compile(buildingColor('#57534e'))
+    const hex = (c) => '#' + [c.r, c.g, c.b].map((v) => Math.round((v / (c.a || 1)) * 255).toString(16).padStart(2, '0')).join('')
+    assert.equal(hex(color({ facade_color: '#9C8272', roof_color: '#FFFFFF' })), '#9c8272')
+    assert.equal(hex(color({ roof_color: '#908E82' })), '#908e82')
+    assert.equal(hex(color({})), '#57534e')
+    // Not a colour at all: the layer's colour, never black or a broken layer.
+    assert.equal(hex(color({ facade_color: 'brick-ish', roof_color: '' })), '#57534e')
   })
 })
