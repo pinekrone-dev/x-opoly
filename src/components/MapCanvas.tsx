@@ -6,7 +6,7 @@ import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
 import LiteMap from './LiteMap'
-import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, FLAT_PITCH, TILTED_PITCH } from '../lib/buildings'
+import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, FLAT_PITCH, TILTED_PITCH, WHOLE_BUILDING_FILTER, buildingColor } from '../lib/buildings'
 
 /*
  * The map engine.
@@ -349,7 +349,16 @@ export interface ExtraLayer {
    * FLAT_PITCH, the blocks appear and the flat fill steps aside.
    */
   extrude?: boolean
+  /**
+   * The archive's layer of building parts, when it has one. Tilted, each part
+   * stands at its own height and the buildings that have parts are drawn as
+   * them, so a setback tower shows its steps. Overture's is `building_part`.
+   */
+  extrudeParts?: string | null
 }
+
+/** Every map layer an extra layer can own, by the suffix on its id. */
+const EXTRA_SUFFIXES = ['fill', 'line', 'point', 'extrude', 'parts'] as const
 
 /**
  * Shows the 3D blocks of every extruding layer while the view is tilted, and
@@ -359,9 +368,10 @@ function applyTilt(instance: maplibregl.Map, layers: ExtraLayer[]) {
   const tilted = instance.getPitch() > FLAT_PITCH
   for (const layer of layers) {
     if (!layer.extrude) continue
-    const extrude = `x-${layer.id}-extrude`
     const fill = `x-${layer.id}-fill`
-    if (instance.getLayer(extrude)) instance.setLayoutProperty(extrude, 'visibility', tilted ? 'visible' : 'none')
+    for (const id of [`x-${layer.id}-extrude`, `x-${layer.id}-parts`]) {
+      if (instance.getLayer(id)) instance.setLayoutProperty(id, 'visibility', tilted ? 'visible' : 'none')
+    }
     if (instance.getLayer(fill)) instance.setLayoutProperty(fill, 'visibility', tilted ? 'none' : 'visible')
   }
 }
@@ -1535,7 +1545,7 @@ export default function MapCanvas({
 
     for (const id of extraIds.current) {
       if (live.has(id)) continue
-      for (const suffix of ['fill', 'line', 'point', 'extrude']) {
+      for (const suffix of EXTRA_SUFFIXES) {
         const layerId = `x-${id}-${suffix}`
         if (instance.getLayer(layerId)) instance.removeLayer(layerId)
       }
@@ -1591,6 +1601,9 @@ export default function MapCanvas({
                   ...(layer.extrude
                     ? [{ id: `x-${layer.id}-extrude`, type: 'fill-extrusion', source, ...within, ...from, layout: { visibility: 'none' }, paint: {} } as maplibregl.LayerSpecification]
                     : []),
+                  ...(layer.extrude && layer.tiles && layer.extrudeParts
+                    ? [{ id: `x-${layer.id}-parts`, type: 'fill-extrusion', source, 'source-layer': layer.extrudeParts, ...from, layout: { visibility: 'none' }, paint: {} } as maplibregl.LayerSpecification]
+                    : []),
                 ]
         for (const spec of specs) instance.addLayer(spec, insertBefore(spec.id))
       }
@@ -1601,6 +1614,7 @@ export default function MapCanvas({
       const line = `x-${layer.id}-line`
       const point = `x-${layer.id}-point`
       const extrude = `x-${layer.id}-extrude`
+      const parts = `x-${layer.id}-parts`
 
       /*
        * One colour, or one per category. A match expression reads the
@@ -1625,16 +1639,26 @@ export default function MapCanvas({
         instance.setPaintProperty(line, 'line-width', layer.kind === 'line' ? 2.5 : 1)
         instance.setPaintProperty(line, 'line-opacity', Math.min(1, layer.opacity + 0.2))
       }
-      if (instance.getLayer(extrude)) {
-        instance.setPaintProperty(extrude, 'fill-extrusion-color', paintColor as string)
-        instance.setPaintProperty(extrude, 'fill-extrusion-height', BUILDING_HEIGHT_EXPRESSION as never)
-        instance.setPaintProperty(extrude, 'fill-extrusion-base', BUILDING_BASE_EXPRESSION as never)
+      for (const id of [extrude, parts]) {
+        if (!instance.getLayer(id)) continue
+        // A building's own mapped colour where it has one, the layer's where not.
+        instance.setPaintProperty(id, 'fill-extrusion-color', buildingColor(paintColor) as never)
+        instance.setPaintProperty(id, 'fill-extrusion-height', BUILDING_HEIGHT_EXPRESSION as never)
+        instance.setPaintProperty(id, 'fill-extrusion-base', BUILDING_BASE_EXPRESSION as never)
         // Solid enough to read as buildings, never fully opaque, so the lot
         // lines and anything picked underneath still show between them.
-        instance.setPaintProperty(extrude, 'fill-extrusion-opacity', Math.min(0.85, layer.opacity + 0.15))
+        instance.setPaintProperty(id, 'fill-extrusion-opacity', Math.min(0.85, layer.opacity + 0.15))
       }
-      for (const id of [fill, line, point, extrude]) {
+      for (const id of [fill, line, point]) {
         if (instance.getLayer(id)) instance.setFilter(id, layer.filter ?? null)
+      }
+      if (instance.getLayer(extrude)) {
+        // With parts drawn, a building that has them stands as its parts only.
+        const whole = instance.getLayer(parts) ? (WHOLE_BUILDING_FILTER as unknown as maplibregl.FilterSpecification) : null
+        instance.setFilter(
+          extrude,
+          whole && layer.filter ? (['all', whole, layer.filter] as unknown as maplibregl.FilterSpecification) : whole ?? layer.filter ?? null,
+        )
       }
       if (instance.getLayer(point)) {
         instance.setPaintProperty(point, 'circle-color', paintColor as string)
@@ -1719,7 +1743,7 @@ export default function MapCanvas({
       const b = instance.project([e, n])
       const layers: string[] = []
       for (const layer of wanted) {
-        for (const suffix of ['fill', 'point', 'line', 'extrude']) {
+        for (const suffix of EXTRA_SUFFIXES) {
           const id = `x-${layer.id}-${suffix}`
           if (instance.getLayer(id)) layers.push(id)
         }
@@ -1783,7 +1807,7 @@ export default function MapCanvas({
         // feature's fields are ever read out now; a popup here would be a
         // second, worse copy of it that covers the map while it does so.
       }
-      for (const suffix of ['fill', 'line', 'point', 'extrude']) {
+      for (const suffix of EXTRA_SUFFIXES) {
         const id = `x-${layer.id}-${suffix}`
         if (instance.getLayer(id)) {
           instance.on('click', id, open)
