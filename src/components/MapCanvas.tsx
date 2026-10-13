@@ -7,6 +7,16 @@ import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
 import LiteMap from './LiteMap'
 import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, FLAT_PITCH, TILTED_PITCH, WHOLE_BUILDING_FILTER, buildingColor } from '../lib/buildings'
+import {
+  TERRAIN_ATTRIBUTION,
+  TERRAIN_EXAGGERATION,
+  TERRAIN_MAX_ZOOM,
+  TERRAIN_SOURCE,
+  TERRAIN_STORAGE_KEY,
+  TERRAIN_TILES,
+  readTerrainChoice,
+  terrainWanted,
+} from '../lib/terrain'
 
 /*
  * The map engine.
@@ -384,6 +394,10 @@ function applyTilt(instance: maplibregl.Map, layers: ExtraLayer[]) {
 class TiltControl implements maplibregl.IControl {
   private box: HTMLDivElement | null = null
   private button: HTMLButtonElement | null = null
+  private ground: HTMLButtonElement | null = null
+
+  /** Called when the terrain button is pressed; the map decides what that means. */
+  constructor(private readonly onTerrain: () => void) {}
 
   onAdd(map: maplibregl.Map) {
     const box = document.createElement('div')
@@ -398,8 +412,18 @@ class TiltControl implements maplibregl.IControl {
       else map.easeTo({ pitch: TILTED_PITCH, duration: 800 })
     })
     box.appendChild(button)
+    // Terrain on or off. The choice is the viewer's and is kept; the relief
+    // itself only shows while the view is tilted.
+    const ground = document.createElement('button')
+    ground.type = 'button'
+    ground.innerHTML =
+      '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="margin:auto;display:block">' +
+      '<path d="M3 19 L9.5 8 L13 13.5 L15.5 10 L21 19 Z" fill="currentColor"/></svg>'
+    ground.addEventListener('click', () => this.onTerrain())
+    box.appendChild(ground)
     this.box = box
     this.button = button
+    this.ground = ground
     return box
   }
 
@@ -407,6 +431,20 @@ class TiltControl implements maplibregl.IControl {
     this.box?.remove()
     this.box = null
     this.button = null
+    this.ground = null
+  }
+
+  /** `on` is the viewer's choice; `showing` is whether relief is drawn right now. */
+  setTerrain(on: boolean, showing: boolean, reason: string | null) {
+    if (!this.ground) return
+    this.ground.title = !on
+      ? 'Terrain off: press to show hills and valleys when the map is tilted'
+      : showing
+        ? 'Terrain on: press to flatten the ground'
+        : reason ?? 'Terrain on: shows when the map is tilted'
+    this.ground.setAttribute('aria-label', this.ground.title)
+    this.ground.setAttribute('aria-pressed', String(on))
+    this.ground.style.color = showing ? '#0d9488' : on ? '' : '#a8a29e'
   }
 
   setActive(on: boolean) {
@@ -1696,20 +1734,69 @@ export default function MapCanvas({
   tiltExtras.current = extras
   const tiltCallback = useRef(onTilt)
   tiltCallback.current = onTilt
+  /*
+   * Terrain follows the same trigger, on the viewer's say-so: relief while
+   * tilted, flat ground the moment the view lies down, and never on a map
+   * already running at reduced quality.
+   */
+  const terrainOn = useRef(true)
   useEffect(() => {
     const instance = map.current
     if (!instance || !loaded) return undefined
-    const control = tiltControl ? new TiltControl() : null
+    try {
+      terrainOn.current = readTerrainChoice(window.localStorage.getItem(TERRAIN_STORAGE_KEY))
+    } catch {
+      terrainOn.current = true
+    }
+    const applyTerrain = (tilted: boolean) => {
+      const want = tiltControl && terrainWanted({ tilted, enabled: terrainOn.current, gpuLevel: gpuLevel.current })
+      if (want) {
+        if (!instance.getSource(TERRAIN_SOURCE)) {
+          instance.addSource(TERRAIN_SOURCE, {
+            type: 'raster-dem',
+            tiles: [TERRAIN_TILES],
+            encoding: 'terrarium',
+            tileSize: 256,
+            maxzoom: TERRAIN_MAX_ZOOM,
+            attribution: TERRAIN_ATTRIBUTION,
+          })
+        }
+        if (!instance.getTerrain()) instance.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION })
+      } else if (instance.getTerrain()) {
+        instance.setTerrain(null)
+      }
+      control?.setTerrain(
+        terrainOn.current,
+        Boolean(want),
+        gpuLevel.current > 0 ? 'Terrain is off while the map runs at reduced quality' : null,
+      )
+    }
+    const control = tiltControl
+      ? new TiltControl(() => {
+          terrainOn.current = !terrainOn.current
+          try {
+            window.localStorage.setItem(TERRAIN_STORAGE_KEY, terrainOn.current ? 'on' : 'off')
+          } catch {
+            // A browser that will not store it keeps the choice for this visit.
+          }
+          applyTerrain(instance.getPitch() > FLAT_PITCH)
+        })
+      : null
     if (control) instance.addControl(control, 'top-left')
     const sync = () => {
       const tilted = instance.getPitch() > FLAT_PITCH
       control?.setActive(tilted)
       applyTilt(instance, tiltExtras.current ?? [])
+      const wanted = tiltControl && terrainWanted({ tilted, enabled: terrainOn.current, gpuLevel: gpuLevel.current })
+      if (tilted !== tiltedRef.current || Boolean(instance.getTerrain()) !== wanted) {
+        applyTerrain(tilted)
+      }
       if (tilted !== tiltedRef.current) {
         tiltedRef.current = tilted
         tiltCallback.current?.(tilted)
       }
     }
+    applyTerrain(instance.getPitch() > FLAT_PITCH)
     sync()
     instance.on('pitch', sync)
     return () => {
