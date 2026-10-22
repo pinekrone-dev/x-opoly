@@ -30,6 +30,7 @@ function sign(overrides = {}) {
     iss: 'https://token.actions.githubusercontent.com',
     aud: 'landquotient-ingest',
     repository: 'pinekrone-dev/prospector',
+    ref: 'refs/heads/main',
     exp: now + 300,
     nbf: now - 30,
     ...overrides,

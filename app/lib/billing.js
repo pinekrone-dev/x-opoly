@@ -537,6 +537,9 @@ export async function verifyWebhook(env, payload, signatureHeader) {
       .filter((pair) => pair.length === 2),
   )
   if (!parts.t || !parts.v1) return null
+  // Stripe's own tolerance: a correctly signed event older than five minutes
+  // is a replay, whoever is sending it.
+  if (!(Math.abs(Date.now() / 1000 - Number(parts.t)) <= 300)) return null
 
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey(

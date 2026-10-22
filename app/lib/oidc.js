@@ -63,11 +63,15 @@ export function resetKeyCache() {
  * @param token         the raw JWT
  * @param audience      the audience this app minted the trust for
  * @param repositories  the exact owner/repo values allowed to publish
+ * @param refs          per repository, the only refs (refs/heads/main…) whose
+ *                      runs may publish; a repository not named here is not
+ *                      held to a ref. Without it, any branch anyone with push
+ *                      access creates could write production data.
  * @throws on any defect — the caller answers 401 with the message
  */
 export async function verifyActionsToken(
   token,
-  { audience, repositories = [], fetchImpl = fetch, now = () => Date.now() } = {},
+  { audience, repositories = [], refs = {}, fetchImpl = fetch, now = () => Date.now() } = {},
 ) {
   const parts = String(token || '').split('.')
   if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
@@ -97,6 +101,10 @@ export async function verifyActionsToken(
 
   if (!repositories.includes(claims.repository)) {
     throw new Error(`repository ${claims.repository ?? '(none)'} is not allowed to publish`)
+  }
+  const allowedRefs = Object.hasOwn(refs, claims.repository) ? refs[claims.repository] : null
+  if (allowedRefs && !allowedRefs.includes(claims.ref)) {
+    throw new Error(`${claims.ref ?? '(no ref)'} in ${claims.repository} is not allowed to publish`)
   }
 
   const keys = await signingKeys(fetchImpl, header.kid)

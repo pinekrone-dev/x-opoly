@@ -199,6 +199,25 @@ describe('tenant isolation', () => {
     const { body } = await bob('/api/invites')
     assert.ok(!body.invites.some((invite) => invite.email === 'friend-of-alice@example.com'))
   })
+
+  test("alice's invite cannot be revoked by bob", async () => {
+    const minted = await alice('/api/invites', asJson({ email: 'keep-me@example.com' }))
+    const id = minted.body.invite.id
+    assert.equal((await bob(`/api/invites/${id}`, { method: 'DELETE' })).status, 404)
+    const { body } = await alice('/api/invites')
+    assert.ok(body.invites.some((invite) => invite.id === id), 'and it is still there for alice')
+    assert.equal((await alice(`/api/invites/${id}`, { method: 'DELETE' })).status, 204)
+  })
+
+  test("alice's stages answer 404 to bob, and are not changed or deleted", async () => {
+    const { body } = await alice(`/api/surveys/${aliceSurvey.id}/stages`)
+    const stage = body.stages[0]
+    assert.equal((await bob(`/api/stages/${stage.id}`, asJson({ name: 'stolen' }, 'PATCH'))).status, 404)
+    assert.equal((await bob(`/api/stages/${stage.id}`, { method: 'DELETE' })).status, 404)
+    const after = await alice(`/api/surveys/${aliceSurvey.id}/stages`)
+    assert.deepEqual(after.body.stages.find((s) => s.id === stage.id), stage)
+    assert.equal((await alice(`/api/stages/${stage.id}`, asJson({ name: 'Renamed' }, 'PATCH'))).status, 200)
+  })
 })
 
 describe('the subscription gate', () => {
@@ -415,6 +434,8 @@ describe('the trial and cancelling from Settings', () => {
     const calls = stripeCalls.length
     assert.equal((await hal('/api/billing/cancel', { method: 'POST' })).status, 403)
     assert.equal((await hal('/api/billing/resume', { method: 'POST' })).status, 403)
+    assert.equal((await hal('/api/billing/checkout', asJson({}))).status, 403, 'nor start a checkout for the team')
+    assert.equal((await hal('/api/billing/portal', { method: 'POST' })).status, 403, 'nor open its billing portal')
     assert.equal(stripeCalls.length, calls, 'and Stripe is never asked')
   })
 

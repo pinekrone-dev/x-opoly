@@ -79,8 +79,15 @@ export async function listInvites(db, teamId = null) {
   return rows.map(mapInvite)
 }
 
-export async function revokeInvite(db, id) {
-  const { changes } = await db.run('DELETE FROM invites WHERE id = ? AND used_at IS NULL', [id])
+/** Withdraws an unused invite. Given a team, only one of that team's own: another team's ids are refused, not deleted. */
+export async function revokeInvite(db, id, teamId = null) {
+  const { changes } = teamId
+    ? await db.run(
+        `DELETE FROM invites WHERE id = ? AND used_at IS NULL
+           AND created_by IN (SELECT id FROM users WHERE COALESCE(team_id, id) = ?)`,
+        [id, teamId],
+      )
+    : await db.run('DELETE FROM invites WHERE id = ? AND used_at IS NULL', [id])
   return changes > 0
 }
 
