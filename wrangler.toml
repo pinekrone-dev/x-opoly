@@ -106,11 +106,13 @@ binding = "PARCELS_3"
 database_name = "landquotient-parcels-3"
 database_id = "7cae5cbf-7d2d-4f4e-9555-5be9c8490336"
 
-# The Prospector parcel data, served publicly at data.realestateaistudio.com.
-# Bound here so the pipeline's GitHub Actions run can publish county rebuilds
-# through /api/gis/ingest — authenticated by the run's own OIDC token, so no
+# The Prospector parcel data. Read only through this Worker's /catalog route,
+# behind sign-in and the subscription gate; the bucket's public custom domain
+# (data.realestateaistudio.com) is to be closed. Bound here too so the
+# pipeline's GitHub Actions run can publish county rebuilds through
+# /api/gis/ingest — authenticated by the run's own OIDC token, so no
 # credential is stored anywhere on either side. This Worker only ever writes
-# a fixed set of data filenames into it; serving stays on the R2 domain.
+# a fixed set of data filenames into it.
 [[r2_buckets]]
 binding = "PROSPECTOR_DATA"
 bucket_name = "prospector-data"

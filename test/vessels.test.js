@@ -292,7 +292,7 @@ describe('GET /api/gis/vessels', () => {
     globalThis.fetch = async (url, init) =>
       String(url).endsWith('/new-york-ny/meta.json')
         ? Response.json({ center: [-73.9712, 40.7431] })
-        : String(url).includes('data.realestateaistudio.com')
+        : String(url).startsWith('https://catalogue.test/')
           ? new Response('missing', { status: 404 })
           : realFetch(url, init)
     app = await createServer({
@@ -300,6 +300,7 @@ describe('GET /api/gis/vessels', () => {
       DB_FILE: `${temp.directory}/test.db`,
       VESSELS,
       AISSTREAM_API_KEY: 'test-key',
+      PARCEL_CATALOG_ORIGIN: 'https://catalogue.test',
     })
     const response = await app.fetch(
       new Request('http://localhost/api/auth/register', {

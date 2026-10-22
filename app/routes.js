@@ -2087,11 +2087,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * are the same allowlist the ingest side writes through, so nothing can be
    * fetched that the pipeline could not have put there; and the market is
    * matched as a slug, so no path can climb out of its county. When there is
-   * no bucket bound — the Node server, a preview — it fetches the public file
-   * from the data domain server-side, where CORS does not apply either.
+   * no bucket bound — the Node server, a preview — it reads PARCEL_CATALOG_ORIGIN
+   * server-side if one is set, and otherwise has no catalogue at all.
+   *
+   * There is no public default on purpose. The bucket used to be served on
+   * data.realestateaistudio.com and this fell back to it, which meant the
+   * owners, details and tiles behind the paywall here were one curl away
+   * there. The bucket is reached through its binding, and nowhere else.
    */
-  const CATALOG_ORIGIN = (env.PARCEL_CATALOG_ORIGIN || 'https://data.realestateaistudio.com')
-    .replace(/\/$/, '')
+  const CATALOG_ORIGIN = env.PARCEL_CATALOG_ORIGIN ? String(env.PARCEL_CATALOG_ORIGIN).replace(/\/$/, '') : null
 
   /*
    * Open tile archives, kept for the life of the isolate.
@@ -2115,7 +2119,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
               return { data: await object.arrayBuffer() }
             },
           }
-        : new FetchSource(`${CATALOG_ORIGIN}/${key}`)
+        : CATALOG_ORIGIN
+          ? new FetchSource(`${CATALOG_ORIGIN}/${key}`)
+          : {
+              getKey: () => key,
+              getBytes: async () => {
+                throw new Error(`no archive at ${key}`)
+              },
+            }
     const archive = new PMTiles(source)
     if (archives.size > 16) archives.clear()
     archives.set(key, archive)
@@ -2376,9 +2387,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       )
     }
 
-    // No bucket here. Fetch the public file the same way anyone would, except
-    // from the server, where there is no origin to be refused for — carrying
-    // the range through so this path reads tiles the same way.
+    // No bucket here. Read the configured origin from the server, where there
+    // is no browser origin to be refused for, carrying the range through so
+    // this path reads tiles the same way. No origin, no catalogue.
+    if (!CATALOG_ORIGIN) return c.json({ error: 'No such catalogue file.' }, 404)
     const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
       headers: {
         'user-agent': 'LandQuotient/1.0 (+https://survey.realestateaistudio.com)',
@@ -3102,6 +3114,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       const object = await bucket.get(key)
       return object ? JSON.parse(await object.text()) : null
     }
+    if (!CATALOG_ORIGIN) return null
     const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
       headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
     })
