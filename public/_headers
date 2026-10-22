@@ -1,0 +1,10 @@
+# Static files Cloudflare serves without running the Worker (index.html, the
+# built bundles, the public pages) get the same headers worker/index.js adds
+# to everything it answers. Keep the two lists in step.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(), microphone=(), payment=(self)
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
