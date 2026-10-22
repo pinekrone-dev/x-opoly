@@ -171,3 +171,13 @@ describe('the catalogue route', () => {
     assert.notEqual(res.status, 401)
   })
 })
+
+describe('with neither a bucket nor a configured origin', () => {
+  test('there is no catalogue, and nothing is fetched from anywhere', async () => {
+    const bare = await createServer({ DATA_DIR: temp.directory, DB_FILE: `${temp.directory}/bare.db` })
+    asked.length = 0
+    const res = await bare.fetch(new Request('http://localhost/catalog/markets.json'))
+    assert.equal(res.status, 404)
+    assert.deepEqual(asked, [], 'the old public data domain is not a fallback')
+  })
+})
