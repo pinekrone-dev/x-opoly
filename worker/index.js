@@ -168,6 +168,9 @@ async function daily(env) {
  * injected script would need that list kept by hand. These stop the page
  * being framed, a file being sniffed into a type it was not served as, and
  * the full URL (a share token) leaking to other sites in the Referer.
+ *
+ * Files the asset binding serves straight from ./dist never reach this code;
+ * public/_headers gives them the same list. Keep the two in step.
  */
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff',
