@@ -112,6 +112,31 @@ describe('property images', () => {
     assert.equal(status, 400)
   })
 
+  test('a script-capable type is refused at upload, whatever the route', async () => {
+    const property = await newProperty()
+    const page = new TextEncoder().encode('<script>alert(document.cookie)</script>')
+    for (const [path, type] of [
+      [`/api/properties/${property.id}/images`, 'image/svg+xml'],
+      [`/api/properties/${property.id}/photo`, 'image/svg+xml'],
+      [`/api/properties/${property.id}/flyer`, 'text/html'],
+      [`/api/properties/${property.id}/flyer`, ''],
+    ]) {
+      const { status } = await call(path, { method: 'POST', headers: { 'content-type': type }, body: page })
+      assert.equal(status, 415, `${type || 'no type'} at ${path}`)
+    }
+  })
+
+  test('a stored file is served by its own extension, unsniffable and sandboxed', async () => {
+    const property = await newProperty()
+    const added = await call(`/api/properties/${property.id}/images`, upload())
+    const response = await app.fetch(new Request(BASE + added.body.image.url))
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('content-type'), 'image/png')
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(response.headers.get('content-disposition'), 'inline')
+    assert.match(response.headers.get('content-security-policy'), /sandbox/)
+  })
+
   test('deleting the cover clears it, so the book falls back rather than to nothing', async () => {
     const property = await newProperty()
     const first = await call(`/api/properties/${property.id}/images`, upload({ 'x-caption': 'A' }))

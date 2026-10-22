@@ -25,6 +25,17 @@ const asJson = (payload, method = 'POST') => ({
 })
 
 describe('the Cloudflare Worker', () => {
+  test('every answer carries the framing, sniffing and referrer headers', async () => {
+    const env = await workerEnv()
+    for (const path of ['/api/health', '/']) {
+      const { response } = await call(env, path, { headers: { accept: 'text/html' } })
+      assert.equal(response.headers.get('x-frame-options'), 'DENY', path)
+      assert.equal(response.headers.get('x-content-type-options'), 'nosniff', path)
+      assert.equal(response.headers.get('referrer-policy'), 'strict-origin-when-cross-origin', path)
+      assert.match(response.headers.get('content-security-policy'), /frame-ancestors 'none'/, path)
+    }
+  })
+
   test('reports that it is running on Cloudflare bindings', async () => {
     const env = await workerEnv()
     const { status, body } = await call(env, '/api/health')

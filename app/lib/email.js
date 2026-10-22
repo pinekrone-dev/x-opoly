@@ -149,10 +149,10 @@ export function verificationEmail({ name, url }) {
     html: `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
   <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
   <h2 style="margin:0 0 12px;font-size:18px">Confirm your email</h2>
-  <p style="margin:0 0 16px;line-height:1.5">${greeting} Confirm your email address to finish creating your Land Quotient account.</p>
-  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Confirm email</a></p>
+  <p style="margin:0 0 16px;line-height:1.5">${escapeHtml(greeting)} Confirm your email address to finish creating your Land Quotient account.</p>
+  <p style="margin:0 0 20px"><a href="${escapeHtml(url)}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Confirm email</a></p>
   <p style="margin:0 0 6px;font-size:13px;color:#475569">Or paste this link into your browser:</p>
-  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${url}" style="color:#12AEB6">${url}</a></p>
+  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${escapeHtml(url)}" style="color:#12AEB6">${escapeHtml(url)}</a></p>
   <p style="margin:0;font-size:12px;color:#64748b">The link works once and expires in 24 hours. If you did not sign up, ignore this email and nothing happens.</p>
 </div>`,
   }
@@ -174,10 +174,10 @@ export function passwordResetEmail({ name, url }) {
     html: `<div style="font-family:system-ui,-apple-system,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#0f172a">
   <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
   <h2 style="margin:0 0 12px;font-size:18px">Reset your password</h2>
-  <p style="margin:0 0 16px;line-height:1.5">${greeting} Someone asked to reset the password on your Land Quotient account. Choose a new one:</p>
-  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Choose a new password</a></p>
+  <p style="margin:0 0 16px;line-height:1.5">${escapeHtml(greeting)} Someone asked to reset the password on your Land Quotient account. Choose a new one:</p>
+  <p style="margin:0 0 20px"><a href="${escapeHtml(url)}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Choose a new password</a></p>
   <p style="margin:0 0 6px;font-size:13px;color:#475569">Or paste this link into your browser:</p>
-  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${url}" style="color:#12AEB6">${url}</a></p>
+  <p style="margin:0 0 16px;font-size:13px;word-break:break-all"><a href="${escapeHtml(url)}" style="color:#12AEB6">${escapeHtml(url)}</a></p>
   <p style="margin:0;font-size:12px;color:#64748b">The link works once and expires in an hour. If you did not ask for this, ignore this email: your password stays as it is.</p>
 </div>`,
   }
@@ -198,7 +198,7 @@ function frame(heading, paragraphs, { url, button, footnote }) {
   <p style="margin:0 0 18px;font-size:16px;font-weight:700;letter-spacing:-0.01em"><span style="color:#1B3668">Land</span><span style="color:#12AEB6"> Quotient</span></p>
   <h2 style="margin:0 0 12px;font-size:18px">${escapeHtml(heading)}</h2>
 ${paragraphs.map((p) => `  <p style="margin:0 0 16px;line-height:1.5">${escapeHtml(p)}</p>`).join('\n')}
-  <p style="margin:0 0 20px"><a href="${url}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">${escapeHtml(button)}</a></p>
+  <p style="margin:0 0 20px"><a href="${escapeHtml(url)}" style="display:inline-block;background:#12AEB6;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">${escapeHtml(button)}</a></p>
   <p style="margin:0;font-size:12px;color:#64748b">${escapeHtml(footnote)}</p>
 </div>`
 }

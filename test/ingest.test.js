@@ -42,6 +42,7 @@ function actionsClaims(overrides = {}) {
     iss: ISSUER,
     aud: AUD,
     repository: 'pinekrone-dev/prospector',
+    ref: 'refs/heads/main',
     exp: now + 300,
     nbf: now - 30,
     ...overrides,
@@ -68,6 +69,17 @@ describe('verifyActionsToken', () => {
       verifyActionsToken(sign(actionsClaims({ repository: 'someone-else/repo' })), opts),
       /someone-else\/repo is not allowed/,
     )
+  })
+
+  test('a run on a branch the repository does not ship from is refused', async () => {
+    const pinned = { ...opts, refs: { 'pinekrone-dev/prospector': ['refs/heads/main'] } }
+    await assert.rejects(
+      verifyActionsToken(sign(actionsClaims({ ref: 'refs/heads/sneaky' })), pinned),
+      /refs\/heads\/sneaky in pinekrone-dev\/prospector is not allowed/,
+    )
+    await assert.rejects(verifyActionsToken(sign(actionsClaims({ ref: undefined })), pinned), /\(no ref\)/)
+    const claims = await verifyActionsToken(sign(actionsClaims()), pinned)
+    assert.equal(claims.ref, 'refs/heads/main')
   })
 
   test('the wrong audience is refused', async () => {
