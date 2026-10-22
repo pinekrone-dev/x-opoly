@@ -62,4 +62,10 @@ jobs:
           cache: npm
       - run: npm ci --no-audit --no-fund
       - name: Tag ${{ matrix.market }}
-        run: node scripts/tag-buildings.mjs --what=${{ needs.plan.outputs.what }} ${{ needs.plan.outputs.reset == 'true' && '--reset' || '' }} ${{ matrix.market }}
+        # Through the environment, never spliced into the script: the values
+        # come from a committed file, and a quote in one would be shell.
+        env:
+          WHAT: ${{ needs.plan.outputs.what }}
+          RESET: ${{ needs.plan.outputs.reset }}
+          MARKET: ${{ matrix.market }}
+        run: node scripts/tag-buildings.mjs "--what=$WHAT" $([ "$RESET" = true ] && echo --reset) "$MARKET"

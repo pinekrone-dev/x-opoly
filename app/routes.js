@@ -196,6 +196,7 @@ import { routeLegs } from './lib/routing.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
+import { timingSafeEqual } from './lib/crypto.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -626,7 +627,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   let instanceOwnerId = null
   const canMintCodes = async (user) => {
-    if (!user) return false
+    // An address nobody has proved is only a claim to be that person.
+    if (!user || user.verified === false) return false
     const named = String(env.FREE_CODE_MINTER ?? '').trim().toLowerCase()
     if (named) return String(user.email ?? '').toLowerCase() === named
     if (instanceOwnerId === null) {
@@ -733,7 +735,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     let selfServe = false
     if (existing > 0) {
       const offered = String(body?.inviteToken ?? '')
-      const isSignupToken = Boolean(env.SIGNUP_TOKEN) && offered === env.SIGNUP_TOKEN
+      const encoder = new TextEncoder()
+      const isSignupToken =
+        Boolean(env.SIGNUP_TOKEN) && timingSafeEqual(encoder.encode(offered), encoder.encode(String(env.SIGNUP_TOKEN)))
       if (!isSignupToken) {
         if (offered) {
           // A colleague's one-time invite, bound to their email. Checked
@@ -1012,6 +1016,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   app.post('/api/auth/verify', async (c) => {
+    const throttled = limited(c, 'verify', 20, 10 * 60 * 1000)
+    if (throttled) return throttled
     const body = await c.req.json().catch(() => ({}))
     const result = await verifyChallenge(db, String(body?.challengeId ?? ''), body?.code)
     if (result.error) return c.json({ error: result.error, remaining: result.remaining }, 401)
@@ -1117,7 +1123,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
 
     const { hashPassword } = await import('./lib/crypto.js')
-    await db.run('UPDATE users SET password_hash = ? WHERE id = ?', [await hashPassword(next), user.id])
+    // A reset link still in someone's inbox must not outlive the password it was sent to replace.
+    await db.run('UPDATE users SET password_hash = ?, reset_digest = NULL, reset_expires = NULL WHERE id = ?', [
+      await hashPassword(next),
+      user.id,
+    ])
 
     // Every other device is signed out, then this one is signed back in.
     await destroyAllSessions(db, user.id)
@@ -1208,7 +1218,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return c.json({ stage: result.stage }, 201)
   })
 
+  /** A stage, only if its survey is the caller's team's: the same rule, and the same 404, as requireSurvey. */
+  async function requireStage(c) {
+    const row = await db.get(
+      'SELECT s.id, v.owner_id FROM stages s JOIN surveys v ON v.id = s.survey_id WHERE s.id = ?',
+      [c.req.param('id')],
+    )
+    const user = c.get('user')
+    if (!row || (user && row.owner_id && row.owner_id !== user.teamId)) {
+      return { error: notFound(c, 'That stage does not exist.') }
+    }
+    return {}
+  }
+
   app.patch('/api/stages/:id', async (c) => {
+    {
+      const { error } = await requireStage(c)
+      if (error) return error
+    }
     const body = await c.req.json().catch(() => ({}))
     const result = await updateStage(db, c.req.param('id'), body)
     if (result.error) return c.json({ error: result.error }, result.stage ? 400 : 404)
@@ -1216,6 +1243,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   app.delete('/api/stages/:id', async (c) => {
+    {
+      const { error } = await requireStage(c)
+      if (error) return error
+    }
     if (!(await deleteStage(db, c.req.param('id')))) return notFound(c, 'That stage does not exist.')
     return c.body(null, 204)
   })
@@ -1417,6 +1448,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (throttled) return throttled
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!ownsTeam(user)) return c.json({ error: 'Only the workspace owner can manage billing.' }, 403)
     if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
     try {
       const origin = new URL(c.req.url).origin
@@ -1550,6 +1582,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   app.post('/api/billing/portal', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!ownsTeam(user)) return c.json({ error: 'Only the workspace owner can manage billing.' }, 403)
     try {
       const origin = new URL(c.req.url).origin
       return c.json({ url: await portalUrl(db, env, user.teamId, `${origin}/settings`) })
@@ -1812,7 +1845,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   app.delete('/api/invites/:id', async (c) => {
-    const removed = await revokeInvite(db, c.req.param('id'))
+    const removed = await revokeInvite(db, c.req.param('id'), c.get('user')?.teamId ?? null)
     if (!removed) return notFound(c, 'That invitation is gone already.')
     return c.body(null, 204)
   })
@@ -1927,12 +1960,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
   // --- uploads -------------------------------------------------------------
 
-  /** Reads a raw upload body, refusing anything over the size limit. */
+  /**
+   * Reads a raw upload body, refusing anything over the size limit or of a
+   * type the store does not know.
+   *
+   * Uploads are served back from this origin, so the type is an allowlist:
+   * a file claiming text/html or image/svg+xml would otherwise run script as
+   * the site for anyone who opened its link.
+   */
   async function readUpload(c) {
+    const tooLarge = () => ({ error: c.json({ error: 'That file is too large. The limit is 12 MB.' }, 413) })
+    if (Number(c.req.header('content-length')) > MAX_UPLOAD_BYTES) return tooLarge()
+    const mimeType = (c.req.header('content-type') || '').split(';')[0].trim().toLowerCase()
+    if (!Object.hasOwn(EXTENSIONS, mimeType)) {
+      return { error: c.json({ error: 'That file type is not supported. Use a PDF, PNG, JPEG, GIF or WebP.' }, 415) }
+    }
     const buffer = await c.req.arrayBuffer()
     const bytes = new Uint8Array(buffer)
-    if (bytes.length > MAX_UPLOAD_BYTES) return { error: c.json({ error: 'That file is too large. The limit is 12 MB.' }, 413) }
-    return { bytes, mimeType: (c.req.header('content-type') || '').split(';')[0].trim() }
+    if (bytes.length > MAX_UPLOAD_BYTES) return tooLarge()
+    return { bytes, mimeType }
   }
 
   /**
@@ -1959,6 +2005,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   const INGEST_AUDIENCE = 'landquotient-ingest'
   const INGEST_REPOS = ['pinekrone-dev/prospector', 'pinekrone-dev/x-opoly']
+  // Only the branch each repository ships from may publish; a run on any other
+  // branch carries a valid token for the repository and is still refused.
+  const INGEST_REFS = {
+    'pinekrone-dev/prospector': ['refs/heads/main'],
+    'pinekrone-dev/x-opoly': ['refs/heads/claude/sitemapcre-tool-clone-qyq7jy'],
+  }
   const INGEST_FILES = {
     'parcels.pmtiles': 'application/octet-stream',
     'index.json': 'application/json',
@@ -2091,7 +2143,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const bearer = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
     if (bearer) {
       try {
-        await verifyActionsToken(bearer, { audience: INGEST_AUDIENCE, repositories: INGEST_REPOS, fetchImpl: env.JWKS_FETCH })
+        await verifyActionsToken(bearer, { audience: INGEST_AUDIENCE, repositories: INGEST_REPOS, refs: INGEST_REFS, fetchImpl: env.JWKS_FETCH })
         return { id: 'pipeline', pipeline: true }
       } catch {
         return null
@@ -2392,7 +2444,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     try {
       await verifyActionsToken(token, {
         audience: INGEST_AUDIENCE,
-        repositories: INGEST_REPOS,
+        repositories: INGEST_REPOS, refs: INGEST_REFS,
         fetchImpl: env.JWKS_FETCH,
       })
     } catch (cause) {
@@ -2725,7 +2777,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     try {
       await verifyActionsToken(token, {
         audience: INGEST_AUDIENCE,
-        repositories: INGEST_REPOS,
+        repositories: INGEST_REPOS, refs: INGEST_REFS,
         fetchImpl: env.JWKS_FETCH,
       })
     } catch (cause) {
@@ -3946,9 +3998,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const file = await storage.get(name)
     if (!file) return notFound(c, 'That file is no longer stored.')
 
+    // The type comes from the name, never from what the uploader claimed, and
+    // anything that is not a picture or a PDF downloads instead of rendering.
+    const type = contentTypeFor(name)
+    const shown = type.startsWith('image/') || type === 'application/pdf'
     return c.body(file.body, 200, {
-      'content-type': file.contentType || contentTypeFor(name),
+      'content-type': type,
       'cache-control': 'private, max-age=3600',
+      'x-content-type-options': 'nosniff',
+      'content-disposition': shown ? 'inline' : 'attachment',
+      // Browsers' PDF viewers refuse to run under a sandbox, and a PDF runs no page script anyway.
+      ...(type === 'application/pdf' ? {} : { 'content-security-policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox" }),
     })
   })
 

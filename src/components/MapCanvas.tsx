@@ -1335,7 +1335,9 @@ export default function MapCanvas({
         element.addEventListener('mouseenter', () => {
           popup.current
             ?.setLngLat(position)
-            .setHTML(`<strong>${displayName(property)}</strong><br>${fullAddress(property)}`)
+            // Names and addresses are typed by people or read off uploaded
+            // flyers; MapLibre inserts this HTML as-is, so it is escaped here.
+            .setHTML(`<strong>${escapeHtml(displayName(property))}</strong><br>${escapeHtml(fullAddress(property))}`)
             .addTo(instance)
         })
         element.addEventListener('mouseleave', () => popup.current?.remove())
@@ -2114,7 +2116,9 @@ export default function MapCanvas({
       instance.getCanvas().style.cursor = 'pointer'
       popup.current
         ?.setLngLat(event.lngLat)
-        .setHTML(`<strong>${props.name}</strong><br>${props.miles} mi away`)
+        // Business names come from OpenStreetMap or Places, which anyone can
+        // edit; MapLibre inserts this HTML as-is, so it is escaped here.
+        .setHTML(`<strong>${escapeHtml(String(props.name ?? ''))}</strong><br>${escapeHtml(String(props.miles ?? ''))} mi away`)
         .addTo(instance)
     }
     const leave = () => {

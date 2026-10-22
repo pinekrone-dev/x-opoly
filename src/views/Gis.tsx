@@ -21,6 +21,7 @@ import { floodZoom, tileReader } from '../lib/floodTiles'
 import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '../lib/grid'
 import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
+import { csvCell } from '../lib/csv'
 
 /** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
 const AREA_MAX_SPAN = 0.35
@@ -974,10 +975,7 @@ const HOLDINGS_SHOWN = 200
  * down a file nobody re-reads.
  */
 function exportCsv(rows: Record<string, string | number | null>[], slug: string) {
-  const cell = (value: string | number | null) => {
-    const text = value == null ? '' : String(value)
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-  }
+  const cell = csvCell
   const header = CSV_COLUMNS.map(([, label]) => label).join(',')
   const body = rows
     .map((row) =>
@@ -1005,10 +1003,7 @@ function exportCsv(rows: Record<string, string | number | null>[], slug: string)
  */
 function exportAsk(answer: AskAnswer, slug: string, onlyPassing: boolean) {
   const rows = (answer.rows ?? []).filter((row) => !onlyPassing || row.passes)
-  const cell = (value: unknown) => {
-    const text = value == null ? '' : String(value)
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
-  }
+  const cell = csvCell
   const added: [keyof AskRow, string][] = [
     ['parcelNumber', 'Parcel number'],
     ['address', answer.upload ? 'Matched address' : 'Address'],

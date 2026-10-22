@@ -46,7 +46,9 @@ const escapeAttr = (text) =>
 
 function setMeta(html, attr, name, value) {
   const pattern = new RegExp(`(<meta\\s+${attr}="${name.replace(/[.:]/g, '\\$&')}"\\s+content=")[^"]*(")`, 's')
-  return html.replace(pattern, `$1${escapeAttr(value)}$2`)
+  // A function, not a string: a replacement string reads $1, $2, $` and $'
+  // inside the value, and a survey named "$2" would close the attribute.
+  return html.replace(pattern, (_, before, after) => `${before}${escapeAttr(value)}${after}`)
 }
 
 /**
@@ -56,7 +58,7 @@ function setMeta(html, attr, name, value) {
 export function rewritePreview(html, { title, description, url, image } = {}) {
   let out = html
   if (title) {
-    out = out.replace(/<title>[^<]*<\/title>/, `<title>${escapeAttr(title)}</title>`)
+    out = out.replace(/<title>[^<]*<\/title>/, () => `<title>${escapeAttr(title)}</title>`)
     out = setMeta(out, 'property', 'og:title', title)
     out = setMeta(out, 'property', 'og:image:alt', title)
     out = setMeta(out, 'name', 'twitter:title', title)

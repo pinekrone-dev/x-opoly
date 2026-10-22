@@ -54,7 +54,7 @@ function stubFetch(...responses) {
   return impl
 }
 
-async function signWebhook(secret, payload, timestamp = 1700000000) {
+async function signWebhook(secret, payload, timestamp = Math.floor(Date.now() / 1000)) {
   const encoder = new TextEncoder()
   const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, [
     'sign',
@@ -375,6 +375,14 @@ describe('webhooks', () => {
     assert.equal(await verifyWebhook({ STRIPE_WEBHOOK_SECRET: SECRET }, payload, header), null)
     assert.equal(await verifyWebhook({ STRIPE_WEBHOOK_SECRET: SECRET }, payload, null), null)
     assert.equal(await verifyWebhook({}, payload, header), null)
+  })
+
+  test('a correctly signed event replayed after five minutes is refused', async () => {
+    const payload = '{"type":"x"}'
+    const stale = await signWebhook(SECRET, payload, Math.floor(Date.now() / 1000) - 301)
+    assert.equal(await verifyWebhook({ STRIPE_WEBHOOK_SECRET: SECRET }, payload, stale), null)
+    const garbled = (await signWebhook(SECRET, payload)).replace(/^t=\d+/, 't=soon')
+    assert.equal(await verifyWebhook({ STRIPE_WEBHOOK_SECRET: SECRET }, payload, garbled), null)
   })
 
   test('subscription events land on the team via metadata, and deletion cancels', async () => {

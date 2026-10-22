@@ -29,7 +29,7 @@ const b64url = (v) => Buffer.from(typeof v === 'string' ? v : JSON.stringify(v))
 function actionsToken(repository = 'pinekrone-dev/prospector') {
   const now = Math.floor(Date.now() / 1000)
   const head = b64url({ alg: 'RS256', kid: 'test-key', typ: 'JWT' })
-  const body = b64url({ iss: 'https://token.actions.githubusercontent.com', aud: 'landquotient-ingest', repository, exp: now + 300, nbf: now - 30 })
+  const body = b64url({ iss: 'https://token.actions.githubusercontent.com', aud: 'landquotient-ingest', repository, ref: 'refs/heads/main', exp: now + 300, nbf: now - 30 })
   const signer = createSign('RSA-SHA256')
   signer.update(`${head}.${body}`)
   return `${head}.${body}.${signer.sign(privateKey).toString('base64url')}`

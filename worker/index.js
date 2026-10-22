@@ -160,97 +160,131 @@ async function daily(env) {
   if (tally.due) console.log('trial reminders', JSON.stringify(tally))
 }
 
+/*
+ * Headers every answer carries, page, API and file alike.
+ *
+ * Deliberately not a script policy: the map builds its workers from blobs and
+ * reads tiles from half a dozen public hosts, and a CSP strict enough to stop
+ * injected script would need that list kept by hand. These stop the page
+ * being framed, a file being sniffed into a type it was not served as, and
+ * the full URL (a share token) leaking to other sites in the Referer.
+ */
+const SECURITY_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'permissions-policy': 'camera=(), microphone=(), payment=(self)',
+}
+const FRAME_POLICY = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'"
+
+function secured(response) {
+  // A socket upgrade carries its WebSocket on the response; rebuilding it would drop it.
+  if (response.status === 101 || response.webSocket) return response
+  const headers = new Headers(response.headers)
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+    if (!headers.has(name)) headers.set(name, value)
+  }
+  // A route with its own policy (an uploaded file's sandbox) keeps it.
+  if (!headers.has('content-security-policy')) headers.set('content-security-policy', FRAME_POLICY)
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+
 export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(daily(env))
   },
 
   async fetch(request, env, ctx) {
-    const url = new URL(request.url)
-
-    // One canonical hostname: any www-prefixed variant 301s to the bare
-    // domain, keeping path and query. The DNS record and Worker route for
-    // the www name still have to exist in Cloudflare for this to be reached.
-    if (url.hostname.startsWith('www.')) {
-      url.hostname = url.hostname.slice(4)
-      return Response.redirect(url.toString(), 301)
-    }
-
-    /*
-     * What the app answers, as opposed to what the asset binding answers.
-     *
-     * This was `/api/` alone, and the catalogue route added beside the API
-     * went to the static assets instead — which serve index.html for anything
-     * they do not recognise, so `/catalog/markets.json` came back as the HTML
-     * shell with a 200 on it. Nothing failed; the browser simply tried to
-     * parse a web page as a market list and found no counties in it.
-     *
-     * Worth naming because the tests could not see it: the Node server hands
-     * every path to the same app, so a route registered there works there. It
-     * is only here that the two runtimes disagree about who answers, and only
-     * here that a route can exist and never be reached.
-     */
-    // The public market pages and the sitemap are written by the app too,
-    // from the live market list, so a new county is listed with no deploy.
-    const pages = /^\/markets\/[a-z0-9-]{2,40}\/?$/.test(url.pathname) || url.pathname === '/sitemap.xml'
-    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages) {
-      if (env.DB) {
-        // Let the request through even if migrating failed: routes that do not
-        // touch the database still work, and the ones that do will report the
-        // real error rather than this one.
-        await ensureSchema(env).catch(() => undefined)
-      }
-      return appFor(env).fetch(request, env, ctx)
-    }
-
-    // Everything else is the single-page app. `not_found_handling` in
-    // wrangler.toml makes the asset binding serve index.html for deep links
-    // such as /survey/:id and /s/:token.
-    if (!env.ASSETS) {
-      return new Response(missingAssetsPage('the ASSETS binding is not present on this deployment'), {
-        status: 503,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      })
-    }
-
-    let response
-    try {
-      response = await env.ASSETS.fetch(request)
-    } catch (error) {
-      return new Response(missingAssetsPage(`the asset store could not be read (${error.message})`), {
-        status: 503,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      })
-    }
-
-    // A 404 on a navigation means index.html itself is absent — an empty
-    // upload. Asset files (/assets/*.js) keep their real 404.
-    const wantsHtml = (request.headers.get('accept') || '').includes('text/html')
-    if (response.status === 404 && wantsHtml) {
-      return new Response(missingAssetsPage('the asset store returned 404 for index.html'), {
-        status: 503,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-      })
-    }
-
-    // Point the link-preview tags at the host that actually answered, so a
-    // shared URL previews as itself whichever domain it was handed out on.
-    if (isHtml(response)) {
-      let html = withPreviewOrigin(await response.text(), url.origin)
-      // A path answered with the landing page's HTML gets a preview of its
-      // own: a share link names its survey, a market map its market, and
-      // everything else at least points at itself. The public pages ship
-      // their own entry and card, and are left exactly as built.
-      if (html.includes(`<meta property="og:url" content="${url.origin}/" />`) && url.pathname !== '/') {
-        const db = env.DB ? d1Adapter(env.DB) : null
-        const preview = await previewForPath(url.pathname, url.origin, {
-          lookupShare: db ? (token) => sharePreview(db, token) : null,
-        }).catch(() => null)
-        if (preview) html = rewritePreview(html, preview)
-      }
-      return new Response(html, { status: response.status, headers: response.headers })
-    }
-
-    return response
+    return secured(await answer(request, env, ctx))
   },
+}
+
+async function answer(request, env, ctx) {
+  const url = new URL(request.url)
+
+  // One canonical hostname: any www-prefixed variant 301s to the bare
+  // domain, keeping path and query. The DNS record and Worker route for
+  // the www name still have to exist in Cloudflare for this to be reached.
+  if (url.hostname.startsWith('www.')) {
+    url.hostname = url.hostname.slice(4)
+    return Response.redirect(url.toString(), 301)
+  }
+
+  /*
+   * What the app answers, as opposed to what the asset binding answers.
+   *
+   * This was `/api/` alone, and the catalogue route added beside the API
+   * went to the static assets instead — which serve index.html for anything
+   * they do not recognise, so `/catalog/markets.json` came back as the HTML
+   * shell with a 200 on it. Nothing failed; the browser simply tried to
+   * parse a web page as a market list and found no counties in it.
+   *
+   * Worth naming because the tests could not see it: the Node server hands
+   * every path to the same app, so a route registered there works there. It
+   * is only here that the two runtimes disagree about who answers, and only
+   * here that a route can exist and never be reached.
+   */
+  // The public market pages and the sitemap are written by the app too,
+  // from the live market list, so a new county is listed with no deploy.
+  const pages = /^\/markets\/[a-z0-9-]{2,40}\/?$/.test(url.pathname) || url.pathname === '/sitemap.xml'
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages) {
+    if (env.DB) {
+      // Let the request through even if migrating failed: routes that do not
+      // touch the database still work, and the ones that do will report the
+      // real error rather than this one.
+      await ensureSchema(env).catch(() => undefined)
+    }
+    return appFor(env).fetch(request, env, ctx)
+  }
+
+  // Everything else is the single-page app. `not_found_handling` in
+  // wrangler.toml makes the asset binding serve index.html for deep links
+  // such as /survey/:id and /s/:token.
+  if (!env.ASSETS) {
+    return new Response(missingAssetsPage('the ASSETS binding is not present on this deployment'), {
+      status: 503,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+  }
+
+  let response
+  try {
+    response = await env.ASSETS.fetch(request)
+  } catch (error) {
+    return new Response(missingAssetsPage(`the asset store could not be read (${error.message})`), {
+      status: 503,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+  }
+
+  // A 404 on a navigation means index.html itself is absent — an empty
+  // upload. Asset files (/assets/*.js) keep their real 404.
+  const wantsHtml = (request.headers.get('accept') || '').includes('text/html')
+  if (response.status === 404 && wantsHtml) {
+    return new Response(missingAssetsPage('the asset store returned 404 for index.html'), {
+      status: 503,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+  }
+
+  // Point the link-preview tags at the host that actually answered, so a
+  // shared URL previews as itself whichever domain it was handed out on.
+  if (isHtml(response)) {
+    let html = withPreviewOrigin(await response.text(), url.origin)
+    // A path answered with the landing page's HTML gets a preview of its
+    // own: a share link names its survey, a market map its market, and
+    // everything else at least points at itself. The public pages ship
+    // their own entry and card, and are left exactly as built.
+    if (html.includes(`<meta property="og:url" content="${url.origin}/" />`) && url.pathname !== '/') {
+      const db = env.DB ? d1Adapter(env.DB) : null
+      const preview = await previewForPath(url.pathname, url.origin, {
+        lookupShare: db ? (token) => sharePreview(db, token) : null,
+      }).catch(() => null)
+      if (preview) html = rewritePreview(html, preview)
+    }
+    return new Response(html, { status: response.status, headers: response.headers })
+  }
+
+  return response
 }
