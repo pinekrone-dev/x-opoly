@@ -511,6 +511,8 @@ export interface Deal {
   closeDate?: string | null
   surveyId?: string | null
   notes?: string | null
+  /** Price, income, financing, exit and commission inputs; see src/lib/economics.ts. */
+  economics?: import('./lib/economics').EconomicsInputs | null
   fields: RecordField[]
   parties?: DealParty[]
   updatedAt?: string

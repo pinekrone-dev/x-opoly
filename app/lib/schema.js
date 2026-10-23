@@ -517,6 +517,13 @@ export const COLUMN_ADDITIONS = [
    * claims the one "your trial has started" email per team, so a reloaded
    * return page or a webhook arriving alongside it cannot send it twice.
    */
+  /*
+   * What a deal makes: its price, income, financing, exit and commission
+   * inputs, as JSON. One column rather than eighteen, because the set is
+   * read and written whole and grows with the model; see ECONOMICS_KEYS.
+   */
+  ['deals', 'economics', 'TEXT'],
+
   ['billing', 'trial_end', 'TEXT'],
   ['billing', 'cancel_at', 'TEXT'],
   ['billing', 'started_mail_at', 'TEXT'],
