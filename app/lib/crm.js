@@ -41,6 +41,14 @@ export function camel(row) {
   for (const [key, value] of Object.entries(row)) {
     out[key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())] = value
   }
+  // Stored as JSON text; the client reads it as the object it was.
+  if (typeof out.economics === 'string') {
+    try {
+      out.economics = JSON.parse(out.economics)
+    } catch {
+      out.economics = null
+    }
+  }
   return out
 }
 
@@ -134,7 +142,7 @@ const WRITABLE = {
     // Where this place is on the county roll, when it came from the parcel map.
     'market', 'parcel_id',
   ],
-  deal: ['name', 'kind', 'stage', 'value', 'close_date', 'survey_id', 'notes'],
+  deal: ['name', 'kind', 'stage', 'value', 'close_date', 'survey_id', 'notes', 'economics'],
 }
 
 /** The columns a search box looks in: what a person would type, not ids. */
@@ -147,13 +155,35 @@ const SEARCHABLE = {
 
 const snake = (key) => key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
 
+/**
+ * The deal economics inputs, as src/lib/economics.ts names them. Anything
+ * else sent under `economics` is dropped, and every value must be a finite
+ * number or nothing: the column is read straight into arithmetic.
+ */
+export const ECONOMICS_KEYS = [
+  'purchasePrice', 'closingCostsPct', 'capex', 'grossRent', 'otherIncome', 'vacancyPct', 'operatingExpenses',
+  'incomeGrowthPct', 'expenseGrowthPct', 'ltvPct', 'interestRatePct', 'amortYears', 'holdYears', 'exitCapPct',
+  'saleCostsPct', 'commissionPct', 'coBrokerPct', 'houseSplitPct',
+]
+
+function cleanEconomics(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null
+  const out = {}
+  for (const key of ECONOMICS_KEYS) {
+    const n = value[key] === '' || value[key] == null ? null : Number(value[key])
+    if (n !== null && Number.isFinite(n) && Math.abs(n) < 1e13) out[key] = n
+  }
+  return Object.keys(out).length ? JSON.stringify(out) : null
+}
+
 /** Picks only the writable columns out of whatever the client sent. */
 function writable(recordType, input = {}) {
   const allowed = new Set(WRITABLE[recordType])
   const columns = {}
   for (const [key, value] of Object.entries(input)) {
     const column = snake(key)
-    if (allowed.has(column)) columns[column] = value === '' ? null : value
+    if (!allowed.has(column)) continue
+    columns[column] = column === 'economics' ? cleanEconomics(value) : value === '' ? null : value
   }
   return columns
 }

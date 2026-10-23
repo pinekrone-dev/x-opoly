@@ -2,7 +2,7 @@
   "name": "sitesurvey-cre",
   "private": true,
   "version": "1.0.0",
-  "description": "Site survey and deal mapping for tenant rep brokers — map candidate properties, track deal stages, plan tours, and share a branded client link.",
+  "description": "Site survey and deal mapping for tenant rep brokers \u2014 map candidate properties, track deal stages, plan tours, and share a branded client link.",
   "type": "module",
   "engines": {
     "node": "22.x"
@@ -16,7 +16,7 @@
     "preview": "npm run build && npm start",
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "migrations": "node --input-type=module -e \"import('./app/lib/schema.js').then(async (m)=>{const fs=await import('node:fs');fs.writeFileSync('migrations/0001_init.sql','-- Generated from app/lib/schema.js — edit that file, then re-run: npm run migrations\\n\\n'+m.SCHEMA_STATEMENTS.map(s=>s.trim()+';').join('\\n\\n')+'\\n')})\"",
+    "migrations": "node --input-type=module -e \"import('./app/lib/schema.js').then(async (m)=>{const fs=await import('node:fs');fs.writeFileSync('migrations/0001_init.sql','-- Generated from app/lib/schema.js \u2014 edit that file, then re-run: npm run migrations\\n\\n'+m.SCHEMA_STATEMENTS.map(s=>s.trim()+';').join('\\n\\n')+'\\n')})\"",
     "deploy": "npm run build && wrangler deploy",
     "cf:migrate": "wrangler d1 migrations apply sitesurvey-cre --remote"
   },
@@ -26,6 +26,7 @@
     "@mapbox/vector-tile": "^3.0.0",
     "cheerio": "^1.0.0",
     "d3-hierarchy": "^3.1.2",
+    "exceljs": "^4.4.0",
     "hono": "^4.13.4",
     "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
@@ -56,5 +57,8 @@
   },
   "optionalDependencies": {
     "playwright-core": "^1.49.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }
