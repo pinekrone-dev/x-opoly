@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import SurveyList from './SurveyList'
 import { api } from '../api'
+import ConfirmDelete from '../components/ConfirmDelete'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
@@ -358,6 +359,11 @@ export default function Home({
                 selecting={selecting}
                 checked={checked}
                 onToggle={toggleChecked}
+                onRemove={async (id) => {
+                  await api.crm.remove(spec.segment, id)
+                  setRecords((current) => current.filter((record) => (record as { id: string }).id !== id))
+                  setRefresh((n) => n + 1)
+                }}
               />
             )}
           </>
@@ -408,6 +414,7 @@ function RecordTable({
   selecting,
   checked,
   onToggle,
+  onRemove,
 }: {
   spec: ObjectSpec
   records: CrmRecord[]
@@ -415,6 +422,8 @@ function RecordTable({
   selecting: boolean
   checked: Set<string>
   onToggle: (id: string) => void
+  /** Deletes one record; a rejection is shown on its row. */
+  onRemove: (id: string) => Promise<void>
 }) {
   const columns = useMemo(() => spec.details.filter((field) => field.type !== 'textarea'), [spec])
   const [filters, setFilters] = useState<Record<string, string>>({})
@@ -495,17 +504,19 @@ function RecordTable({
               {selecting ? <th className="w-8 px-3 py-2" aria-label="Checked" /> : null}
               {columns.map((column) => head(column.key, column.label))}
               {head('_profile', 'Profile')}
+              {selecting ? null : <th className="sticky right-0 bg-surface px-3 py-2" aria-label="Actions" />}
             </tr>
             <tr className="border-b border-line bg-sunken/60">
               {selecting ? <th className="px-3 py-1.5" /> : null}
               {columns.map((column) => filterCell(column.key, column.label))}
               {filterCell('_profile', 'Profile')}
+              {selecting ? null : <th className="sticky right-0 bg-sunken px-3 py-1.5" />}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + 1 + (selecting ? 1 : 0)} className="px-4 py-8 text-center text-sm text-muted">
+                <td colSpan={columns.length + 2} className="px-4 py-8 text-center text-sm text-muted">
                   Nothing matches these filters.
                 </td>
               </tr>
@@ -539,6 +550,26 @@ function RecordTable({
                     <td className="max-w-[20rem] truncate px-3 py-2 text-[11px] text-faint" title={profileText(record)}>
                       {profileText(record)}
                     </td>
+                    {selecting ? null : (
+                      // Always shown, not on hover: a phone has no hover, and
+                      // a delete that only appears under a mouse is no delete.
+                      <td className="sticky right-0 whitespace-nowrap bg-surface px-3 py-1.5 text-right shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]" onClick={(event) => event.stopPropagation()}>
+                        <span className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            className="btn-secondary px-2 py-1 text-xs"
+                            onClick={() => navigate(`/${spec.segment}/${id}`)}
+                          >
+                            Open
+                          </button>
+                          <ConfirmDelete
+                            what={`this ${spec.singular.toLowerCase()}`}
+                            className="btn-ghost px-2 py-1 text-xs text-muted hover:text-rose-700"
+                            onConfirm={() => onRemove(id)}
+                          />
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 )
               })

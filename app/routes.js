@@ -1710,13 +1710,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     app.patch(`/api/crm/${segment}/:id`, async (c) => {
       const user = c.get('user')
       if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-      const record = await updateRecord(
-        db,
-        recordType,
-        user.teamId,
-        c.req.param('id'),
-        await c.req.json().catch(() => ({})),
-      )
+      const body = await c.req.json().catch(() => ({}))
+      // A deal links only to a survey its own team holds.
+      if (recordType === 'deal' && body?.surveyId) {
+        const survey = await getSurvey(db, String(body.surveyId))
+        if (!survey || (survey.ownerId && survey.ownerId !== user.teamId)) {
+          return c.json({ error: 'That survey does not exist.' }, 400)
+        }
+      }
+      const record = await updateRecord(db, recordType, user.teamId, c.req.param('id'), body)
       if (!record) return notFound(c, 'That record does not exist.')
       return c.json({ record })
     })
