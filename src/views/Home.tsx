@@ -234,6 +234,24 @@ export default function Home({
           <SurveyList account={account} smsConfigured={smsConfigured} billing={billing} embedded />
         ) : spec ? (
           <>
+            {/* The CRM's lists, always in reach. The menu under the CRM tab
+                opens on hover, which a phone does not have. */}
+            <nav className="mb-4 flex gap-1 overflow-x-auto" aria-label="CRM lists">
+              {OBJECTS.map((object) => (
+                <button
+                  key={object.segment}
+                  type="button"
+                  aria-current={object.segment === spec.segment ? 'page' : undefined}
+                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${
+                    object.segment === spec.segment ? 'bg-ink text-white' : 'text-muted hover:bg-sunken hover:text-ink'
+                  }`}
+                  onClick={() => navigate(`/${object.segment}`)}
+                >
+                  {object.label}
+                  <span className="ml-1.5 text-xs opacity-70">{counts[object.segment] ?? ''}</span>
+                </button>
+              ))}
+            </nav>
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 className="field max-w-sm flex-1"
@@ -520,7 +538,9 @@ function RecordTable({
     <div className="panel">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-2 text-xs text-muted">
         <span>
-          {filtering ? `${rows.length.toLocaleString()} of ${records.length.toLocaleString()} ${spec.label.toLowerCase()}` : `${records.length.toLocaleString()} ${spec.label.toLowerCase()}`}
+          {filtering
+            ? `${rows.length.toLocaleString()} of ${records.length.toLocaleString()} ${spec.label.toLowerCase()}`
+            : `${records.length.toLocaleString()} ${(records.length === 1 ? spec.singular : spec.label).toLowerCase()}`}
           {truncated ? ' · the first page; search for the rest' : ''}
         </span>
         {filtering ? (
