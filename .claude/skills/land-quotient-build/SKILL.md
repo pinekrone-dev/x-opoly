@@ -11,7 +11,7 @@ tool. Two repositories make it, and they are not copies of each other:
 | Repository | Role | Where it runs |
 |---|---|---|
 | `pinekrone-dev/x-opoly` | **The product.** Hono API + React/MapLibre UI on a Cloudflare Worker. CRM, surveys, tours, the GIS map, billing. | Worker `x-opoly`, `landquotient.com` (`survey.realestateaistudio.com` retired 2026-09-11) |
-| `pinekrone-dev/prospector` | **The data factory.** Python pipeline that pulls county parcel rolls and city/state layers, cuts tiles, writes a catalogue, and publishes to R2 and D1. | GitHub Actions runners; output on `data.realestateaistudio.com` (R2 bucket `prospector-data`) |
+| `pinekrone-dev/prospector` | **The data factory.** Python pipeline that pulls county parcel rolls and city/state layers, cuts tiles, writes a catalogue, and publishes to R2 and D1. | GitHub Actions runners; output in R2 bucket `prospector-data`, read only through the app's `/catalog` |
 
 The product never fetches from a county. The pipeline never renders a page the
 customer uses. The catalogue in R2 is the contract between them.
@@ -19,6 +19,7 @@ customer uses. The catalogue in R2 is the contract between them.
 ## Standing rules (these override convenience)
 
 - **Cost.** Keep Cloudflare consumption as low as possible without losing function: D1 reads bounded (list limit 1000, FTS5 for text search, summaries reused), edge cache on search and catalogue tile ranges, nothing per-keystroke to the server. Measure before and after any change on a hot path.
+- **D1 write cap: 30M rows written a month, never more.** Cloudflare bills every row written, and each index entry an insert or update touches is a row: loading a parcel costs about ten, tagging one about four. On Sep 29 to Oct 1 2026 four re-tagging passes over every market wrote 91M. The app's ingest door (`/api/gis/ingest/parcels`, `app/lib/writebudget.js`) now charges a monthly ledger and refuses any write that would pass `PARCEL_WRITE_CAP` (27M, leaving room for the app); `PARCEL_WRITES_SPENT` declares a month already spent (October 2026 is). Before any job that writes D1, estimate its rows and say so. New markets go live from R2 alone (their build workflows have no D1 step); load a county into the search store only in a month with room.
 - **Secrets.** Never write an API key, token or JWT into source, logs, README, tests or git. Keys live in Cloudflare (`npx wrangler secret put`), GitHub repository secrets, or `.env.local`.
 - **Blocked sources.** A 403, a robots refusal, a TLS failure or a bot wall is reported, never routed around. No relays, proxies, archive mirrors or disabled certificate checks. No account creation on any site.
 - **Owners.** Never invent an owner, an address or an email. Read contact addresses verbatim off the agency's own page (use `probe-page`, below).
