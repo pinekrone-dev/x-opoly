@@ -35,6 +35,9 @@ const OVERLAYS: Record<string, string[]> = {
   'san-diego-ca': ['Zoning', 'Permits', 'Flood zones', 'Opportunity zones', 'Schools'],
   'boston-ma': ['Zoning', 'Planned development areas', 'Entitlements', 'Urban renewal areas', 'Landmarks', 'Permits', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
   'chicago-il': ['Zoning', 'Permits', 'Landmarks', 'Traffic counts', 'Flood zones', 'Opportunity zones', 'Schools'],
+  'charlotte-nc': ['Flood zones', 'Opportunity zones', 'Schools'],
+  'columbus-oh': ['Flood zones', 'Opportunity zones', 'Schools'],
+  'jacksonville-fl': ['Flood zones', 'Opportunity zones', 'Schools'],
 }
 
 /** The number of markets, written out while it is small enough to read as a word. */
@@ -55,6 +58,9 @@ const ORDER = [
   'miami-fl',
   'dallas-tx',
   'philadelphia-pa',
+  'charlotte-nc',
+  'columbus-oh',
+  'jacksonville-fl',
   'detroit-mi',
   'jersey-city-nj',
   'orange-county-ca',
