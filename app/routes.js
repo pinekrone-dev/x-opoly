@@ -199,6 +199,7 @@ import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 import { timingSafeEqual } from './lib/crypto.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
+import { ROWS_PER, charge, room } from './lib/writebudget.js'
 
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 
@@ -2840,12 +2841,37 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     const action = String(c.req.query('action') || 'rows')
 
+    /*
+     * The month's write cap (writebudget.js). Every action that writes is
+     * checked before it runs, against what it is about to send where that
+     * is known up front, and charged what it wrote after.
+     */
+    const overCap = (left) =>
+      c.json(
+        {
+          error:
+            `This month's parcel-store write budget is spent: ${left.used.toLocaleString()} of ` +
+            `${left.cap.toLocaleString()} rows for ${left.month}` +
+            (left.estimate ? `, and this request would add about ${left.estimate.toLocaleString()}` : '') +
+            '. Nothing was written. It resets on the 1st (UTC), or PARCEL_WRITE_CAP can be raised.',
+          code: 'write_cap',
+          ...left,
+        },
+        429,
+      )
+    const WRITES = new Set(['clear', 'drop', 'rows', 'building-tags', 'tag', 'reindex'])
+    if (WRITES.has(action)) {
+      const left = await room(db, env, 1)
+      if (!left.ok) return overCap(left)
+    }
+
     try {
       if (action === 'clear') {
         // Bounded, and says whether it finished. A county holds more rows
         // than one request can delete inside D1's CPU budget, so the caller
         // repeats this until `done` — see clearMarket.
         const { removed, done } = await clearMarket(parcelsFor(market), market)
+        await charge(db, removed * ROWS_PER.drop)
         return c.json({ cleared: market, removed, done })
       }
       if (action === 'hashes') {
@@ -2867,7 +2893,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         if (pids.length > 20000) {
           return c.json({ error: 'Send at most 20000 parcel ids per request.' }, 413)
         }
-        return c.json({ dropped: await dropParcels(parcelsFor(market), market, pids) })
+        const left = await room(db, env, pids.length * ROWS_PER.drop)
+        if (!left.ok) return overCap(left)
+        const dropped = await dropParcels(parcelsFor(market), market, pids)
+        await charge(db, dropped * ROWS_PER.drop)
+        return c.json({ dropped })
       }
       if (action === 'rows') {
         const body = await c.req.json().catch(() => null)
@@ -2878,7 +2908,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         if (rows.length > 5000) {
           return c.json({ error: 'Send at most 5000 parcels per request.' }, 413)
         }
-        return c.json({ stored: await putParcels(parcelsFor(market), market, rows) })
+        const left = await room(db, env, rows.length * ROWS_PER.insert)
+        if (!left.ok) return overCap(left)
+        const stored = await putParcels(parcelsFor(market), market, rows)
+        await charge(db, stored * ROWS_PER.insert)
+        return c.json({ stored })
       }
       if (action === 'seal') {
         const body = await c.req.json().catch(() => ({}))
@@ -2901,8 +2935,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         const rows = Array.isArray(body) ? body : body?.rows
         if (!Array.isArray(rows)) return c.json({ error: 'Send the tags as a JSON array.' }, 400)
         if (rows.length > 5000) return c.json({ error: 'Send at most 5000 rows per request.' }, 413)
+        const left = await room(db, env, rows.length * ROWS_PER.tag)
+        if (!left.ok) return overCap(left)
         const done = c.req.query('done') === '1'
-        return c.json({ market, ...(await putBuildingTags(parcelsFor(market), market, rows, { done })) })
+        const tagged = await putBuildingTags(parcelsFor(market), market, rows, { done })
+        await charge(db, tagged.received * ROWS_PER.tag)
+        return c.json({ market, ...tagged })
       }
       if (action === 'tag') {
         /*
@@ -2925,6 +2963,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           budget: Number.isFinite(rows) && rows > 0 ? rows : undefined,
           reset: c.req.query('reset') === '1',
         })
+        await charge(db, (step.changed ?? 0) * ROWS_PER.tag)
         return c.json({ market, flood: Boolean(flood), zoning: Boolean(zoning), ...step })
       }
       if (action === 'reindex') {
@@ -2941,6 +2980,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         const step = await reindexMarket(parcelsFor(market), market, {
           budget: Number.isFinite(rows) && rows > 0 ? Math.min(rows, 100_000) : undefined,
         })
+        await charge(db, (step.indexed ?? 0) * ROWS_PER.reindex)
         return c.json({ market, ...step })
       }
     } catch (cause) {
