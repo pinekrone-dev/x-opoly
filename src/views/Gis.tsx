@@ -1164,15 +1164,19 @@ export default function Gis({
   const [side, setSide] = useState<SideTab>('legend')
   const [sideOpen, setSideOpen] = useState(true)
   /*
-   * The parcel outlines are on from the start; everything else is off.
+   * The parcel outlines are on from the start; everything else is off,
+   * the assessor shading included.
    *
    * A parcel map that opens with no parcels reads as broken, and the outline
    * is also the thing to click: every other layer's sections hang off the
    * parcel under the pointer. The cost is bounded — the tiles only draw past
    * the zoom gate and only for the view — so the county's size does not
    * matter here the way it did when the whole index had to download first.
+   * The land-use colour on top of them is a choice, not the starting view:
+   * it hides the basemap and every other layer under one county's palette.
+   * A saved view that had it on still opens with it on.
    */
-  const [showParcels, setShowParcels] = useState(true)
+  const [showParcels, setShowParcels] = useState(false)
   const [showOwners, setShowOwners] = useState(false)
   /*
    * Who is behind the parcels.
