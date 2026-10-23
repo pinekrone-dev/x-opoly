@@ -5,6 +5,7 @@ import ConfirmDelete from '../components/ConfirmDelete'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
+import { useCanEdit } from '../lib/access'
 import { OBJECTS, objectFor, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
 import type { DetailField, ObjectSpec } from '../lib/crm'
 import type { Account, BillingStatus, CrmRecord, RecordType } from '../types'
@@ -34,6 +35,7 @@ export default function Home({
   onSignedOut?: () => void
 }) {
   const spec = objectForSegment(tab)
+  const canEdit = useCanEdit()
   const [records, setRecords] = useState<CrmRecord[]>([])
   const [truncated, setTruncated] = useState(false)
   const [surveyCount, setSurveyCount] = useState(0)
@@ -239,18 +241,22 @@ export default function Home({
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
-              <button type="button" className="btn-primary text-sm" onClick={() => startCreating('person')}>
-                New person
-              </button>
-              <button type="button" className="btn-primary text-sm" onClick={() => startCreating('place')}>
-                New place
-              </button>
-              {ownButton ? (
+              {canEdit ? (
+                <>
+                  <button type="button" className="btn-primary text-sm" onClick={() => startCreating('person')}>
+                    New person
+                  </button>
+                  <button type="button" className="btn-primary text-sm" onClick={() => startCreating('place')}>
+                    New place
+                  </button>
+                </>
+              ) : null}
+              {ownButton && canEdit ? (
                 <button type="button" className="btn-secondary text-sm" onClick={() => startCreating(ownButton.type)}>
                   New {ownButton.singular.toLowerCase()}
                 </button>
               ) : null}
-              {spec.type === 'place' && records.length > 0 && !search ? (
+              {spec.type === 'place' && records.length > 0 && !search && canEdit ? (
                 <div className="ml-auto flex items-center gap-2">
                   {selecting ? (
                     <>
@@ -359,6 +365,7 @@ export default function Home({
                 selecting={selecting}
                 checked={checked}
                 onToggle={toggleChecked}
+                canEdit={canEdit}
                 onRemove={async (id) => {
                   await api.crm.remove(spec.segment, id)
                   setRecords((current) => current.filter((record) => (record as { id: string }).id !== id))
@@ -414,6 +421,7 @@ function RecordTable({
   selecting,
   checked,
   onToggle,
+  canEdit,
   onRemove,
 }: {
   spec: ObjectSpec
@@ -422,6 +430,7 @@ function RecordTable({
   selecting: boolean
   checked: Set<string>
   onToggle: (id: string) => void
+  canEdit: boolean
   /** Deletes one record; a rejection is shown on its row. */
   onRemove: (id: string) => Promise<void>
 }) {
@@ -562,11 +571,13 @@ function RecordTable({
                           >
                             Open
                           </button>
-                          <ConfirmDelete
-                            what={`this ${spec.singular.toLowerCase()}`}
-                            className="btn-ghost px-2 py-1 text-xs text-muted hover:text-rose-700"
-                            onConfirm={() => onRemove(id)}
-                          />
+                          {canEdit ? (
+                            <ConfirmDelete
+                              what={`this ${spec.singular.toLowerCase()}`}
+                              className="btn-ghost px-2 py-1 text-xs text-muted hover:text-rose-700"
+                              onConfirm={() => onRemove(id)}
+                            />
+                          ) : null}
                         </span>
                       </td>
                     )}

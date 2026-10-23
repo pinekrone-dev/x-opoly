@@ -70,6 +70,7 @@ import {
   recordVerificationSend,
   updateSettings,
   listTeamMembers,
+  setMemberRole,
   findByEmail,
   getUser,
   markLogin,
@@ -577,6 +578,29 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return next()
   })
 
+  /*
+   * View-only teammates.
+   *
+   * A viewer reads everything the team holds and changes none of it, so any
+   * request that writes is refused here, once, rather than in each route —
+   * a route added next month is covered without anyone remembering to.
+   * The exceptions are POSTs that only read (a question to the map, the
+   * scout) and the viewer's own preferences. Signing in, 2FA and password
+   * changes are under /api/auth, which never reaches this.
+   */
+  const VIEWER_MAY_POST = [/^\/api\/account\/settings$/, /^\/api\/gis\/ask$/, /^\/api\/gis\/scout$/]
+  app.use('/api/*', async (c, next) => {
+    const user = c.get('user')
+    if (!user || user.canEdit !== false) return next()
+    if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
+    const path = new URL(c.req.url).pathname
+    if (VIEWER_MAY_POST.some((pattern) => pattern.test(path))) return next()
+    return c.json(
+      { error: 'You have view-only access to this workspace. Ask its owner for edit access.', code: 'view_only' },
+      403,
+    )
+  })
+
   /**
    * The subscription gate.
    *
@@ -732,6 +756,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const existing = await countUsers(db)
 
     let teamId = null
+    let role = 'editor'
     let selfServe = false
     if (existing > 0) {
       const offered = String(body?.inviteToken ?? '')
@@ -746,6 +771,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           const redeemed = await redeemInvite(db, offered, body?.email)
           if (!redeemed.ok) return c.json({ error: redeemed.error }, 403)
           teamId = redeemed.teamId
+          role = redeemed.role
         } else if (!stripeConfigured(env) || !emailConfigured(env)) {
           // Self-serve signup exists to sell subscriptions. Without billing
           // there is nothing to sell, and without email sending the address
@@ -759,7 +785,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
     // An invite or setup token proves the email; a stranger's signup proves
     // nothing until they click the link this sends.
-    const result = await createUser(db, { ...body, teamId, verified: !selfServe })
+    const result = await createUser(db, { ...body, teamId, role, verified: !selfServe })
     if (result.error) return c.json({ error: result.error }, 400)
 
     // The first account adopts anything created before accounts existed,
@@ -1831,6 +1857,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const result = await createInvite(db, {
       email: body?.email,
       createdBy: c.get('user')?.id ?? null,
+      role: body?.role === 'viewer' ? 'viewer' : 'editor',
     })
     if (result.error) return c.json({ error: result.error }, 400)
 
@@ -1858,6 +1885,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   app.get('/api/account/team', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    return c.json({ members: await listTeamMembers(db, user.teamId) })
+  })
+
+  /** The owner sets what a teammate may do: edit the team's work, or only view it. */
+  app.patch('/api/account/team/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!ownsTeam(user)) return c.json({ error: "Only the workspace owner can change a teammate's access." }, 403)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await setMemberRole(db, user.teamId, c.req.param('id'), body?.role)
+    if (result.error) return c.json({ error: result.error }, result.missing ? 404 : 400)
     return c.json({ members: await listTeamMembers(db, user.teamId) })
   })
 

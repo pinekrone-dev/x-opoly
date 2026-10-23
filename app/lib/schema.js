@@ -441,6 +441,15 @@ export const COLUMN_ADDITIONS = [
   // The market the parcel map opens on for this person, chosen on the
   // settings page. NULL means the first live market, as before.
   ['users', 'default_market', 'TEXT'],
+  /*
+   * What a teammate may do: 'editor' changes the team's work, 'viewer' reads
+   * it and changes nothing. The owner (the account whose id is the team's)
+   * is the owner whatever this says. Every existing account was an editor in
+   * all but name, so that is the default and nobody loses anything.
+   */
+  ['users', 'role', "TEXT NOT NULL DEFAULT 'editor'"],
+  // The role an invitation grants, set by whoever sent it.
+  ['invites', 'role', "TEXT NOT NULL DEFAULT 'editor'"],
 
   /*
    * Where a place sits on the county roll.

@@ -68,7 +68,12 @@ export interface Invite {
   createdAt: string
   expiresAt: string
   used: boolean
+  /** What the person can do once they join. */
+  role?: MemberRole
 }
+
+/** owner: whose workspace it is. editor: changes the team's work. viewer: reads it only. */
+export type MemberRole = 'owner' | 'editor' | 'viewer'
 
 export interface Account {
   id: string
@@ -78,6 +83,10 @@ export interface Account {
   hasPhone: boolean
   sms2fa: boolean
   teamId?: string
+  /** owner | editor | viewer. Older servers send nothing, which means editor. */
+  role?: MemberRole
+  /** False for a view-only teammate: the server refuses their writes. */
+  canEdit?: boolean
   verified?: boolean
   totp: boolean
   secondFactor: 'sms' | 'totp' | null
@@ -94,6 +103,7 @@ export interface TeamMember {
   name: string | null
   /** Whether this is the team's owner, whose workspace everyone else joined. */
   owner: boolean
+  role?: MemberRole
   createdAt: string
   lastLoginAt: string | null
 }
