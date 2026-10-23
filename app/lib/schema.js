@@ -355,6 +355,13 @@ export const SCHEMA_STATEMENTS = [
   // Re-importing the same page is the normal case, so the dedupe lookup —
   // "has this team seen this listing before" — is the one that must be fast.
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key)',
+  // What the pipeline has written into the parcel stores this month, against
+  // the monthly cap; see writebudget.js.
+  `CREATE TABLE IF NOT EXISTS parcel_write_ledger (
+    month      TEXT PRIMARY KEY,
+    rows       INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
 ]
 
 /**

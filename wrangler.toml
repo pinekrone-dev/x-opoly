@@ -124,6 +124,13 @@ bucket_name = "prospector-data"
 # million parcels; the third takes San Diego, Chicago, San Francisco, the
 # Inland Empire, Boston, Atlanta and Seattle.
 PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2,minneapolis-mn=PARCELS_2,baltimore-md=PARCELS_2,detroit-mi=PARCELS_2,philadelphia-pa=PARCELS_2,dallas-tx=PARCELS_2,fort-worth-tx=PARCELS_2,miami-fl=PARCELS_2,los-angeles-ca=PARCELS_2,san-diego-ca=PARCELS_3,chicago-il=PARCELS_3,san-francisco-ca=PARCELS_3,riverside-ca=PARCELS_3,boston-ma=PARCELS_3,atlanta-ga=PARCELS_3,seattle-wa=PARCELS_3"
+# The monthly cap on rows the pipeline may write into the parcel stores
+# (app/lib/writebudget.js): 27M, the owner's 30M less room for the app's own
+# writes. PARCEL_WRITES_SPENT declares a month already spent before the
+# ledger existed: October 2026 took the 91M re-tagging burst, so nothing
+# more is written to the parcel stores until November.
+PARCEL_WRITE_CAP = "27000000"
+PARCEL_WRITES_SPENT = "2026-10=27000000"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
