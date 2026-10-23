@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import AccountMenu from './AccountMenu'
 import { api } from '../api'
-import BrandMark from './BrandMark'
+import BrandMark, { BrandPin } from './BrandMark'
 import { OBJECTS } from '../lib/crm'
 import { navigate } from '../lib/router'
 import type { Account, BillingStatus } from '../types'
@@ -72,12 +72,19 @@ export default function WorkspaceNav({
 
   return (
     <header className="shrink-0 border-b border-line bg-surface">
-      <div className="flex items-center gap-6 px-5">
-        <button type="button" className="py-2.5" onClick={() => navigate('/gis')} aria-label="Land Quotient home">
-          <BrandMark />
+      {/* On a phone the pin stands in for the full lockup, so the tabs and the
+          account button fit on one line instead of running off the edge. */}
+      <div className="flex items-center gap-2 px-3 sm:gap-6 sm:px-5">
+        <button type="button" className="shrink-0 py-2.5" onClick={() => navigate('/gis')} aria-label="Land Quotient home">
+          <span className="hidden sm:block">
+            <BrandMark />
+          </span>
+          <span className="sm:hidden">
+            <BrandPin size={30} />
+          </span>
         </button>
 
-        <nav className="flex gap-1" aria-label="Workspace">
+        <nav className="flex min-w-0 gap-0.5 sm:gap-1" aria-label="Workspace">
           <Tab label="GIS" active={current === 'gis'} onClick={() => navigate('/gis')} />
 
           {/*
@@ -114,7 +121,7 @@ export default function WorkspaceNav({
         </nav>
 
         {account ? (
-          <div className="ml-auto py-2">
+          <div className="ml-auto shrink-0 py-2">
             <AccountMenu
               account={account}
               smsConfigured={Boolean(smsConfigured)}

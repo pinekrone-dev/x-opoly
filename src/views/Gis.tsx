@@ -1155,14 +1155,20 @@ export default function Gis({
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [codes, setCodes] = useState<Record<string, { d?: string }>>({})
 
-  const [rail, setRail] = useState<RailTab | null>('layers')
+  // The Layers panel opens with the map where there is room for both; on a
+  // phone it would hide the map, so it waits for a tap on the rail there.
+  const [rail, setRail] = useState<RailTab | null>(() =>
+    typeof window === 'undefined' || window.innerWidth >= 768 ? 'layers' : null,
+  )
   /*
    * The right panel: always present, collapsible, two tabs. Opens on the
    * legend, because that is the question a fresh map asks first, and turns
    * to the record the moment something is clicked.
    */
   const [side, setSide] = useState<SideTab>('legend')
-  const [sideOpen, setSideOpen] = useState(true)
+  // Open beside the map on a screen with room for both; on a phone it would
+  // cover the whole map, so it starts closed there and opens on a tap.
+  const [sideOpen, setSideOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 768)
   /*
    * The parcel outlines are on from the start; everything else is off,
    * the assessor shading included.
@@ -4845,27 +4851,35 @@ export default function Gis({
       <GisSide open={sideOpen} tab={side} onTab={setSide} onToggle={() => setSideOpen((open) => !open)}>
       {side === 'legend' ? (
         <div className="h-full overflow-y-auto px-4 py-3">
-          <PanelSection title={effectiveColorBy === 'value' ? meta?.valueLabel || 'Value' : 'Land use'}>
-            {effectiveColorBy === 'value' ? (
-              <>
-                <div className="flex h-2 overflow-hidden rounded">
-                  {rampOf(parcelRamp).map((hue) => (
-                    <i key={hue} className="flex-1" style={{ background: hue }} />
+          {/* The parcel colours mean something only while the shading is on;
+              with it off the legend would explain colours nobody can see. */}
+          {showParcels ? (
+            <PanelSection title={effectiveColorBy === 'value' ? meta?.valueLabel || 'Value' : 'Land use'}>
+              {effectiveColorBy === 'value' ? (
+                <>
+                  <div className="flex h-2 overflow-hidden rounded">
+                    {rampOf(parcelRamp).map((hue) => (
+                      <i key={hue} className="flex-1" style={{ background: hue }} />
+                    ))}
+                  </div>
+                  <p className="mt-1 text-[11px] text-muted">Low to high, by seventh.</p>
+                </>
+              ) : (
+                <ul className="space-y-1">
+                  {LEGEND.map(([label, hue]) => (
+                    <li key={label} className="flex items-center gap-2 text-xs text-body">
+                      <i className="h-2.5 w-2.5 rounded-sm" style={{ background: hue }} />
+                      {label}
+                    </li>
                   ))}
-                </div>
-                <p className="mt-1 text-[11px] text-muted">Low to high, by seventh.</p>
-              </>
-            ) : (
-              <ul className="space-y-1">
-                {LEGEND.map(([label, hue]) => (
-                  <li key={label} className="flex items-center gap-2 text-xs text-body">
-                    <i className="h-2.5 w-2.5 rounded-sm" style={{ background: hue }} />
-                    {label}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </PanelSection>
+                </ul>
+              )}
+            </PanelSection>
+          ) : (
+            <PanelSection title="Parcels">
+              <p className="text-xs text-muted">Outlines only. Turn on Assessor shading under Layers to colour parcels by land use or value.</p>
+            </PanelSection>
+          )}
 
           {choropleth && (
             <PanelSection title={choropleth.label}>
