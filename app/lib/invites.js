@@ -26,6 +26,7 @@ function mapInvite(row) {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     used: Boolean(row.used_at),
+    role: row.role === 'viewer' ? 'viewer' : 'editor',
   }
 }
 
@@ -39,7 +40,7 @@ function isPast(iso) {
  * Re-inviting an address replaces the outstanding invite rather than
  * stacking a second working link for the same person.
  */
-export async function createInvite(db, { email, createdBy }) {
+export async function createInvite(db, { email, createdBy, role = 'editor' }) {
   const normalized = normalizeEmail(email)
   if (!normalized || !normalized.includes('@')) {
     return { error: 'That does not look like an email address.' }
@@ -58,11 +59,12 @@ export async function createInvite(db, { email, createdBy }) {
     created_by: createdBy ?? null,
     created_at: nowIso(),
     expires_at: new Date(Date.now() + INVITE_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    role: role === 'viewer' ? 'viewer' : 'editor',
   }
   await db.run(
-    `INSERT INTO invites (id, email, token_digest, created_by, created_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [invite.id, invite.email, invite.token_digest, invite.created_by, invite.created_at, invite.expires_at],
+    `INSERT INTO invites (id, email, token_digest, created_by, created_at, expires_at, role)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [invite.id, invite.email, invite.token_digest, invite.created_by, invite.created_at, invite.expires_at, invite.role],
   )
   return { invite: mapInvite({ ...invite, used_at: null }), token }
 }
@@ -132,5 +134,5 @@ export async function redeemInvite(db, token, email) {
   const inviter = row.created_by
     ? await db.get('SELECT id, team_id FROM users WHERE id = ?', [row.created_by])
     : null
-  return { ok: true, teamId: inviter ? inviter.team_id ?? inviter.id : null }
+  return { ok: true, teamId: inviter ? inviter.team_id ?? inviter.id : null, role: row.role === 'viewer' ? 'viewer' : 'editor' }
 }

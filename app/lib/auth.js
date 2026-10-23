@@ -75,6 +75,15 @@ export function normalizePhone(value) {
   return `+${digits}`.slice(0, 16)
 }
 
+/** The roles a teammate can hold. The owner is not one: it is whose team it is. */
+export const ROLES = ['editor', 'viewer']
+
+/** owner | editor | viewer, from a users row. */
+function roleOf(row) {
+  if (row.id === (row.team_id ?? row.id)) return 'owner'
+  return row.role === 'viewer' ? 'viewer' : 'editor'
+}
+
 function mapUser(row) {
   if (!row) return null
   return {
@@ -86,6 +95,9 @@ function mapUser(row) {
     hasPhone: Boolean(row.phone),
     sms2fa: Boolean(row.sms_2fa),
     teamId: row.team_id ?? row.id,
+    role: roleOf(row),
+    // A viewer reads the team's work and changes none of it.
+    canEdit: roleOf(row) !== 'viewer',
     verified: Boolean(row.verified ?? 1),
     totp: Boolean(row.totp_enabled),
     // What the login form will ask for. TOTP wins when both are on: it needs
@@ -110,7 +122,10 @@ export async function getUser(db, id) {
   return mapUser(await db.get('SELECT * FROM users WHERE id = ?', [id]))
 }
 
-export async function createUser(db, { email, password, name = null, phone = null, teamId = null, verified = true } = {}) {
+export async function createUser(
+  db,
+  { email, password, name = null, phone = null, teamId = null, verified = true, role = 'editor' } = {},
+) {
   const address = normalizeEmail(email)
   if (!EMAIL.test(address)) return { error: 'That does not look like an email address.' }
   if (String(password ?? '').length < MIN_PASSWORD_LENGTH) {
@@ -122,8 +137,8 @@ export async function createUser(db, { email, password, name = null, phone = nul
 
   const id = newId()
   await db.run(
-    `INSERT INTO users (id, email, password_hash, name, phone, sms_2fa, team_id, verified, created_at)
-     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    `INSERT INTO users (id, email, password_hash, name, phone, sms_2fa, team_id, verified, role, created_at)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
     [
       id,
       address,
@@ -136,6 +151,7 @@ export async function createUser(db, { email, password, name = null, phone = nul
       // An invite or a setup token proves the email; a self-serve signup
       // proves nothing yet, so it starts unverified.
       verified ? 1 : 0,
+      ROLES.includes(role) ? role : 'editor',
       nowIso(),
     ],
   )
@@ -420,7 +436,7 @@ export async function updateSettings(db, userId, patch = {}) {
  */
 export async function listTeamMembers(db, teamId) {
   const rows = await db.all(
-    'SELECT id, email, name, created_at, last_login_at FROM users WHERE COALESCE(team_id, id) = ? ORDER BY created_at, id',
+    'SELECT id, email, name, role, created_at, last_login_at FROM users WHERE COALESCE(team_id, id) = ? ORDER BY created_at, id',
     [teamId],
   )
   return rows
@@ -429,10 +445,27 @@ export async function listTeamMembers(db, teamId) {
       email: row.email,
       name: row.name,
       owner: row.id === teamId,
+      role: row.id === teamId ? 'owner' : row.role === 'viewer' ? 'viewer' : 'editor',
       createdAt: row.created_at,
       lastLoginAt: row.last_login_at,
     }))
     .sort((a, b) => Number(b.owner) - Number(a.owner))
+}
+
+/**
+ * Sets a teammate's role. Only within the team, and never the owner's own
+ * row: the owner is the owner by being whose team it is.
+ */
+export async function setMemberRole(db, teamId, memberId, role) {
+  if (!ROLES.includes(role)) return { error: 'Choose editor or viewer.' }
+  if (memberId === teamId) return { error: "The owner's access cannot be changed." }
+  const { changes } = await db.run('UPDATE users SET role = ? WHERE id = ? AND COALESCE(team_id, id) = ? AND id != ?', [
+    role,
+    memberId,
+    teamId,
+    teamId,
+  ])
+  return changes ? { ok: true } : { error: 'That person is not on this team.', missing: true }
 }
 
 /* -------------------------------------------------------------------------- */

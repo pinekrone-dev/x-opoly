@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import AccountMenu from '../components/AccountMenu'
 import { api } from '../api'
 import ConfirmDelete from '../components/ConfirmDelete'
+import { useCanEdit } from '../lib/access'
 import type { Survey } from '../types'
 import { navigate } from '../lib/router'
 import { shortDate } from '../lib/format'
@@ -59,6 +60,7 @@ export default function SurveyList({
    * so it asks first, on the card itself (ConfirmDelete). A failure throws
    * back to the card, which says so.
    */
+  const canEdit = useCanEdit()
   const removeSurvey = async (survey: Survey) => {
     await api.deleteSurvey(survey.id)
     setSurveys((current) => current.filter((entry) => entry.id !== survey.id))
@@ -93,9 +95,11 @@ export default function SurveyList({
             </p>
           </div>
         )}
-        <button type="button" className="btn-primary" onClick={() => setCreating(true)}>
-          New survey
-        </button>
+        {canEdit ? (
+          <button type="button" className="btn-primary" onClick={() => setCreating(true)}>
+            New survey
+          </button>
+        ) : null}
         {!embedded && account ? (
           <AccountMenu
             account={account}
@@ -179,11 +183,11 @@ export default function SurveyList({
                 <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => navigate(`/survey/${survey.id}`)}>
                   Open
                 </button>
-                <ConfirmDelete
+                {canEdit ? <ConfirmDelete
                   what={`"${survey.name}"${survey.pinCount ? ` and its ${survey.pinCount} site${survey.pinCount === 1 ? '' : 's'}` : ''}`}
                   className="btn-ghost px-2 py-1 text-xs text-muted hover:text-rose-700"
                   onConfirm={() => removeSurvey(survey)}
-                />
+                /> : null}
               </div>
             </li>
           ))}

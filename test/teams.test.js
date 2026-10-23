@@ -11,6 +11,7 @@ import test, { after, before, describe } from 'node:test'
 
 import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
+import { resetRateLimits } from '../app/lib/ratelimit.js'
 
 const temp = useTempData()
 let app
@@ -294,6 +295,62 @@ describe('settings and the team', () => {
 
     const theirs = await bob('/api/account/team')
     assert.deepEqual(theirs.body.members.map((m) => m.email), ['bob@example.com', 'carol@example.com'])
+  })
+
+  test('a viewer reads the team\'s work and changes none of it', async () => {
+    const minted = await alice('/api/invites', asJson({ email: 'vera@example.com', role: 'viewer' }))
+    assert.equal(minted.body.invite.role, 'viewer')
+    const vera = client()
+    const joined = await vera('/api/auth/register', asJson({
+      name: 'Vera', email: 'vera@example.com', password: 'a long enough password',
+      inviteToken: new URL(minted.body.url).searchParams.get('invite'),
+    }))
+    // This file signs up more people than one address may in an hour.
+    resetRateLimits()
+    assert.equal(joined.body.user.role, 'viewer')
+    assert.equal(joined.body.user.canEdit, false)
+
+    // Reads: the team's surveys and records.
+    assert.equal((await vera(`/api/surveys/${aliceSurvey.id}`)).status, 200)
+    assert.equal((await vera('/api/crm/deals')).status, 200)
+    // Writes: refused, each with the same plain reason.
+    for (const [path, init] of [
+      ['/api/surveys', asJson({ name: 'nope' })],
+      [`/api/surveys/${aliceSurvey.id}`, asJson({ name: 'renamed' }, 'PATCH')],
+      [`/api/surveys/${aliceSurvey.id}`, { method: 'DELETE' }],
+      ['/api/crm/deals', asJson({ name: 'nope' })],
+      ['/api/invites', asJson({ email: 'friend@example.com' })],
+    ]) {
+      const res = await vera(path, init)
+      assert.equal(res.status, 403, `${init.method} ${path}`)
+      assert.equal(res.body.code, 'view_only')
+    }
+    assert.equal((await alice(`/api/surveys/${aliceSurvey.id}`)).body.survey.name, 'Alice deal', 'nothing changed')
+    // Her own preference is hers to set.
+    assert.equal((await vera('/api/account/settings', asJson({ defaultMarket: 'austin-tx' }, 'PATCH'))).status, 200)
+  })
+
+  test('only the owner changes a teammate\'s access, and never their own', async () => {
+    const team = (await alice('/api/account/team')).body.members
+    const vera = team.find((m) => m.email === 'vera@example.com')
+    const frank = team.find((m) => m.email === 'frank@example.com')
+    assert.equal(vera.role, 'viewer')
+    assert.equal(frank.role, 'editor')
+    assert.equal(team[0].role, 'owner')
+
+    const frankClient = client()
+    await frankClient('/api/auth/login', asJson({ email: 'frank@example.com', password: 'a long enough password' }))
+    assert.equal((await frankClient(`/api/account/team/${vera.id}`, asJson({ role: 'editor' }, 'PATCH'))).status, 403, 'an editor cannot')
+    assert.equal((await bob(`/api/account/team/${vera.id}`, asJson({ role: 'editor' }, 'PATCH'))).status, 404, 'another team cannot')
+    assert.equal((await alice(`/api/account/team/${team[0].id}`, asJson({ role: 'viewer' }, 'PATCH'))).status, 400)
+
+    const promoted = await alice(`/api/account/team/${vera.id}`, asJson({ role: 'editor' }, 'PATCH'))
+    assert.equal(promoted.status, 200)
+    assert.equal(promoted.body.members.find((m) => m.id === vera.id).role, 'editor')
+    const veraClient = client()
+    await veraClient('/api/auth/login', asJson({ email: 'vera@example.com', password: 'a long enough password' }))
+    const made = await veraClient('/api/crm/deals', asJson({ name: 'Vera can now' }))
+    assert.equal(made.status, 201, 'the change applies on her next request')
   })
 
   test('a default market is saved, echoed by /me, and refused when it is not a slug', async () => {
