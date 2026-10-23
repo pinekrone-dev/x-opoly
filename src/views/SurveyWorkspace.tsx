@@ -13,6 +13,7 @@ import type { AppFeatures, CompetitionResult, DealStage, Demographics, Property,
 import { areaInfoHtml, colorFor } from '../components/DemographicsPanel'
 import { buildTourBookFor } from '../lib/tourBookPdf'
 import { navigate } from '../lib/router'
+import { useCanEdit } from '../lib/access'
 import { STAGE_META, fullAddress, displayName, rate, sqft } from '../lib/format'
 import { autoPhotoFromFlyer } from '../lib/flyerPhoto'
 
@@ -26,6 +27,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 export default function SurveyWorkspace({ id, features }: { id: string; features: AppFeatures }) {
+  const canEdit = useCanEdit()
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [properties, setProperties] = useState<Property[]>([])
   const [stages, setStages] = useState<DealStage[]>([])
@@ -389,6 +391,11 @@ export default function SurveyWorkspace({ id, features }: { id: string; features
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {canEdit ? null : (
+        <p className="border-b border-line bg-sunken px-4 py-1.5 text-center text-xs text-muted">
+          View only: you can look through, tour and export this survey. Changes need edit access from the workspace owner.
+        </p>
+      )}
       <header className="border-b border-line bg-surface">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex min-w-0 items-center gap-3">

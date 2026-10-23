@@ -18,6 +18,7 @@ import Settings from './views/Settings'
 import WorkspaceNav from './components/WorkspaceNav'
 import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
+import { setAccess } from './lib/access'
 
 /**
  * Used only if /api/health cannot be reached. Keyless, and a light street map
@@ -56,6 +57,8 @@ export default function App() {
   const route = matchRoute(path)
   const [features, setFeatures] = useState<AppFeatures | null>(null)
   const [session, setSession] = useState<Session | null>(null)
+  // A view-only teammate's screens drop the controls the server would refuse.
+  useEffect(() => setAccess(session?.user), [session?.user])
 
   // What the signed-out visitor is looking at: the landing page, or a form.
   const [door, setDoor] = useState<'landing' | 'signIn' | 'signUp'>('landing')

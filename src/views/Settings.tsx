@@ -46,6 +46,7 @@ export default function Settings({
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [members, setMembers] = useState<TeamMember[] | null>(null)
+  const [roleError, setRoleError] = useState<string | null>(null)
 
   // The same catalogue the map reads, filtered the same way: a market that
   // is not live cannot be chosen as the one to open on.
@@ -143,7 +144,13 @@ export default function Settings({
           <h2 className="panel-title">Team</h2>
           <p className="mt-1 text-xs leading-relaxed text-muted">
             Everyone who shares this workspace: the same surveys, CRM records, comps and saved map views.
+            {account.role === 'owner'
+              ? ' Set each person to edit, or to view only: a viewer can open and export everything but change nothing.'
+              : account.role === 'viewer'
+                ? ' You have view-only access. Ask the owner if you need to make changes.'
+                : ''}
           </p>
+          {roleError ? <p className="mt-2 text-xs text-rose-600">{roleError}</p> : null}
           {members === null ? (
             <p className="mt-3 text-xs text-muted">Loading…</p>
           ) : (
@@ -160,7 +167,32 @@ export default function Settings({
                     <span className="block truncate text-body">{member.name || member.email}</span>
                     {member.name ? <span className="block truncate text-muted">{member.email}</span> : null}
                   </span>
-                  {member.owner ? <span className="pill bg-brand-tint text-brand-deep">Owner</span> : null}
+                  {member.owner ? (
+                    <span className="pill bg-brand-tint text-brand-deep">Owner</span>
+                  ) : account.role === 'owner' ? (
+                    <select
+                      className="field h-7 w-auto py-0 text-xs"
+                      aria-label={`What ${member.name || member.email} can do`}
+                      value={member.role === 'viewer' ? 'viewer' : 'editor'}
+                      onChange={async (event) => {
+                        setRoleError(null)
+                        try {
+                          const { members: next } = await api.account.setRole(
+                            member.id,
+                            event.target.value === 'viewer' ? 'viewer' : 'editor',
+                          )
+                          setMembers(next)
+                        } catch (cause) {
+                          setRoleError(cause instanceof Error ? cause.message : 'That could not be changed.')
+                        }
+                      }}
+                    >
+                      <option value="editor">Can edit</option>
+                      <option value="viewer">View only</option>
+                    </select>
+                  ) : (
+                    <span className="pill bg-sunken text-muted">{member.role === 'viewer' ? 'View only' : 'Can edit'}</span>
+                  )}
                   {member.id === account.id ? <span className="pill bg-sunken text-muted">You</span> : null}
                   <span className="hidden text-faint sm:block">
                     {member.lastLoginAt ? `Signed in ${new Date(member.lastLoginAt).toLocaleDateString()}` : 'Never signed in'}

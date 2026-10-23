@@ -14,6 +14,7 @@ import type { Invite } from '../types'
 export default function InviteCollaborators({ compact = false }: { compact?: boolean }) {
   const [invites, setInvites] = useState<Invite[]>([])
   const [email, setEmail] = useState('')
+  const [role, setRole] = useState<'editor' | 'viewer'>('editor')
   const [minted, setMinted] = useState<{ email: string; url: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -31,7 +32,7 @@ export default function InviteCollaborators({ compact = false }: { compact?: boo
     setError(null)
     setMinted(null)
     try {
-      const { invite, url } = await api.createInvite(email)
+      const { invite, url } = await api.createInvite(email, role)
       setInvites((current) => [invite, ...current.filter((entry) => entry.email !== invite.email)])
       setMinted({ email: invite.email, url })
       setEmail('')
@@ -64,12 +65,13 @@ export default function InviteCollaborators({ compact = false }: { compact?: boo
     <section className={compact ? '' : 'panel mt-4 p-4'}>
       {compact ? null : <h3 className="panel-title">Collaborators</h3>}
       <p className={`${compact ? '' : 'mt-1 '}text-xs leading-relaxed text-muted`}>
-        Invite a partner and they can add and edit sites alongside you. Each invitation is a
-        one-time link that only works for the address it was sent to.
+        Invite a partner to edit alongside you, or a client or lender to view only: they see the
+        same surveys, deals and records and can export them, but cannot change anything. Each
+        invitation is a one-time link that only works for the address it was sent to.
       </p>
 
       <form
-        className="mt-3 flex gap-2"
+        className="mt-3 flex flex-wrap gap-2 sm:flex-nowrap"
         onSubmit={(event) => {
           event.preventDefault()
           if (!busy && email.includes('@')) void create()
@@ -83,6 +85,15 @@ export default function InviteCollaborators({ compact = false }: { compact?: boo
           value={email}
           onChange={(event) => setEmail(event.target.value)}
         />
+        <select
+          className="field w-auto"
+          aria-label="What they can do"
+          value={role}
+          onChange={(event) => setRole(event.target.value === 'viewer' ? 'viewer' : 'editor')}
+        >
+          <option value="editor">Can edit</option>
+          <option value="viewer">View only</option>
+        </select>
         <button type="submit" className="btn-primary whitespace-nowrap" disabled={busy || !email.includes('@')}>
           {busy ? 'Inviting…' : 'Invite'}
         </button>
@@ -125,6 +136,7 @@ export default function InviteCollaborators({ compact = false }: { compact?: boo
             return (
               <li key={invite.id} className="flex items-center gap-3 border-b border-line px-3 py-2 text-xs last:border-b-0">
                 <span className="min-w-0 flex-1 truncate text-body">{invite.email}</span>
+                <span className="text-faint">{invite.role === 'viewer' ? 'View only' : 'Can edit'}</span>
                 {invite.used ? (
                   <span className="pill bg-brand-tint text-brand-deep">Joined</span>
                 ) : expired ? (

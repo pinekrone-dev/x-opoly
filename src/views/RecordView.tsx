@@ -4,6 +4,7 @@ import ConfirmDelete from '../components/ConfirmDelete'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
+import { useCanEdit } from '../lib/access'
 import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
 import type { DetailField } from '../lib/crm'
 import type { CrmRecord, Deal, DealParty, RecordField, RecordType, Survey } from '../types'
@@ -45,6 +46,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
    * focus, the window loses focus, a field is added or removed, or the view
    * unmounts, so nothing typed is ever lost to the delay.
    */
+  const canEdit = useCanEdit()
   const pending = useRef<RecordField[] | null>(null)
   const timer = useRef<number | null>(null)
 
@@ -151,9 +153,9 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
             <p className="mt-0.5 text-sm text-muted">{subtitleOf(recordType, record) || '—'}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {deal ? <OpenSurvey deal={deal} onLinked={(updated) => setRecord(updated)} /> : null}
-            {recordType === 'place' ? <SendPlaceToSurvey placeIds={[id]} /> : null}
-            <ConfirmDelete what={`this ${spec.singular.toLowerCase()}`} onConfirm={remove} />
+            {deal ? <OpenSurvey deal={deal} canEdit={canEdit} onLinked={(updated) => setRecord(updated)} /> : null}
+            {recordType === 'place' && canEdit ? <SendPlaceToSurvey placeIds={[id]} /> : null}
+            {canEdit ? <ConfirmDelete what={`this ${spec.singular.toLowerCase()}`} onConfirm={remove} /> : null}
           </div>
         </div>
 
@@ -161,20 +163,29 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           <p className="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>
         ) : null}
 
-        {deal ? <Parties deal={deal} onChanged={load} /> : null}
+        {canEdit ? null : (
+          <p className="mt-4 rounded-lg border border-line bg-sunken p-3 text-xs text-muted">
+            View only. You can read and export this {spec.singular.toLowerCase()}; ask the workspace owner for edit access.
+          </p>
+        )}
 
-        <section className="panel mt-4 p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="label">Details</p>
-            {saving ? <span className="text-[11px] text-faint">Saving…</span> : null}
-          </div>
-          <Details record={record} spec={spec} onSave={saveColumn} />
-        </section>
+        {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
 
-        <section className="panel mt-4 p-4">
-          <p className="label mb-2">Custom fields</p>
-          <CustomFields fields={fields} onChange={saveFields} onSettle={() => void flush()} />
-        </section>
+        {/* A disabled fieldset turns every input inside it read-only at once. */}
+        <fieldset disabled={!canEdit} className="contents">
+          <section className="panel mt-4 p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="label">Details</p>
+              {saving ? <span className="text-[11px] text-faint">Saving…</span> : null}
+            </div>
+            <Details record={record} spec={spec} onSave={saveColumn} />
+          </section>
+
+          <section className="panel mt-4 p-4">
+            <p className="label mb-2">Custom fields</p>
+            <CustomFields fields={fields} onChange={saveFields} onSettle={() => void flush()} />
+          </section>
+        </fieldset>
       </main>
     </div>
   )
@@ -187,7 +198,15 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
  * and never shown, so the map was three clicks away through another tab. A
  * deal with no survey yet picks one here, and the pick is the link.
  */
-function OpenSurvey({ deal, onLinked }: { deal: Deal; onLinked: (deal: CrmRecord) => void }) {
+function OpenSurvey({
+  deal,
+  canEdit,
+  onLinked,
+}: {
+  deal: Deal
+  canEdit: boolean
+  onLinked: (deal: CrmRecord) => void
+}) {
   const [surveys, setSurveys] = useState<Survey[] | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
   useEffect(() => {
@@ -213,7 +232,7 @@ function OpenSurvey({ deal, onLinked }: { deal: Deal; onLinked: (deal: CrmRecord
       </button>
     )
   }
-  if (!surveys?.length) return null
+  if (!surveys?.length || !canEdit) return null
   return (
     <span className="inline-flex items-center gap-1.5">
       <select
@@ -390,7 +409,7 @@ function CustomFields({
 }
 
 /** The parties on a deal: who and what it brings together, each in a role. */
-function Parties({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
+function Parties({ deal, canEdit, onChanged }: { deal: Deal; canEdit: boolean; onChanged: () => void }) {
   const [adding, setAdding] = useState(false)
   const [kind, setKind] = useState<'person' | 'company' | 'place'>('person')
   const [options, setOptions] = useState<CrmRecord[]>([])
@@ -434,9 +453,11 @@ function Parties({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
     <section className="panel mt-4 p-4">
       <div className="mb-2 flex items-center justify-between">
         <p className="label">Parties</p>
-        <button type="button" className="btn-secondary text-xs" onClick={() => setAdding((open) => !open)}>
-          Add party
-        </button>
+        {canEdit ? (
+          <button type="button" className="btn-secondary text-xs" onClick={() => setAdding((open) => !open)}>
+            Add party
+          </button>
+        ) : null}
       </div>
 
       {parties.length === 0 ? (
@@ -458,7 +479,7 @@ function Parties({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
                   {titleOf(party.kind, party.record)}
                 </button>
                 {party.role ? <span className="shrink-0 text-xs text-muted">{party.role}</span> : null}
-                <button
+                {canEdit ? <button
                   type="button"
                   className="btn-ghost px-1.5 py-1 text-faint hover:text-rose-600"
                   aria-label={`Remove ${titleOf(party.kind, party.record)}`}
@@ -467,7 +488,7 @@ function Parties({ deal, onChanged }: { deal: Deal; onChanged: () => void }) {
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
                     <path d="M18 6 6 18M6 6l12 12" />
                   </svg>
-                </button>
+                </button> : null}
               </li>
             )
           })}

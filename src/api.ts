@@ -142,6 +142,9 @@ export const api = {
   account: {
     /** Everyone on this team, the owner first. */
     team: () => request<{ members: TeamMember[] }>('/api/account/team'),
+    /** The owner sets a teammate to edit or view only; the answer is the team as it now stands. */
+    setRole: (memberId: string, role: 'editor' | 'viewer') =>
+      request<{ members: TeamMember[] }>(`/api/account/team/${memberId}`, { ...json({ role }), method: 'PATCH' }),
     /** Persists a preference; the answer is the account as it now stands. */
     updateSettings: (patch: { defaultMarket?: string | null }) =>
       request<{ user: Account }>('/api/account/settings', { ...json(patch), method: 'PATCH' }),
@@ -151,8 +154,8 @@ export const api = {
   updateZone: (id: string, patch: { label?: string; color?: string }) =>
     request<{ zone: Zone }>(`/api/zones/${id}`, { ...json(patch), method: 'PATCH' }),
   deleteZone: (id: string) => request<void>(`/api/zones/${id}`, { method: 'DELETE' }),
-  createInvite: (email: string) =>
-    request<{ invite: Invite; url: string }>('/api/invites', json({ email })),
+  createInvite: (email: string, role: 'editor' | 'viewer' = 'editor') =>
+    request<{ invite: Invite; url: string }>('/api/invites', json({ email, role })),
   revokeInvite: (id: string) => request<void>(`/api/invites/${id}`, { method: 'DELETE' }),
   setTwoFactor: (input: { enabled: boolean; password: string; phone?: string }) =>
     request<{ user: Account }>('/api/auth/2fa', json(input)),
