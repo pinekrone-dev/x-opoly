@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from '../components/BrandMark'
+import ConfirmDelete from '../components/ConfirmDelete'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
 import type { DetailField } from '../lib/crm'
-import type { CrmRecord, Deal, DealParty, RecordField, RecordType } from '../types'
+import type { CrmRecord, Deal, DealParty, RecordField, RecordType, Survey } from '../types'
 
 /**
  * One CRM record, and everything attached to it.
@@ -105,9 +106,9 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
     }
   }
 
+  // A failure throws into ConfirmDelete, which says so where the button was.
   const remove = async () => {
-    if (!window.confirm(`Delete this ${spec.singular.toLowerCase()}? This cannot be undone.`)) return
-    await api.crm.remove(spec.segment, id).catch(() => undefined)
+    await api.crm.remove(spec.segment, id)
     navigate(`/${spec.segment}`)
   }
 
@@ -149,11 +150,10 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
             <h1 className="truncate text-xl font-semibold text-ink">{titleOf(recordType, record)}</h1>
             <p className="mt-0.5 text-sm text-muted">{subtitleOf(recordType, record) || '—'}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {deal ? <OpenSurvey deal={deal} onLinked={(updated) => setRecord(updated)} /> : null}
             {recordType === 'place' ? <SendPlaceToSurvey placeIds={[id]} /> : null}
-            <button type="button" className="btn-secondary text-xs" onClick={() => void remove()}>
-              Delete
-            </button>
+            <ConfirmDelete what={`this ${spec.singular.toLowerCase()}`} onConfirm={remove} />
           </div>
         </div>
 
@@ -177,6 +177,70 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
         </section>
       </main>
     </div>
+  )
+}
+
+/**
+ * Open, at the top of a deal: its survey's map, where the sites are worked.
+ *
+ * A deal names the survey it came from, and until this the link was stored
+ * and never shown, so the map was three clicks away through another tab. A
+ * deal with no survey yet picks one here, and the pick is the link.
+ */
+function OpenSurvey({ deal, onLinked }: { deal: Deal; onLinked: (deal: CrmRecord) => void }) {
+  const [surveys, setSurveys] = useState<Survey[] | null>(null)
+  const [failed, setFailed] = useState<string | null>(null)
+  useEffect(() => {
+    if (deal.surveyId) return
+    let cancelled = false
+    api
+      .listSurveys()
+      .then(({ surveys: list }) => {
+        if (!cancelled) setSurveys(list)
+      })
+      .catch(() => {
+        if (!cancelled) setSurveys([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [deal.surveyId])
+
+  if (deal.surveyId) {
+    return (
+      <button type="button" className="btn-primary text-xs" onClick={() => navigate(`/survey/${deal.surveyId}`)}>
+        Open survey
+      </button>
+    )
+  }
+  if (!surveys?.length) return null
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <select
+        className="field h-8 w-auto py-0 text-xs"
+        aria-label="Link a survey to this deal"
+        value=""
+        onChange={async (event) => {
+          const surveyId = event.target.value
+          if (!surveyId) return
+          setFailed(null)
+          try {
+            const { record } = await api.crm.update('deals', deal.id, { surveyId })
+            onLinked(record)
+          } catch (cause) {
+            setFailed(cause instanceof Error ? cause.message : 'That could not be linked.')
+          }
+        }}
+      >
+        <option value="">Link a survey to open…</option>
+        {surveys.map((survey) => (
+          <option key={survey.id} value={survey.id}>
+            {survey.name}
+          </option>
+        ))}
+      </select>
+      {failed ? <span className="text-xs text-rose-700">{failed}</span> : null}
+    </span>
   )
 }
 

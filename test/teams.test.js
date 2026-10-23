@@ -209,6 +209,16 @@ describe('tenant isolation', () => {
     assert.equal((await alice(`/api/invites/${id}`, { method: 'DELETE' })).status, 204)
   })
 
+  test("bob cannot link alice's survey to his own deal", async () => {
+    const { body } = await bob('/api/crm/deals', asJson({ name: 'Bob deal record' }))
+    const linked = await bob(`/api/crm/deals/${body.record.id}`, asJson({ surveyId: aliceSurvey.id }, 'PATCH'))
+    assert.equal(linked.status, 400)
+    const { body: mine } = await bob('/api/surveys', asJson({ name: 'Bob own survey' }))
+    const ok = await bob(`/api/crm/deals/${body.record.id}`, asJson({ surveyId: mine.survey.id }, 'PATCH'))
+    assert.equal(ok.status, 200)
+    assert.equal(ok.body.record.surveyId, mine.survey.id)
+  })
+
   test("alice's stages answer 404 to bob, and are not changed or deleted", async () => {
     const { body } = await alice(`/api/surveys/${aliceSurvey.id}/stages`)
     const stage = body.stages[0]
