@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from '../components/BrandMark'
 import ConfirmDelete from '../components/ConfirmDelete'
+import DealEconomics from '../components/DealEconomics'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
@@ -168,6 +169,8 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
             View only. You can read and export this {spec.singular.toLowerCase()}; ask the workspace owner for edit access.
           </p>
         )}
+
+        {deal ? <DealEconomics deal={deal} canEdit={canEdit} onSaved={(updated) => setRecord(updated)} /> : null}
 
         {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
 

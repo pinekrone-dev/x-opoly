@@ -6,9 +6,10 @@ import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
 import { useCanEdit } from '../lib/access'
+import { downloadDealWorkbook } from '../lib/dealWorkbook'
 import { OBJECTS, objectFor, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
 import type { DetailField, ObjectSpec } from '../lib/crm'
-import type { Account, BillingStatus, CrmRecord, RecordType } from '../types'
+import type { Account, BillingStatus, CrmRecord, Deal, RecordType } from '../types'
 
 /**
  * The workspace home.
@@ -45,6 +46,7 @@ export default function Home({
   const [notice, setNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
+  const [exporting, setExporting] = useState(false)
   // Bumped after a save so the list and the tab counts read again.
   const [refresh, setRefresh] = useState(0)
 
@@ -254,6 +256,27 @@ export default function Home({
               {ownButton && canEdit ? (
                 <button type="button" className="btn-secondary text-sm" onClick={() => startCreating(ownButton.type)}>
                   New {ownButton.singular.toLowerCase()}
+                </button>
+              ) : null}
+              {spec.type === 'deal' && records.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn-secondary ml-auto text-sm"
+                  disabled={exporting}
+                  title="Every deal as its own sheet with live formulas, and a summary that links to them"
+                  onClick={async () => {
+                    setExporting(true)
+                    setError(null)
+                    try {
+                      await downloadDealWorkbook(records as Deal[], `Deals ${new Date().toISOString().slice(0, 10)}.xlsx`)
+                    } catch (cause) {
+                      setError(cause instanceof Error ? cause.message : 'The spreadsheet could not be made.')
+                    } finally {
+                      setExporting(false)
+                    }
+                  }}
+                >
+                  {exporting ? 'Building…' : 'Export to Excel'}
                 </button>
               ) : null}
               {spec.type === 'place' && records.length > 0 && !search && canEdit ? (
