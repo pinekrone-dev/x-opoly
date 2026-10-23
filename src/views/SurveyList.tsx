@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import AccountMenu from '../components/AccountMenu'
 import { api } from '../api'
+import ConfirmDelete from '../components/ConfirmDelete'
 import type { Survey } from '../types'
 import { navigate } from '../lib/router'
 import { shortDate } from '../lib/format'
@@ -55,21 +56,12 @@ export default function SurveyList({
 
   /**
    * Deleting a survey takes its sites, flyers, tour and share link with it,
-   * so the browser's own confirm stands guard — typed, not one-click.
+   * so it asks first, on the card itself (ConfirmDelete). A failure throws
+   * back to the card, which says so.
    */
   const removeSurvey = async (survey: Survey) => {
-    const sites = survey.pinCount ?? 0
-    const ok = window.confirm(
-      `Delete "${survey.name}"${sites ? ` and its ${sites} site${sites === 1 ? '' : 's'}` : ''}? ` +
-        'The share link stops working and this cannot be undone.',
-    )
-    if (!ok) return
-    try {
-      await api.deleteSurvey(survey.id)
-      setSurveys((current) => current.filter((entry) => entry.id !== survey.id))
-    } catch {
-      window.alert('That survey could not be deleted. Reload and try again.')
-    }
+    await api.deleteSurvey(survey.id)
+    setSurveys((current) => current.filter((entry) => entry.id !== survey.id))
   }
 
   const create = async (form: HTMLFormElement) => {
@@ -162,10 +154,10 @@ export default function SurveyList({
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {surveys.map((survey) => (
-            <li key={survey.id} className="group relative">
+            <li key={survey.id} className="panel flex flex-col transition hover:border-brand/40">
               <button
                 type="button"
-                className="panel w-full p-5 text-left transition hover:border-brand/40"
+                className="w-full flex-1 p-5 pb-3 text-left"
                 onClick={() => navigate(`/survey/${survey.id}`)}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -173,9 +165,7 @@ export default function SurveyList({
                     <h2 className="truncate font-semibold text-ink">{survey.name}</h2>
                     {survey.clientName && <p className="truncate text-sm text-muted">for {survey.clientName}</p>}
                   </div>
-                  {survey.share.enabled && (
-                    <span className="pill mr-7 bg-brand/15 text-brand ring-brand/30">shared</span>
-                  )}
+                  {survey.share.enabled && <span className="pill bg-brand/15 text-brand ring-brand/30">shared</span>}
                 </div>
                 <p className="mt-4 flex items-center gap-3 text-xs text-muted">
                   <span className="font-mono text-body">{survey.pinCount ?? 0}</span> sites
@@ -183,20 +173,18 @@ export default function SurveyList({
                   updated {shortDate(survey.updatedAt)}
                 </p>
               </button>
-              <button
-                type="button"
-                className="btn-ghost absolute right-3 top-3 px-1.5 py-1 text-faint opacity-0 transition hover:text-rose-600 focus:opacity-100 group-hover:opacity-100"
-                aria-label={`Delete ${survey.name}`}
-                title="Delete this survey"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  void removeSurvey(survey)
-                }}
-              >
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                  <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                </svg>
-              </button>
+              {/* Open and Delete always show: the delete used to appear on
+                  hover only, so on a phone or tablet it was never there. */}
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-line px-5 py-2">
+                <button type="button" className="btn-secondary px-2.5 py-1 text-xs" onClick={() => navigate(`/survey/${survey.id}`)}>
+                  Open
+                </button>
+                <ConfirmDelete
+                  what={`"${survey.name}"${survey.pinCount ? ` and its ${survey.pinCount} site${survey.pinCount === 1 ? '' : 's'}` : ''}`}
+                  className="btn-ghost px-2 py-1 text-xs text-muted hover:text-rose-700"
+                  onConfirm={() => removeSurvey(survey)}
+                />
+              </div>
             </li>
           ))}
         </ul>
