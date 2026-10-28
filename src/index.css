@@ -374,6 +374,51 @@
   top: 2.75rem;
 }
 
+/*
+ * The GIS on a phone: one full-bleed map, the tools in a bar along the
+ * bottom (with room for the home indicator), the address bar across the top
+ * and the map's own controls below it. The rail and side panel are sheets
+ * there, not columns, so nothing is inset from the sides.
+ */
+.gis-tabbar {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@media (max-width: 767px) {
+  .gis-map {
+    --map-inset-left: 0px !important;
+    --map-inset-right: 0px !important;
+    --tabbar: calc(3.5rem + env(safe-area-inset-bottom));
+  }
+  .gis-tabbar {
+    height: var(--tabbar);
+  }
+  .gis-sheet {
+    bottom: var(--tabbar);
+  }
+  .gis-map .maplibregl-ctrl-top-left,
+  .gis-map .leaflet-top.leaflet-left {
+    top: 3.75rem;
+  }
+  .gis-map .maplibregl-ctrl-bottom-right,
+  .gis-map .maplibregl-ctrl-bottom-left,
+  .gis-map .leaflet-bottom {
+    bottom: var(--tabbar);
+  }
+  .gis-map .basemap-picker {
+    bottom: calc(var(--tabbar) + 0.75rem);
+  }
+  .gis-legend-fab {
+    bottom: calc(var(--tabbar) + 0.75rem);
+  }
+  .gis-side-sheet {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .gis-map[data-sheet] .basemap-picker,
+  .gis-map[data-sheet] .gis-legend-fab {
+    display: none;
+  }
+}
+
 /* The side panel sits over the map's right edge the same way, so the
    attribution and anything else pinned to the right is pushed clear of it. */
 .gis-map .maplibregl-ctrl-top-right,
@@ -381,4 +426,16 @@
 .gis-map .leaflet-top.leaflet-right,
 .gis-map .leaflet-bottom.leaflet-right {
   right: var(--map-inset-right, 0);
+}
+
+/*
+ * Phones zoom the whole page into any field whose text is under 16px, and
+ * leave it zoomed. Fields are 16px there; the desktop keeps its compact type.
+ */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }

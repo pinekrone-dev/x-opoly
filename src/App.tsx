@@ -305,7 +305,10 @@ export default function App() {
    */
   if (route.view === 'gis' && features) {
     return (
-      <div className="flex h-screen flex-col">
+      // The dynamic viewport: on a phone the browser's own bars come and go,
+      // and 100vh is the height without them, so the bottom tab bar fell
+      // under Safari's toolbar.
+      <div className="flex h-[100dvh] flex-col">
         <WorkspaceNav
           current="gis"
           account={session.user}
