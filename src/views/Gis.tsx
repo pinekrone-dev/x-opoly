@@ -24,6 +24,7 @@ import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails,
 import { csvCell } from '../lib/csv'
 import { countyCounts, describeMismatch, listingCounts, mismatches, readCount } from '../lib/listingCheck'
 import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
+import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
 
 import type {
   AskCircle,
@@ -276,6 +277,17 @@ const BUILDINGS_LAYER: PublishedLayer = {
 }
 
 /** Where a market is, from its parcel archive's header. */
+/** The filter's category tabs. Power and Places are lib/nearby's groups. */
+type FilterTab = 'property' | 'zoning' | 'owner' | 'power' | 'places'
+
+const FILTER_TABS: { id: FilterTab; label: string }[] = [
+  { id: 'property', label: 'Property' },
+  { id: 'zoning', label: 'Zoning' },
+  { id: 'owner', label: 'Owner' },
+  { id: 'power', label: 'Power' },
+  { id: 'places', label: 'Places' },
+]
+
 interface MarketExtent {
   slug: string
   name: string
@@ -1400,6 +1412,13 @@ export default function Gis({
   const [areaCircle, setAreaCircle] = useState<AskCircle | null>(null)
   /** Whether a parcel must meet every criterion set, or any one of them. */
   const [matchMode, setMatchMode] = useState<'all' | 'any'>('all')
+  /*
+   * Near a published layer: within a mile of a transmission line, inside an
+   * opportunity zone. Each is one criterion, counted by all/some like the
+   * rest. And which of the filter's category tabs is open.
+   */
+  const [nearPicks, setNearPicks] = useState<NearPick[]>([])
+  const [filterTab, setFilterTab] = useState<FilterTab>('property')
   const [tableOpen, setTableOpen] = useState(false)
   /*
    * With the Ask tab open the map is the circle's: it is there from the
@@ -1549,6 +1568,8 @@ export default function Gis({
     setBuildingPick(null)
     setCoverageMax(null)
     setOwnerPicks(new Set())
+    setNearPicks([])
+    setNearData({})
     setAreaBox(null)
     setAreaCircle(null)
     setAskCircle(null)
@@ -1733,6 +1754,27 @@ export default function Gis({
         .finally(() => setLayerBusy((busy) => ({ ...busy, [layer.id]: false })))
     }
   }, [published, layerOn, layerData, layerBusy, active])
+
+  /*
+   * The layers a near filter tests against, for a market read from its
+   * county file. The store answers near filters itself; here the browser
+   * has every parcel already and needs only the layer to test them by.
+   * Kept apart from layerData so testing a layer does not draw it.
+   */
+  const [nearData, setNearData] = useState<Record<string, GeoJSON.FeatureCollection | null>>({})
+  useEffect(() => {
+    if (!active || server?.ready) return
+    for (const pick of nearPicks) {
+      if (pick.layer in nearData) continue
+      const layer = published.find((l) => l.id === pick.layer)
+      setNearData((current) => ({ ...current, [pick.layer]: null }))
+      if (!layer) continue
+      fetch(`${CATALOG}/${active}/${layer.file}`)
+        .then(asJson)
+        .then((data: GeoJSON.FeatureCollection) => setNearData((current) => ({ ...current, [pick.layer]: data })))
+        .catch(() => setError(`Could not load the ${layer.label.toLowerCase()} layer to filter by.`))
+    }
+  }, [active, server?.ready, nearPicks, nearData, published])
 
   /*
    * This market's saved views. Fetched per market, because a view belongs to
@@ -2560,8 +2602,9 @@ export default function Gis({
       box: areaBox,
       circle: areaCircle,
       match: matchMode,
+      near: [...nearPicks].sort((a, b) => a.layer.localeCompare(b.layer)),
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox, areaCircle, matchMode])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox, areaCircle, matchMode, nearPicks])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -2681,6 +2724,33 @@ export default function Gis({
    * once its records have been read into the sale-year and mailing-state
    * columns; served from the index, once the pipeline has written them in.
    */
+  /*
+   * The near filters' grids, for a market read from its county file: the
+   * same cells the store would keep, bounded by the county's extent.
+   */
+  const nearGrids = useMemo(() => {
+    if (server?.ready) return []
+    const box = extents.find((x) => x.slug === active)?.box as [number, number, number, number] | undefined
+    return nearPicks.map((pick) => {
+      const data = nearData[pick.layer]
+      return (data && nearGrid(data.features as never, pick.miles, box ?? null)) || { dx: 1, dy: 1, cells: [] }
+    })
+  }, [server?.ready, nearPicks, nearData, extents, active])
+
+  /** How many criteria are set under each of the filter's tabs, for its badges. */
+  const filterCounts = useMemo(() => {
+    const filled = (r: { min: string; max: string }) => (r.min.trim() || r.max.trim() ? 1 : 0)
+    const counts: Record<FilterTab, number> = {
+      property: (assets.size ? 1 : 0) + filled(value) + filled(acres) + (buildingPick ? 1 : 0) + (coverageMax != null ? 1 : 0),
+      zoning: zoningKeep.size + zoningDrop.size + (zoningCodes.length ? 1 : 0) + (floodPick ? 1 : 0),
+      owner: ownerPicks.size,
+      power: 0,
+      places: 0,
+    }
+    for (const group of NEAR_GROUPS) counts[group.id] = nearPicks.filter((p) => group.layers.includes(p.layer)).length
+    return counts
+  }, [assets, value, acres, buildingPick, coverageMax, zoningKeep, zoningDrop, zoningCodes, floodPick, ownerPicks, nearPicks])
+
   const ownerFiltersReady = server?.ready
     ? Boolean(server.otagged)
     : Boolean(index?.keys?.includes('sy') || index?.keys?.includes('ms'))
@@ -2700,7 +2770,7 @@ export default function Gis({
     const aMin = lo(acres.min)
     const aMax = lo(acres.max)
     const anySet =
-      Boolean(needle) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
+      Boolean(needle) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null || nearPicks.length > 0 ||
       [vMin, vMax, aMin, aMax].some((n) => n != null && Number.isFinite(n))
     if (!anySet || !rows.length) return null
     // The owner filters read the sale year and mailing state the pipeline
@@ -2720,7 +2790,7 @@ export default function Gis({
      * outside them is out whichever way the criteria are joined. The same
      * split as the server's (app/lib/parcels.js).
      */
-    const tests: ((row: Record<string, string | number | null>) => boolean)[] = []
+    const tests: ((row: Record<string, string | number | null>, i: number) => boolean)[] = []
     if (assets.size) tests.push((row) => assets.has(String(row.at || '')))
     if (set(vMin) || set(vMax)) {
       tests.push((row) => {
@@ -2736,11 +2806,22 @@ export default function Gis({
     }
     if (soldBy != null) tests.push((row) => Number(row.sy) > 0 && Number(row.sy) <= soldBy)
     if (ownerPicks.has('outOfState')) tests.push((row) => Boolean(home && row.ms && row.ms !== home))
+    // Near a layer: the cell holding the parcel's centre, by lib/nearby's
+    // grid, as the store tests it. A layer still loading passes nothing yet.
+    const bb = index?.bb ?? null
+    for (const grid of nearGrids) {
+      const cells = new Set(grid.cells)
+      tests.push((_row, i) => {
+        if (!bb) return false
+        const x = (bb[i * 4] + bb[i * 4 + 2]) / 2
+        const y = (bb[i * 4 + 1] + bb[i * 4 + 3]) / 2
+        return cells.has(cellOf(x, y, grid.dx, grid.dy))
+      })
+    }
     const any = matchMode === 'any' && tests.length > 1
 
     // The circle, against each parcel's box from the index, measured as the
     // server measures it: the box's centre, longitude scaled to latitude.
-    const bb = index?.bb ?? null
     const k = areaCircle ? Math.cos((areaCircle.lat * Math.PI) / 180) : 1
     const r = areaCircle ? (areaCircle.miles * 1609.344) / 111320 : 0
 
@@ -2761,11 +2842,11 @@ export default function Gis({
         const hay = `${row.ad ?? ''} ${row.ow ?? ''} ${row.gid ?? ''} ${row.id ?? ''}`.toLowerCase()
         if (!hay.includes(needle)) return
       }
-      if (tests.length && (any ? !tests.some((t) => t(row)) : !tests.every((t) => t(row)))) return
+      if (tests.length && (any ? !tests.some((t) => t(row, i)) : !tests.every((t) => t(row, i)))) return
       out.push(row)
     })
     return out
-  }, [rows, index, query, assets, value, acres, ownerPick, ownerPicks, areaCircle, matchMode, server, found, active])
+  }, [rows, index, query, assets, value, acres, ownerPick, ownerPicks, areaCircle, matchMode, server, found, active, nearPicks, nearGrids])
 
   /*
    * What the map highlights.
@@ -4686,42 +4767,6 @@ export default function Gis({
                     Filter within a radius instead? <span className="font-medium text-brand">Open Radius</span>
                   </button>
                 )}
-                {assetOptions.length > 0 ? (
-                  <div>
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-medium text-body">Asset type</p>
-                      {/* The land-use colours, switched from where land use is
-                          chosen, so the filter and the colour are one idea. */}
-                      <label className="flex items-center gap-1 text-[10px] text-muted">
-                        <input type="checkbox" checked={showParcels} onChange={() => setShowParcels((on) => !on)} />
-                        Colour on map
-                      </label>
-                    </div>
-                    <CheckList
-                      options={assetOptions}
-                      selected={assets}
-                      onToggle={(entry) =>
-                        setAssets((current) => {
-                          const next = new Set(current)
-                          if (next.has(entry)) next.delete(entry)
-                          else next.add(entry)
-                          return next
-                        })
-                      }
-                    />
-                  </div>
-                ) : (
-                  <p className="text-[11px] text-muted">
-                    This county publishes no land use, so there is nothing to filter by here.
-                  </p>
-                )}
-                <RangeInput
-                  label={meta?.valueLabel || 'Value'}
-                  min={value.min}
-                  max={value.max}
-                  onChange={setValue}
-                />
-                <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
                 {areaBox || areaCircle ? (
                   <p className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5 text-[11px] text-body">
                     <span>
@@ -4741,64 +4786,135 @@ export default function Gis({
                     </button>
                   </p>
                 ) : null}
-                <ZoningFloodFilter
-                  tagged={Boolean(server?.tagged)}
-                  categories={zoningCategoryOptions}
-                  hasFlood={published.some((l) => l.id === 'flood-zones')}
-                  keep={zoningKeep}
-                  drop={zoningDrop}
-                  codes={zoningCodes}
-                  flood={floodPick}
-                  onCycle={(category) => {
-                    // Any, then only this, then anything but this, then any again.
-                    if (zoningKeep.has(category)) {
-                      setZoningKeep((current) => {
-                        const next = new Set(current)
-                        next.delete(category)
-                        return next
-                      })
-                      setZoningDrop((current) => new Set(current).add(category))
-                    } else if (zoningDrop.has(category)) {
-                      setZoningDrop((current) => {
-                        const next = new Set(current)
-                        next.delete(category)
-                        return next
-                      })
-                    } else {
-                      setZoningKeep((current) => new Set(current).add(category))
-                    }
-                  }}
-                  onClearCodes={() => setZoningCodes([])}
-                  onFlood={setFloodPick}
+                <FilterTabs
+                  tab={filterTab}
+                  onTab={setFilterTab}
+                  counts={filterCounts}
                 />
-                {server?.btagged ? (
-                  <BuildingFilter
-                    pick={buildingPick}
-                    coverage={coverageMax}
-                    onPick={(next) => {
-                      setBuildingPick(next)
-                      if (next === 'vacant') setCoverageMax(null)
-                    }}
-                    onCoverage={(next) => {
-                      setCoverageMax(next)
-                      if (next != null && buildingPick === 'vacant') setBuildingPick(null)
-                    }}
+                {filterTab === 'property' ? (
+                  <div className="space-y-3">
+                    {assetOptions.length > 0 ? (
+                      <div>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <p className="text-[11px] font-medium text-body">Asset type</p>
+                          {/* The land-use colours, switched from where land use is
+                              chosen, so the filter and the colour are one idea. */}
+                          <label className="flex items-center gap-1 text-[10px] text-muted">
+                            <input type="checkbox" checked={showParcels} onChange={() => setShowParcels((on) => !on)} />
+                            Colour on map
+                          </label>
+                        </div>
+                        <CheckList
+                          options={assetOptions}
+                          selected={assets}
+                          onToggle={(entry) =>
+                            setAssets((current) => {
+                              const next = new Set(current)
+                              if (next.has(entry)) next.delete(entry)
+                              else next.add(entry)
+                              return next
+                            })
+                          }
+                        />
+                      </div>
+                    ) : (
+                      <p className="text-[11px] text-muted">
+                        This county publishes no land use, so there is nothing to filter by here.
+                      </p>
+                    )}
+                    <RangeInput
+                      label={meta?.valueLabel || 'Value'}
+                      min={value.min}
+                      max={value.max}
+                      onChange={setValue}
+                    />
+                    <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
+                    {server?.btagged ? (
+                      <BuildingFilter
+                        pick={buildingPick}
+                        coverage={coverageMax}
+                        onPick={(next) => {
+                          setBuildingPick(next)
+                          if (next === 'vacant') setCoverageMax(null)
+                        }}
+                        onCoverage={(next) => {
+                          setCoverageMax(next)
+                          if (next != null && buildingPick === 'vacant') setBuildingPick(null)
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
+                {filterTab === 'zoning' ? (
+                  <div className="space-y-3">
+                    <ZoningFloodFilter
+                      tagged={Boolean(server?.tagged)}
+                      categories={zoningCategoryOptions}
+                      hasFlood={published.some((l) => l.id === 'flood-zones')}
+                      keep={zoningKeep}
+                      drop={zoningDrop}
+                      codes={zoningCodes}
+                      flood={floodPick}
+                      onCycle={(category) => {
+                        // Any, then only this, then anything but this, then any again.
+                        if (zoningKeep.has(category)) {
+                          setZoningKeep((current) => {
+                            const next = new Set(current)
+                            next.delete(category)
+                            return next
+                          })
+                          setZoningDrop((current) => new Set(current).add(category))
+                        } else if (zoningDrop.has(category)) {
+                          setZoningDrop((current) => {
+                            const next = new Set(current)
+                            next.delete(category)
+                            return next
+                          })
+                        } else {
+                          setZoningKeep((current) => new Set(current).add(category))
+                        }
+                      }}
+                      onClearCodes={() => setZoningCodes([])}
+                      onFlood={setFloodPick}
+                    />
+                  </div>
+                ) : null}
+                {filterTab === 'owner' ? (
+                  <OwnerFilterPicker
+                    available={ownerFiltersReady}
+                    picks={ownerPicks}
+                    onPreset={(next) => setOwnerPicks(new Set(next))}
+                    state={marketState(active)}
+                    onToggle={(entry) =>
+                      setOwnerPicks((current) => {
+                        const next = new Set(current)
+                        if (next.has(entry)) next.delete(entry)
+                        else next.add(entry)
+                        return next
+                      })
+                    }
                   />
                 ) : null}
-                <OwnerFilterPicker
-                  available={ownerFiltersReady}
-                  picks={ownerPicks}
-                  onPreset={(next) => setOwnerPicks(new Set(next))}
-                  state={marketState(active)}
-                  onToggle={(entry) =>
-                    setOwnerPicks((current) => {
-                      const next = new Set(current)
-                      if (next.has(entry)) next.delete(entry)
-                      else next.add(entry)
-                      return next
-                    })
-                  }
-                />
+                {NEAR_GROUPS.map((group) =>
+                  filterTab === group.id ? (
+                    <NearLayerPicker
+                      key={group.id}
+                      group={group.layers}
+                      published={published}
+                      picks={nearPicks}
+                      loading={server?.ready ? [] : nearPicks.filter((p) => nearData[p.layer] === null || !(p.layer in nearData)).map((p) => p.layer)}
+                      onChange={(next) => {
+                        setNearPicks(next)
+                        // Show what is being measured from, so the result can be checked by eye.
+                        for (const pick of next) {
+                          if (!nearPicks.some((p) => p.layer === pick.layer)) {
+                            setLayerOn((current) => ({ ...current, [pick.layer]: true }))
+                          }
+                        }
+                      }}
+                    />
+                  ) : null,
+                )}
                 <div className="flex items-center justify-between border-t border-line pt-2">
                   <span className="text-xs text-muted">
                     {/*
@@ -4826,6 +4942,7 @@ export default function Gis({
                       setBuildingPick(null)
                       setCoverageMax(null)
                       setOwnerPicks(new Set())
+                      setNearPicks([])
                       setAreaBox(null)
                       setAreaCircle(null)
                       setQuery('')
@@ -5944,6 +6061,108 @@ function ListingCheck({
  * particular is an inference (no roll here carries loans), and is labelled
  * as one rather than presented as a fact about the title.
  */
+/** The filter's categories, as a row of tabs, each with how many are set. */
+function FilterTabs({
+  tab,
+  onTab,
+  counts,
+}: {
+  tab: FilterTab
+  onTab: (tab: FilterTab) => void
+  counts: Record<FilterTab, number>
+}) {
+  return (
+    <div className="flex gap-0.5 rounded-md bg-sunken p-0.5" role="tablist" aria-label="Filter categories">
+      {FILTER_TABS.map((entry) => (
+        <button
+          key={entry.id}
+          type="button"
+          role="tab"
+          aria-selected={tab === entry.id}
+          onClick={() => onTab(entry.id)}
+          className={`flex flex-1 items-center justify-center gap-1 rounded px-1 py-1 text-[11px] ${
+            tab === entry.id ? 'bg-surface font-semibold text-ink shadow-sm' : 'text-muted hover:text-body'
+          }`}
+        >
+          {entry.label}
+          {counts[entry.id] ? (
+            <span className="rounded-full bg-brand px-1 text-[9px] font-semibold leading-tight text-white">{counts[entry.id]}</span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/*
+ * Near a published layer: one row per layer this county publishes from the
+ * tab's group, ticked to make it a criterion, with how near. Areas offer
+ * "inside" as well as a distance from their edge.
+ */
+function NearLayerPicker({
+  group,
+  published,
+  picks,
+  loading,
+  onChange,
+}: {
+  group: string[]
+  published: PublishedLayer[]
+  picks: NearPick[]
+  loading: string[]
+  onChange: (next: NearPick[]) => void
+}) {
+  const here = group.map((id) => published.find((layer) => layer.id === id)).filter((l): l is PublishedLayer => Boolean(l))
+  if (!here.length) {
+    return <p className="text-[11px] text-muted">This county publishes none of these layers yet.</p>
+  }
+  const full = picks.length >= NEAR_MAX_LAYERS
+  return (
+    <div className="space-y-2">
+      {here.map((layer) => {
+        const pick = picks.find((p) => p.layer === layer.id)
+        const area = layer.kind === 'polygon'
+        const choices: number[] = area ? [0, ...NEAR_MILES] : [...NEAR_MILES]
+        const set = (miles: number | null) =>
+          onChange(miles == null ? picks.filter((p) => p.layer !== layer.id) : [...picks.filter((p) => p.layer !== layer.id), { layer: layer.id, miles }])
+        return (
+          <div key={layer.id} className="flex items-center gap-2">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-xs text-body">
+              <input
+                type="checkbox"
+                className="accent-brand"
+                checked={Boolean(pick)}
+                disabled={!pick && full}
+                onChange={() => set(pick ? null : area ? 0 : 1)}
+              />
+              <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: layer.color }} aria-hidden />
+              <span className="truncate">{layer.label}</span>
+              {loading.includes(layer.id) ? <span className="text-[10px] text-faint">loading…</span> : null}
+            </label>
+            <select
+              className="rounded-md border border-line bg-surface px-1 py-0.5 text-[11px] text-ink disabled:opacity-50"
+              value={pick ? String(pick.miles) : String(area ? 0 : 1)}
+              disabled={!pick}
+              aria-label={`How near ${layer.label}`}
+              onChange={(event) => set(Number(event.target.value))}
+            >
+              {choices.map((miles) => (
+                <option key={miles} value={miles}>
+                  {miles === 0 ? 'Inside' : `Within ${miles} mi`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )
+      })}
+      <p className="text-[10px] leading-snug text-faint">
+        Measured from each parcel's centre to the nearest feature, to within about a tenth of the distance.
+        {full ? ` Up to ${NEAR_MAX_LAYERS} of these at once.` : ''}
+      </p>
+    </div>
+  )
+}
+
 function OwnerFilterPicker({
   available,
   picks,

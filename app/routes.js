@@ -202,6 +202,7 @@ import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './l
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
+import { nearGrid, readNear } from '../src/lib/nearby.ts'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
@@ -2693,6 +2694,38 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
   }
 
+  /*
+   * The near filters' grids: a published layer, read from the bucket once
+   * and laid on cells by lib/nearby, kept in the isolate for a few hours.
+   * Bounded by the county's parcel archive so a line running on past the
+   * county line fills no cells nobody can be in. A layer the market does
+   * not publish is near nothing, so it matches nothing rather than all.
+   */
+  const NEAR_FILE_LIMIT = 30 * 1024 * 1024
+  const nearHeld = new Map()
+  const nearGridsFor = async (market, picks) => {
+    if (!picks.length) return []
+    const bounds = await archiveFor(`${market}/parcels.pmtiles`)
+      .getHeader()
+      .then((h) => [h.minLon, h.minLat, h.maxLon, h.maxLat])
+      .catch(() => null)
+    return Promise.all(
+      picks.map(async ({ layer, miles }) => {
+        const name = `${market}/${layer}/${miles}`
+        const held = nearHeld.get(name)
+        if (held && held.until > Date.now()) return held.grid
+        const key = `${market}/layer-${layer}.geojson`
+        const bucket = env.PROSPECTOR_DATA
+        const head = bucket && typeof bucket.head === 'function' ? await bucket.head(key).catch(() => null) : null
+        const doc = head && head.size > NEAR_FILE_LIMIT ? null : await catalogJson(key).catch(() => null)
+        const grid = (doc && nearGrid(doc.features || [], miles, bounds)) || { dx: 1, dy: 1, cells: [] }
+        nearHeld.set(name, { grid, until: Date.now() + 6 * 60 * 60 * 1000 })
+        if (nearHeld.size > 64) nearHeld.delete(nearHeld.keys().next().value)
+        return grid
+      }),
+    )
+  }
+
   const marketSlug = (c) => {
     const market = (c.req.query('market') ?? '').trim()
     return /^[a-z0-9-]{2,40}$/.test(market) ? market : null
@@ -2830,7 +2863,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      */
     const answer = await edgeCached(c, `parcels/${market}`, 10 * 60, async () => {
       try {
-        const found = await searchParcels(parcelsFor(market), market, parcelFilters(c), {
+        const filters = parcelFilters(c)
+        filters.nearGrids = await nearGridsFor(market, readNear(c.req.query('near')))
+        const found = await searchParcels(parcelsFor(market), market, filters, {
           limit: Number(c.req.query('limit')) || undefined,
           offset: Number(c.req.query('offset')) || 0,
           summary,
