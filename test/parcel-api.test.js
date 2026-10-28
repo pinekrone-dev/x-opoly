@@ -314,9 +314,9 @@ describe('searching a county', () => {
     }
     assert.equal((await broker('/api/gis/parcels?market=austin-tx&amin=5')).status, 200)
 
-    // Three parcels: a filtered search reads them twice, six rows a time,
-    // and this account has just run one.
-    env.SCAN_ROWS_PER_ACCOUNT = '10'
+    // Three parcels: a filtered search with no index to use reads all three,
+    // and this account has just run one, so an allowance of two is spent.
+    env.SCAN_ROWS_PER_ACCOUNT = '2'
     const call = broker
     try {
       const refused = await call('/api/gis/parcels?market=austin-tx&amin=5')
@@ -329,7 +329,7 @@ describe('searching a county', () => {
     } finally {
       delete env.SCAN_ROWS_PER_ACCOUNT
     }
-    env.SCAN_ROWS_PER_DAY = '10'
+    env.SCAN_ROWS_PER_DAY = '2'
     try {
       const closed = await call('/api/gis/parcels?market=austin-tx&vmin=1')
       assert.equal(closed.status, 503, "the site's ceiling closes the store for the day")

@@ -190,7 +190,7 @@ import {
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
 import { liveMarkets, marketPage, sitemapXml } from './lib/marketPages.js'
-import { scrapeLimit, spend, spendCount, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
+import { overCount, scrapeLimit, spend, spendCount, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -2866,21 +2866,55 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * At the site's ceiling the store closes for the day the way D1's own
    * free-tier ceiling closes it, and the app falls back to the county file.
    */
+  // What a search would read if nothing were indexed: the county, once.
+  // Used only where the store cannot say what it read (Node, in tests).
   const scanCost = (summary, filters) => {
     if (!summary || !filtersActive(filters)) return 0
     if (summary.fts && !filtersActive({ ...filters, query: '' })) return 0
-    return 2 * summary.count
+    return summary.count
+  }
+  const scanSteps = (c, user) => [
+    { key: `acct:${user?.id ?? 'anon'}`, cap: scrapeLimit(env, 'SCAN_ROWS_PER_ACCOUNT'), scope: 'account' },
+    { key: `ip:${clientAddress(c)}`, cap: scrapeLimit(env, 'SCAN_ROWS_PER_ADDRESS'), scope: 'address' },
+    { key: 'site', cap: scrapeLimit(env, 'SCAN_ROWS_PER_DAY'), scope: 'site' },
+  ]
+  // Whether an allowance is already spent: reads, no writes.
+  const scanBlocked = async (c) => {
+    const user = c.get('user')
+    if (user && (await teamIsExempt(user.teamId, user.email).catch(() => false))) return null
+    for (const step of scanSteps(c, user)) {
+      const over = await overCount(db, { key: step.key, kind: 'scan-rows', cap: step.cap }).catch(() => false)
+      if (over) {
+        const now = new Date()
+        const midnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)
+        return { scope: step.scope, retryAfterSeconds: Math.max(60, Math.ceil((midnight - now.getTime()) / 1000)) }
+      }
+    }
+    return null
+  }
+  /*
+   * A search, charged for what it read. Refused only when an allowance is
+   * already spent; then run, and charged the rows the database reports
+   * reading. An indexed filter (an asset type, a value range) reads its
+   * matches, a few hundred rows, and is charged that; only a filter with no
+   * index behind it pays for the county.
+   */
+  const scannedSearch = async (c, store, market, filters, options) => {
+    const estimate = scanCost(options.summary, filters)
+    if (estimate > 0) {
+      const blocked = await scanBlocked(c)
+      if (blocked) return { refused: blocked }
+    }
+    const tally = { read: 0, unknown: false }
+    const found = await searchParcels(store, market, filters, { ...options, tally })
+    if (estimate > 0) await spendScan(c, tally.unknown ? estimate : tally.read)
+    return { found }
   }
   const spendScan = async (c, rows) => {
     if (!(rows > 0)) return null
     const user = c.get('user')
     if (user && (await teamIsExempt(user.teamId, user.email).catch(() => false))) return null
-    const steps = [
-      { key: `acct:${user?.id ?? 'anon'}`, cap: scrapeLimit(env, 'SCAN_ROWS_PER_ACCOUNT'), scope: 'account' },
-      { key: `ip:${clientAddress(c)}`, cap: scrapeLimit(env, 'SCAN_ROWS_PER_ADDRESS'), scope: 'address' },
-      { key: 'site', cap: scrapeLimit(env, 'SCAN_ROWS_PER_DAY'), scope: 'site' },
-    ]
-    for (const step of steps) {
+    for (const step of scanSteps(c, user)) {
       const verdict = await spendCount(db, { key: step.key, kind: 'scan-rows', amount: rows, cap: step.cap }).catch(() => ({ allowed: true }))
       if (!verdict.allowed) return { ...verdict, scope: step.scope }
     }
@@ -2929,13 +2963,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       try {
         const filters = parcelFilters(c)
         filters.nearGrids = await nearGridsFor(market, readNear(c.req.query('near')))
-        const refused = await spendScan(c, scanCost(summary, filters))
-        if (refused) return scanRefused(c, refused)
-        const found = await searchParcels(parcelsFor(market), market, filters, {
+        const { found, refused } = await scannedSearch(c, parcelsFor(market), market, filters, {
           limit: Number(c.req.query('limit')) || undefined,
           offset: Number(c.req.query('offset')) || 0,
           summary,
         })
+        if (refused) return scanRefused(c, refused)
         return c.json({ ready: true, market, ...found })
       } catch (cause) {
         /*
@@ -3811,9 +3844,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         let cursor = Math.min(offset, CHECK_LIMIT)
         let count = null
         while (rows.length < AI_PAGE && cursor < Math.min(count ?? CHECK_LIMIT, CHECK_LIMIT)) {
-          const refused = await spendScan(c, scanCost(summary, filters))
+          const { found: page, refused } = await scannedSearch(c, store, market, filters, { limit: 200, offset: cursor, summary })
           if (refused) return scanRefused(c, refused)
-          const page = await searchParcels(store, market, filters, { limit: 200, offset: cursor, summary })
           count = page.count
           if (!page.rows.length) break
           const checked = await checkAll(
@@ -3832,14 +3864,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           truncated = `${count.toLocaleString()} parcels matched the filters; the ${CHECK_LIMIT.toLocaleString()} most valuable were checked. Narrow the question to check them all.`
         }
       } else {
-        const refused = await spendScan(c, scanCost(summary, filters))
+        const { found: first, refused } = await scannedSearch(c, store, market, filters, { limit: 1000, summary })
         if (refused) return scanRefused(c, refused)
-        const first = await searchParcels(store, market, filters, { limit: 1000, summary })
         const found = [...first.rows]
         while (found.length < Math.min(first.count, CHECK_LIMIT)) {
-          const refused = await spendScan(c, scanCost(summary, filters))
-          if (refused) return scanRefused(c, refused)
-          const page = await searchParcels(store, market, filters, { limit: 1000, offset: found.length, summary })
+          const { found: page, refused: stopped } = await scannedSearch(c, store, market, filters, { limit: 1000, offset: found.length, summary })
+          if (stopped) return scanRefused(c, stopped)
           if (!page.rows.length) break
           found.push(...page.rows)
         }
