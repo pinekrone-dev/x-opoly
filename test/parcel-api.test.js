@@ -336,6 +336,22 @@ describe('asking in plain English', () => {
     assert.equal(res.status, 401)
   })
 
+  test('a question about a drawn circle comes back held to that circle', async () => {
+    const circle = { lat: 30.27, lng: -97.74, miles: 5 }
+    const res = await ask({ prompt: 'land over 20 acres', circle })
+    assert.equal(res.status, 200)
+    assert.equal(res.body.mode, 'filters')
+    assert.deepEqual(res.body.area.circle, circle)
+    const [w, s, e, n] = res.body.area.box
+    assert.ok(w < circle.lng && e > circle.lng && s < circle.lat && n > circle.lat, 'the box is around the circle')
+  })
+
+  test('a circle wider than twenty miles is refused, not quietly shrunk', async () => {
+    const res = await ask({ prompt: 'land', circle: { lat: 30.27, lng: -97.74, miles: 40 } })
+    assert.equal(res.status, 400)
+    assert.match(res.body.error, /20 miles/)
+  })
+
   test('a question the store answers alone comes back as filters for the map', async () => {
     const res = await ask({ prompt: 'land over 20 acres' })
     assert.equal(res.status, 200)

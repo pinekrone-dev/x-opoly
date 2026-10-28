@@ -25,9 +25,8 @@ import { csvCell } from '../lib/csv'
 import { countyCounts, describeMismatch, listingCounts, mismatches, readCount } from '../lib/listingCheck'
 import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
 
-/** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
-const AREA_MAX_SPAN = 0.35
 import type {
+  AskCircle,
   AskAnswer,
   AskRow,
   Comp,
@@ -1314,10 +1313,6 @@ export default function Gis({
   const [viewKey, setViewKey] = useState('')
   /** The snapped view and zoom, for the markets that follow the camera. */
   const [viewBox, setViewBox] = useState<{ box: [number, number, number, number]; zoom: number } | null>(null)
-  /** Whether the map view is small enough to ask a question that costs something about. */
-  const viewFitsAsk = Boolean(
-    viewBox && viewBox.box[2] - viewBox.box[0] <= AREA_MAX_SPAN && viewBox.box[3] - viewBox.box[1] <= AREA_MAX_SPAN,
-  )
   /** Set to a market chosen by name, so its opening view is flown to once it loads. */
   const frameNext = useRef<string | null>(null)
   /** A parcel clicked in a neighbouring market, opened once that market has loaded. */
@@ -1391,17 +1386,24 @@ export default function Gis({
   /** An area of the map the results are held to, from a question asked about it. */
   const [areaBox, setAreaBox] = useState<[number, number, number, number] | null>(null)
   /** Whether a question is about the map view or the whole county. */
-  const [askArea, setAskArea] = useState<'view' | 'county'>('view')
+  /*
+   * The Ask panel asks about a circle drawn on the map: a click places the
+   * centre, the slider sets the radius, up to twenty miles. `areaCircle` is
+   * the circle an answer turned into filters, which the search then holds
+   * to until it is cleared.
+   */
+  const [askCircle, setAskCircle] = useState<AskCircle | null>(null)
+  const [askMiles, setAskMiles] = useState(1)
+  const [drawing, setDrawing] = useState(false)
+  const [areaCircle, setAreaCircle] = useState<AskCircle | null>(null)
   const [tableOpen, setTableOpen] = useState(false)
 
-  // The brain panel: a question and optionally a file, answered on the map or as a file.
+  // The brain panel: a circle drawn on the map and a question about it.
   const [askText, setAskText] = useState('')
-  const [askFile, setAskFile] = useState<{ name: string; text: string } | null>(null)
   const [askBusy, setAskBusy] = useState(false)
   const [askAnswer, setAskAnswer] = useState<AskAnswer | null>(null)
   const [askError, setAskError] = useState<string | null>(null)
   const [askShown, setAskShown] = useState(false)
-  const askPicker = useRef<HTMLInputElement>(null)
   // An answer belongs to the county it was asked of.
   useEffect(() => {
     setAskAnswer(null)
@@ -1522,6 +1524,9 @@ export default function Gis({
     setCoverageMax(null)
     setOwnerPicks(new Set())
     setAreaBox(null)
+    setAreaCircle(null)
+    setAskCircle(null)
+    setDrawing(false)
     setQuery('')
     setOwners(null)
     setOwnerPick(null)
@@ -2528,8 +2533,9 @@ export default function Gis({
       coverageMax,
       owners: [...ownerPicks].sort(),
       box: areaBox,
+      circle: areaCircle,
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox, areaCircle])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -3505,18 +3511,12 @@ export default function Gis({
    * them, or a set of parcels, which goes on the map or into a file.
    */
   async function runAsk() {
-    if (!active || askBusy || (!askText.trim() && !askFile)) return
+    if (!active || askBusy || !askText.trim() || !askCircle) return
     setAskBusy(true)
     setAskError(null)
     setAskShown(false)
     try {
-      const answer = await api.gisAsk({
-        market: active,
-        prompt: askText.trim(),
-        upload: askFile,
-        area: askFile ? undefined : askArea,
-        box: askFile || askArea === 'county' ? null : viewRef.current,
-      })
+      const answer = await api.gisAsk({ market: active, prompt: askText.trim(), circle: askCircle })
       setAskAnswer(answer)
       if (answer.mode === 'filters') {
         const plan = answer.plan
@@ -3531,7 +3531,10 @@ export default function Gis({
         setFloodPick(plan.flood ?? null)
         setBuildingPick(plan.buildings ?? null)
         setCoverageMax(plan.coverageMax ?? null)
-        setAreaBox(answer.area?.box ?? null)
+        // The circle holds the filters to itself; the box is only for an
+        // answer from before circles.
+        setAreaCircle(answer.area?.circle ?? null)
+        setAreaBox(answer.area?.circle ? null : answer.area?.box ?? null)
       } else if (answer.plan.action === 'export') {
         exportAsk(answer, active, !answer.upload)
       } else {
@@ -3560,13 +3563,11 @@ export default function Gis({
       const answer = await api.gisAsk({
         market: active,
         prompt: askText.trim(),
-        upload: askFile,
         plan: current.plan,
         source: current.source,
         offset: current.page.next,
-        // The same area as the first page, wherever the map has moved since.
-        area: current.area ? 'view' : askFile ? undefined : 'county',
-        box: current.area?.box ?? null,
+        // The same circle as the first page, wherever it has been redrawn since.
+        circle: current.area?.circle ?? askCircle,
       })
       setAskAnswer({
         ...answer,
@@ -3730,6 +3731,9 @@ export default function Gis({
                   valueBreaks,
                   selectedParcelId: selected,
                   onSelectParcel: (id) => {
+                    // A click while drawing the Ask circle places its centre;
+                    // it is not also a pick of the parcel underneath.
+                    if (drawing) return
                     setFeaturePick(null)
                     setSelected(id)
                   },
@@ -3763,6 +3767,30 @@ export default function Gis({
           places={places}
           placesUntilZoom={9}
           onPlace={openMarket}
+          // Drawing the Ask circle: the next click on the map is its centre,
+          // and while it waits parcels are not picked.
+          onMapClick={
+            drawing
+              ? (lat: number, lng: number) => {
+                  setAskCircle({ lat: Math.round(lat * 1e5) / 1e5, lng: Math.round(lng * 1e5) / 1e5, miles: askMiles })
+                  setDrawing(false)
+                }
+              : undefined
+          }
+          zones={
+            askCircle || areaCircle
+              ? [
+                  {
+                    id: 'ask-circle',
+                    label: `${(askCircle ?? areaCircle)!.miles} mi`,
+                    lat: (askCircle ?? areaCircle)!.lat,
+                    lng: (askCircle ?? areaCircle)!.lng,
+                    radiusMiles: (askCircle ?? areaCircle)!.miles,
+                    color: '#d6336c',
+                  },
+                ]
+              : null
+          }
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.
@@ -3872,20 +3900,69 @@ export default function Gis({
       >
         {rail === 'ask' && (
           <div className="space-y-3">
+            {/* Two steps: draw the area, then ask about it. The circle is the
+                whole question's scope, up to twenty miles across the radius
+                — a submarket, never a county — so every answer is local and
+                the parcel-by-parcel checks stay bounded. */}
+            <div>
+              <p className="mb-1 text-[11px] font-medium text-body">1. Draw your area</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className={`flex-1 rounded-md border px-2 py-1.5 text-xs font-medium ${
+                    drawing ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink hover:border-brand/50'
+                  }`}
+                  onClick={() => setDrawing((on) => !on)}
+                  aria-pressed={drawing}
+                >
+                  {drawing ? 'Click the map to place the centre…' : askCircle ? 'Move the centre' : 'Place a circle on the map'}
+                </button>
+                {askCircle ? (
+                  <button
+                    type="button"
+                    className="text-[11px] text-muted underline hover:text-ink"
+                    onClick={() => {
+                      setAskCircle(null)
+                      setDrawing(false)
+                    }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+              <label className="mt-2 flex items-center gap-2 text-[11px] text-body">
+                Radius
+                <input
+                  type="range"
+                  min={0.25}
+                  max={20}
+                  step={0.25}
+                  value={askMiles}
+                  onChange={(event) => {
+                    const miles = Number(event.target.value)
+                    setAskMiles(miles)
+                    setAskCircle((current) => (current ? { ...current, miles } : current))
+                  }}
+                  className="flex-1"
+                  aria-label="Circle radius in miles"
+                />
+                <span className="w-14 text-right font-medium tabular-nums text-ink">
+                  {askMiles} mi
+                </span>
+              </label>
+            </div>
+
             <div>
               <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-ask">
-                Ask in plain English
+                2. Ask in plain English
               </label>
               <textarea
                 id="gis-ask"
                 rows={3}
-                className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
-                placeholder={
-                  askFile
-                    ? 'What to check — "which of these are zoned industrial and outside the flood zone?"'
-                    : 'e.g. "vacant land over 5 acres outside the flood zone, export it"'
-                }
+                className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink disabled:opacity-60"
+                placeholder='e.g. "vacant land over 5 acres outside the flood zone" or "industrial zoned, no building, export it"'
                 value={askText}
+                disabled={!askCircle}
                 onChange={(event) => setAskText(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
@@ -3894,82 +3971,17 @@ export default function Gis({
                   }
                 }}
               />
-              <input
-                ref={askPicker}
-                type="file"
-                accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  event.target.value = ''
-                  if (!file) return
-                  if (file.size > 4 * 1024 * 1024) {
-                    setAskError('That file is over 4 MB. Split it and add each part.')
-                    return
-                  }
-                  void file.text().then((text) => setAskFile({ name: file.name, text }))
-                }}
-              />
-              {!askFile ? (
-                <div className="mt-1.5 space-y-1">
-                  <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="radiogroup" aria-label="Where to ask about">
-                    {(
-                      [
-                        ['view', 'This map view'],
-                        ['county', 'Whole county'],
-                      ] as ['view' | 'county', string][]
-                    ).map(([pick, label]) => (
-                      <button
-                        key={pick}
-                        type="button"
-                        role="radio"
-                        aria-checked={askArea === pick}
-                        onClick={() => setAskArea(pick)}
-                        className={`px-2.5 py-1 ${askArea === pick ? 'bg-ink text-white' : 'text-body hover:bg-sunken'}`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <p className={`text-[10px] leading-snug ${askArea === 'view' && !viewFitsAsk ? 'text-amber-600' : 'text-faint'}`}>
-                    {askArea === 'county'
-                      ? 'The whole county, for questions the free reader understands. No AI, no cost.'
-                      : viewFitsAsk
-                        ? 'Only what is in the map view now. The AI may read the question.'
-                        : `Zoom in to a smaller area, about ${Math.round(AREA_MAX_SPAN * 100)} km across, to ask about this view.`}
-                  </p>
-                </div>
-              ) : null}
-              <div className="mt-1.5 flex items-center gap-2">
-                <button
-                  type="button"
-                  className="flex-1 rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
-                  disabled={askBusy || (!askText.trim() && !askFile) || !active || (!askFile && askArea === 'view' && !viewFitsAsk)}
-                  onClick={() => void runAsk()}
-                >
-                  {askBusy ? (askFile ? 'Checking your list…' : 'Working it out…') : 'Ask'}
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border border-dashed border-line px-2 py-1.5 text-[11px] text-body hover:border-brand/50"
-                  onClick={() => askPicker.current?.click()}
-                  title="A CSV of addresses or parcel numbers"
-                >
-                  {askFile ? 'Change file' : 'Add a list'}
-                </button>
-              </div>
-              {askFile ? (
-                <p className="mt-1 flex items-center justify-between text-[11px] text-muted">
-                  <span className="truncate">{askFile.name}</span>
-                  <button type="button" className="ml-2 underline hover:text-body" onClick={() => setAskFile(null)}>
-                    Remove
-                  </button>
-                </p>
-              ) : (
-                <p className="mt-1 text-[11px] leading-snug text-faint">
-                  Add a CSV of addresses or parcel numbers to check a list instead of the whole county. Excel files: save as CSV first.
-                </p>
-              )}
+              <button
+                type="button"
+                className="mt-1.5 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
+                disabled={askBusy || !askText.trim() || !active || !askCircle}
+                onClick={() => void runAsk()}
+              >
+                {askBusy ? 'Working it out…' : askCircle ? `Ask about this ${askCircle.miles}-mile circle` : 'Draw a circle first'}
+              </button>
+              <p className="mt-1 text-[11px] leading-snug text-faint">
+                Only parcels inside the circle are searched. Up to a 20-mile radius.
+              </p>
             </div>
 
             {askError ? <p className="text-[11px] leading-snug text-amber-600">{askError}</p> : null}
@@ -4669,7 +4681,7 @@ export default function Gis({
                   className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50"
                   onClick={() => setRail('ask')}
                 >
-                  Rather ask in plain English, or check a list? <span className="font-medium text-brand">Open Ask</span>
+                  Rather draw an area and ask in plain English? <span className="font-medium text-brand">Open Ask</span>
                 </button>
                 {assetOptions.length > 0 ? (
                   <div>
@@ -4707,10 +4719,21 @@ export default function Gis({
                   onChange={setValue}
                 />
                 <RangeInput label="Lot size" suffix="ac" min={acres.min} max={acres.max} onChange={setAcres} />
-                {areaBox ? (
+                {areaBox || areaCircle ? (
                   <p className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5 text-[11px] text-body">
-                    <span>Only the map area you asked about.</span>
-                    <button type="button" className="text-accent underline" onClick={() => setAreaBox(null)}>
+                    <span>
+                      {areaCircle
+                        ? `Only inside the ${areaCircle.miles}-mile circle you drew.`
+                        : 'Only the map area you asked about.'}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-accent underline"
+                      onClick={() => {
+                        setAreaBox(null)
+                        setAreaCircle(null)
+                      }}
+                    >
                       Whole county
                     </button>
                   </p>
@@ -4801,6 +4824,7 @@ export default function Gis({
                       setCoverageMax(null)
                       setOwnerPicks(new Set())
                       setAreaBox(null)
+                      setAreaCircle(null)
                       setQuery('')
                     }}
                   >

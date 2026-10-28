@@ -1,4 +1,4 @@
-import type { ParcelRecords, BookStyle,
+import type { AskCircle, ParcelRecords, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -225,6 +225,8 @@ export const api = {
     /** The whole county (free questions only) or the map view given in `box`. */
     area?: 'county' | 'view'
     box?: [number, number, number, number] | null
+    /** A circle drawn on the map, up to 20 miles' radius: how the panel asks. */
+    circle?: AskCircle | null
     /** The next page of an earlier answer: its plan and where to start. */
     plan?: AskAnswer['plan']
     source?: AskAnswer['source']
@@ -351,6 +353,7 @@ export const api = {
       if (filters.buildings) params.set('bld', filters.buildings)
       if (filters.coverageMax != null) params.set('cov', String(filters.coverageMax))
       if (filters.owners?.length) params.set('own', filters.owners.join(','))
+      if (filters.circle) params.set('circle', `${filters.circle.lat},${filters.circle.lng},${filters.circle.miles}`)
       if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))

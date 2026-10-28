@@ -145,3 +145,31 @@ describe('the tagging pass, and the filters on its columns', () => {
     assert.deepEqual(await ids(['held10', 'outOfState']), [4])
   })
 })
+
+describe('a circle drawn for the Ask panel', () => {
+  let db
+  // Three parcels along a line east of a centre at (33.5, -112.0): about
+  // 0.5, 5 and 25 miles out.
+  const at = (id, dLng) => ({ id, ad: `${id} Main St`, at: 'Land', mv: 1000 + id, ac: 1, bb: [-112 + dLng - 0.0005, 33.4995, -112 + dLng + 0.0005, 33.5005] })
+  before(async () => {
+    db = nodeAdapter(new DatabaseSync(':memory:'))
+    await db.migrate()
+    await putParcels(db, 'phoenix-az', [at(1, 0.0087), at(2, 0.087), at(3, 0.435)])
+    await sealMarket(db, 'phoenix-az', { keys: ['id', 'ad', 'mv', 'ac'] })
+  })
+
+  test('only parcels whose centre is inside the circle', async () => {
+    const ids = async (miles) =>
+      (await searchParcels(db, 'phoenix-az', { circle: { lat: 33.5, lng: -112, miles } })).ids.map(Number).sort()
+    assert.deepEqual(await ids(1), [1])
+    assert.deepEqual(await ids(6), [1, 2])
+    assert.deepEqual(await ids(20), [1, 2], 'the 25-mile parcel stays out even at the widest circle')
+  })
+
+  test('a circle past twenty miles, or not a circle, is no filter at all', async () => {
+    const { readCircle } = await import('../app/lib/parcels.js')
+    assert.equal(readCircle({ lat: 33.5, lng: -112, miles: 25 }), null)
+    assert.equal(readCircle({ lat: 'x', lng: -112, miles: 5 }), null)
+    assert.deepEqual(readCircle({ lat: 33.5, lng: -112, miles: 5 }), { lat: 33.5, lng: -112, miles: 5 })
+  })
+})

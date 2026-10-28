@@ -176,6 +176,9 @@ import {
   sealMarket,
   tagMarket,
   tagOwners,
+  readCircle,
+  circleBox,
+  CIRCLE_MAX_MILES,
   OWNER_TAG_BUDGET,
   OWNER_TAG_MAX,
   listBoxes,
@@ -2680,6 +2683,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return c.req.query('cov') && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
       })(),
       box: readArea((c.req.query('box') ?? '').split(',').filter(Boolean)),
+      // A circle drawn in the Ask panel: lat,lng,miles.
+      circle: (() => {
+        const [lat, lng, miles] = (c.req.query('circle') ?? '').split(',').map(Number)
+        return readCircle({ lat, lng, miles })
+      })(),
     }
   }
 
@@ -3419,9 +3427,19 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * and flood maps, is asked about a smaller area instead. An upload is
      * its own list, so it needs no area.
      */
-    const wholeCounty = !records.length && body?.area !== 'view'
-    const area = records.length ? null : readArea(body?.box)
-    if (!records.length && !wholeCounty) {
+    /*
+     * Or a circle drawn on the map, with a radius of up to twenty miles:
+     * the way the panel asks now. A circle is never the whole county, and
+     * its size is its own limit, so the view-size rule below is for the
+     * older "this map view" requests only.
+     */
+    const circle = records.length ? null : readCircle(body?.circle)
+    if (!records.length && body?.circle && !circle) {
+      return c.json({ error: `Draw a circle of at most ${CIRCLE_MAX_MILES} miles' radius, then ask again.` }, 400)
+    }
+    const wholeCounty = !records.length && !circle && body?.area !== 'view'
+    const area = records.length ? null : circle ? circleBox(circle).map((v) => Math.round(v * 1e5) / 1e5) : readArea(body?.box)
+    if (!records.length && !wholeCounty && !circle) {
       if (!area) return c.json({ error: 'Move the map to the area you want to ask about, then ask again.' }, 400)
       if (!areaSmallEnough(area)) {
         return c.json(
@@ -3507,7 +3525,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       note,
       hasFlood: Boolean(flood),
       hasZoning: Boolean(zoning),
-      area: area ? { box: area } : null,
+      area: area ? { box: area, circle } : null,
       scored: scoring,
     }
 
@@ -3678,6 +3696,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         buildings: plan.buildings,
         coverageMax: plan.coverageMax,
         box: area,
+        circle,
       }
       if (paged) {
         /*
