@@ -2268,7 +2268,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         : ranged
         ? limited(c, 'catalog-range', 20000, 60 * 60 * 1000, viewer.id)
         : whole
-          ? limited(c, 'catalog-county', 6, 60 * 60 * 1000, viewer.id)
+          ? limited(c, 'catalog-county', scrapeLimit(env, 'COUNTY_FILES_PER_HOUR'), 60 * 60 * 1000, viewer.id)
           : limited(c, 'catalog-file', 600, 60 * 60 * 1000, viewer.id)
       if (throttled) return throttled
       /*
