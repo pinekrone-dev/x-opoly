@@ -41,25 +41,41 @@ export function readScope(value, { withCrm = false } = {}) {
 }
 
 /*
- * A redirect URI Claude may be sent back to: https anywhere, or http on the
- * loopback address for a desktop client. Nothing else, so a registration
- * cannot point the approval at a page that would leak the code.
+ * Where an approval may be sent: Claude's own callback, on the hosts Claude
+ * runs on, or the person's own machine (a desktop or command-line client
+ * listening on the loopback address). Registration is open, as connectors
+ * require, so this list is what stops a stranger registering "Claude" with
+ * a callback of their own and phishing an approval out of someone: the code
+ * can only ever travel to Claude or to the computer the person is sitting
+ * at. CONNECTOR_REDIRECT_HOSTS adds hosts for another trusted client.
  */
-function goodRedirect(uri) {
+const CALLBACK_HOSTS = ['claude.ai', 'claude.com']
+
+export function redirectHosts(env = {}) {
+  const extra = String(env.CONNECTOR_REDIRECT_HOSTS || '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+  return [...CALLBACK_HOSTS, ...extra]
+}
+
+export function goodRedirect(uri, env = {}) {
   try {
     const url = new URL(uri)
-    if (url.hash) return false
-    if (url.protocol === 'https:') return true
-    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    if (url.hash || url.username || url.password) return false
+    if (url.protocol === 'http:') return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+    if (url.protocol !== 'https:') return false
+    const host = url.hostname.toLowerCase()
+    return redirectHosts(env).some((allowed) => host === allowed || host.endsWith(`.${allowed}`))
   } catch {
     return false
   }
 }
 
-export async function registerClient(db, body = {}) {
+export async function registerClient(db, body = {}, env = {}) {
   const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
-  if (!uris.length || uris.length > 10 || !uris.every(goodRedirect)) {
-    return { error: 'invalid_redirect_uri', description: 'redirect_uris must be https URLs (or http on localhost).' }
+  if (!uris.length || uris.length > 10 || !uris.every((uri) => goodRedirect(uri, env))) {
+    return { error: 'invalid_redirect_uri', description: "redirect_uris must be Claude's callback, or http on localhost." }
   }
   const name = String(body.client_name || 'An application').slice(0, 100)
   const id = `lqc_${randomToken(16)}`
@@ -134,9 +150,9 @@ async function issueTokens(db, { clientId, userId, scope }) {
 export async function exchangeCode(db, { code, clientId, redirectUri, verifier }) {
   if (!code || !clientId || !verifier) return { error: 'invalid_request' }
   const hash = await hashToken(String(code))
-  const row = await db.get('SELECT * FROM oauth_codes WHERE code_hash = ?', [hash])
-  // Spent the moment it is presented, right or wrong: a code is never tried twice.
-  if (row) await db.run('DELETE FROM oauth_codes WHERE code_hash = ?', [hash])
+  // Spent the moment it is presented, right or wrong, in one statement: two
+  // presentations at once cannot both find it.
+  const row = await db.get('DELETE FROM oauth_codes WHERE code_hash = ? RETURNING *', [hash])
   if (!row || past(row.expires_at)) return { error: 'invalid_grant' }
   if (row.client_id !== clientId || row.redirect_uri !== redirectUri) return { error: 'invalid_grant' }
   if ((await s256(String(verifier))) !== row.challenge) return { error: 'invalid_grant' }
@@ -147,9 +163,8 @@ export async function exchangeCode(db, { code, clientId, redirectUri, verifier }
 export async function refreshTokens(db, { refreshToken, clientId }) {
   if (!refreshToken || !clientId) return { error: 'invalid_request' }
   const hash = await hashToken(String(refreshToken))
-  const row = await db.get("SELECT * FROM oauth_tokens WHERE token_hash = ? AND kind = 'refresh'", [hash])
+  const row = await db.get("DELETE FROM oauth_tokens WHERE token_hash = ? AND kind = 'refresh' RETURNING *", [hash])
   if (!row || past(row.expires_at) || row.client_id !== clientId) return { error: 'invalid_grant' }
-  await db.run('DELETE FROM oauth_tokens WHERE token_hash = ?', [hash])
   return { tokens: await issueTokens(db, { clientId, userId: row.user_id, scope: row.scope }) }
 }
 
@@ -176,6 +191,33 @@ export async function tokenUser(db, token) {
   if (held.size > 500) held.delete(held.keys().next().value)
   held.set(hash, { value, until: Math.min(Date.now() + 60 * 1000, Date.parse(row.expires_at)) })
   return value
+}
+
+/** RFC 7009: a client gives up a token it holds. Unknown tokens are not an error. */
+export async function revokeToken(db, token) {
+  if (!token) return
+  const hash = await hashToken(String(token))
+  held.delete(hash)
+  await db.run('DELETE FROM oauth_tokens WHERE token_hash = ?', [hash])
+}
+
+/** The applications a person has connected, one row per application. */
+export async function listConnections(db, userId) {
+  const rows = await db.all(
+    `SELECT t.client_id, c.name, MAX(t.scope) AS scope, MIN(t.created_at) AS since, MAX(t.created_at) AS last
+       FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+      WHERE t.user_id = ? AND t.expires_at > ?
+      GROUP BY t.client_id, c.name ORDER BY last DESC`,
+    [userId, new Date().toISOString()],
+  )
+  return rows.map((r) => ({ clientId: r.client_id, name: r.name || 'An application', scope: String(r.scope || '').split(' '), since: r.since, lastUsed: r.last }))
+}
+
+/** Disconnects one application (or every one), effective at once. */
+export async function disconnect(db, userId, clientId = null) {
+  held.clear()
+  if (clientId) await db.run('DELETE FROM oauth_tokens WHERE user_id = ? AND client_id = ?', [userId, clientId])
+  else await db.run('DELETE FROM oauth_tokens WHERE user_id = ?', [userId])
 }
 
 /** Expired codes and tokens, swept with the daily usage sweep. */

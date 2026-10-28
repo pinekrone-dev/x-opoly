@@ -142,6 +142,15 @@ export const api = {
   account: {
     /** Everyone on this team, the owner first. */
     team: () => request<{ members: TeamMember[] }>('/api/account/team'),
+    /** Applications connected with Sign in with Land Quotient (the Claude connector). */
+    connections: () =>
+      request<{ connections: { clientId: string; name: string; scope: string[]; since: string; lastUsed: string }[] }>(
+        '/api/account/connections',
+      ),
+    disconnect: (clientId?: string) =>
+      request<void>(clientId ? `/api/account/connections/${encodeURIComponent(clientId)}` : '/api/account/connections', {
+        method: 'DELETE',
+      }),
     /** The owner sets a teammate to edit or view only; the answer is the team as it now stands. */
     setRole: (memberId: string, role: 'editor' | 'viewer') =>
       request<{ members: TeamMember[] }>(`/api/account/team/${memberId}`, { ...json({ role }), method: 'PATCH' }),

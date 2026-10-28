@@ -246,6 +246,10 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
     return { status: response.status, body }
   }
   const refusal = (answer) => answer.body?.error || `Land Quotient answered ${answer.status}.`
+  // A market is a slug and nothing else, before it goes near a path.
+  if (input && 'market' in input && !/^[a-z0-9-]{2,40}$/.test(String(input.market || ''))) {
+    return failure('market must be a slug from list_markets, like austin-tx.')
+  }
 
   switch (name) {
     case 'list_markets': {

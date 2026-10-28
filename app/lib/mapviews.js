@@ -64,7 +64,7 @@ export async function listViews(db, teamId, market = null) {
  * means: a broker refining "Industrial over 5 acres" expects one view, not a
  * list of six nearly identical ones.
  */
-export async function saveView(db, teamId, input, { userId = null } = {}) {
+export async function saveView(db, teamId, input, { userId = null, ownOnly = false } = {}) {
   const label = name(input?.name)
   if (!label) return { error: 'Give the view a name.' }
   const market = String(input?.market ?? '').trim()
@@ -80,9 +80,13 @@ export async function saveView(db, teamId, input, { userId = null } = {}) {
 
   const now = nowIso()
   const existing = await db.get(
-    'SELECT id FROM map_views WHERE team_id = ? AND market = ? AND name = ?',
+    'SELECT id, created_by FROM map_views WHERE team_id = ? AND market = ? AND name = ?',
     [teamId, market, label],
   )
+  // A connector replaces only maps its own person made, never a teammate's.
+  if (existing && ownOnly && existing.created_by !== userId) {
+    return { error: 'A teammate already has a saved map with that name. Choose another name.' }
+  }
   if (existing) {
     await db.run('UPDATE map_views SET state = ?, updated_at = ? WHERE id = ?', [state, now, existing.id])
     return { view: camelView(await db.get('SELECT * FROM map_views WHERE id = ?', [existing.id])) }

@@ -54,6 +54,9 @@ export function resetRateLimits() {
 
 /** The client's address, as well as a proxy chain can tell it. */
 export function clientAddress(c) {
+  // A connector's internal call, already vouched for by the app.
+  const vouched = typeof c.get === 'function' ? c.get('clientAddress') : null
+  if (vouched) return vouched
   return (
     c.req.header('cf-connecting-ip') ||
     (c.req.header('x-forwarded-for') || '').split(',')[0].trim() ||
