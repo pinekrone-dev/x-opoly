@@ -892,8 +892,8 @@ function SavedViews({
 const GIS_TIPS: Coachmark[] = [
   {
     target: '[data-tour="market"]',
-    title: 'Start with a county',
-    body: 'Every market is one county’s own record, so choosing one chooses what the data is. Switching markets reframes the map.',
+    title: 'One map, every county',
+    body: 'Each market is one county’s own record. Pan into another county and the map switches to it; zoomed out, every market is a label you can click.',
   },
   {
     target: '[data-tour="layers"]',
@@ -918,6 +918,7 @@ const CSV_COLUMNS: [string, string][] = [
   ['ad', 'Address'],
   ['zp', 'ZIP'],
   ['ow', 'Owner of record'],
+  ['ma', 'Owner mailing address'],
   ['at', 'Asset type'],
   ['mv', 'Value'],
   ['lv', 'Land value'],
@@ -930,7 +931,21 @@ const CSV_COLUMNS: [string, string][] = [
   ['ba', 'Building footprint (sq ft)'],
   ['bh', 'Tallest building (ft)'],
   ['tr', 'Census tract'],
+  ['sp', 'Last sale price'],
 ]
+
+/*
+ * The owner readings, worked out per row by the same rules as the owner
+ * filters (lib/owners), so a list exported with "out-of-state owner" ticked
+ * says why each row is on it.
+ */
+const CSV_OWNER_COLUMNS = ['Last sale year', 'Years held', 'Owner mail state', 'Out-of-state owner', 'Likely free and clear']
+
+function ownerCells(row: Record<string, string | number | null>, slug: string): (string | number | null)[] {
+  const t = ownerTraits(row, slug)
+  const yes = (v: boolean | null) => (v == null ? null : v ? 'Yes' : 'No')
+  return [t.saleYear, t.heldYears, t.mailState, yes(t.outOfState), yes(t.freeClear)]
+}
 
 /** A building tag as the file writes it: footprint in square feet, height in feet. */
 function buildingCell(key: string, value: unknown): string | number | null {
@@ -979,12 +994,15 @@ const HOLDINGS_SHOWN = 200
  */
 function exportCsv(rows: Record<string, string | number | null>[], slug: string) {
   const cell = csvCell
-  const header = CSV_COLUMNS.map(([, label]) => label).join(',')
+  const header = [...CSV_COLUMNS.map(([, label]) => label), ...CSV_OWNER_COLUMNS].join(',')
   const body = rows
     .map((row) =>
-      CSV_COLUMNS.map(([key]) =>
-        cell(key === 'fz' ? floodWords(row[key]) : key === 'bn' || key === 'ba' || key === 'bh' ? buildingCell(key, row[key]) : row[key] ?? null),
-      ).join(','),
+      [
+        ...CSV_COLUMNS.map(([key]) =>
+          cell(key === 'fz' ? floodWords(row[key]) : key === 'bn' || key === 'ba' || key === 'bh' ? buildingCell(key, row[key]) : row[key] ?? null),
+        ),
+        ...ownerCells(row, slug).map((value) => cell(value)),
+      ].join(','),
     )
     .join('\n')
   const blob = new Blob([`${header}\n${body}\n`], { type: 'text/csv;charset=utf-8' })
@@ -1212,7 +1230,9 @@ export default function Gis({
   const [published, setPublished] = useState<PublishedLayer[]>([])
   // The summary grid starts on: it is what the map shows zoomed out, and it
   // gets out of the way by itself once lots are drawn.
-  const [layerOn, setLayerOn] = useState<Record<string, boolean>>({ grid: true })
+  // Nothing on to start, the summary grid included: an orange heat map no
+  // one asked for read as "shading is on by default".
+  const [layerOn, setLayerOn] = useState<Record<string, boolean>>({})
   const [layerData, setLayerData] = useState<Record<string, GeoJSON.FeatureCollection>>({})
   const [layerStyle, setLayerStyle] = useState<Record<string, { color: string; opacity: number }>>({})
   const [layerBusy, setLayerBusy] = useState<Record<string, boolean>>({})
@@ -2006,12 +2026,12 @@ export default function Gis({
   const gridLayer = useMemo(
     (): PublishedLayer => ({
       id: 'grid',
-      label: 'Parcel summary',
+      label: 'Zoomed-out heat map',
       kind: 'polygon',
       color: '#d97706',
       file: '',
       maxzoom: PARCEL_MIN_ZOOM,
-      note: 'Zoomed out, until lots are drawn',
+      note: 'Value per acre in 1 km squares, until lots are drawn',
       categories: gridDrawing
         ? [{ field: 'Band', values: Object.keys(gridDrawing.colors).map((band): [string, number] => [band, gridDrawing.counts[band] ?? 0]), colors: gridDrawing.colors }]
         : undefined,
@@ -2846,9 +2866,9 @@ export default function Gis({
         // The outlines are always drawn; this card is the colour on them,
         // land use or value off the assessor roll, and it stays where it is
         // put — a click on a parcel selects it and changes nothing else.
-        label: 'Assessor shading',
+        label: 'Land use colours',
         state: showParcels ? 'on' : 'off',
-        note: meta?.count ? `Land use and values, ${meta.count.toLocaleString()} parcels` : 'Land use and values',
+        note: 'Colour parcels by land use or value',
         icon: LAYER_ICONS.parcels,
       },
       {
@@ -3195,7 +3215,7 @@ export default function Gis({
     if (st.parcelColorBy === 'auto' || st.parcelColorBy === 'group' || st.parcelColorBy === 'value') {
       setParcelColorBy(st.parcelColorBy)
     }
-    if (st.layerOn && typeof st.layerOn === 'object') setLayerOn({ grid: true, ...(st.layerOn as Record<string, boolean>) })
+    if (st.layerOn && typeof st.layerOn === 'object') setLayerOn({ ...(st.layerOn as Record<string, boolean>) })
     if (st.layerStyle && typeof st.layerStyle === 'object') {
       setLayerStyle(st.layerStyle as Record<string, { color: string; opacity: number }>)
     }
@@ -3631,7 +3651,7 @@ export default function Gis({
       const frame = await captureMap.current?.()
       if (!frame) throw new Error('The map is not ready to photograph yet.')
       const legend = [
-        ...(showParcels ? [{ color: '#01A3A8', label: 'Assessor shading' }] : []),
+        ...(showParcels ? [{ color: '#01A3A8', label: 'Land use colours' }] : []),
         ...extras.map((layer) => ({
           color: layer.color,
           label: shownLayers.find((l) => l.id === layer.id)?.label ?? layer.id,
@@ -4094,28 +4114,23 @@ export default function Gis({
             {/* The market belongs here rather than floating over the map:
                 coverage is per county, so choosing one is choosing what the
                 layer even is. */}
+            {/* No market picker: the map is the way between markets. It
+                follows wherever you pan, and zoomed out every market is a
+                label you can click. This only says where you are. */}
             <div data-tour="market">
-              <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-market">
-                Market
-              </label>
-              <select
-                id="gis-market"
-                className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink"
-                value={active ?? ''}
-                onChange={(event) => openMarket(event.target.value)}
-              >
-                {markets.map((entry) => (
-                  <option key={entry.slug} value={entry.slug}>
-                    {entry.name} · {entry.region}
-                  </option>
-                ))}
-              </select>
+              <p className="text-[11px] font-medium text-body">Viewing</p>
+              <p className="text-sm font-semibold text-ink">
+                {market ? `${market.name} · ${market.region}` : 'Loading…'}
+              </p>
               {market?.stats && (
                 <p className="mt-1 text-[11px] text-muted">
                   {market.stats.parcels.toLocaleString()} parcels · {money(market.stats.value)}
                   {!(server?.ready || index) && <span> · loading detail…</span>}
                 </p>
               )}
+              <p className="mt-1 text-[10px] text-faint">
+                Pan to another county and the map follows. Zoomed out, click any market's name to fly there.
+              </p>
             </div>
 
             {/* Above the catalog, because a saved view is where you start
@@ -4532,7 +4547,7 @@ export default function Gis({
             {showParcels && (
               <div className="space-y-2">
                 <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">
-                  Assessor shading
+                  Land use colours
                 </p>
                 <OpacityRow
                   id="gis-parcel-opacity"
@@ -4658,7 +4673,15 @@ export default function Gis({
                 </button>
                 {assetOptions.length > 0 ? (
                   <div>
-                    <p className="mb-1 text-[11px] font-medium text-body">Asset type</p>
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-medium text-body">Asset type</p>
+                      {/* The land-use colours, switched from where land use is
+                          chosen, so the filter and the colour are one idea. */}
+                      <label className="flex items-center gap-1 text-[10px] text-muted">
+                        <input type="checkbox" checked={showParcels} onChange={() => setShowParcels((on) => !on)} />
+                        Colour on map
+                      </label>
+                    </div>
                     <CheckList
                       options={assetOptions}
                       selected={assets}
@@ -4739,6 +4762,7 @@ export default function Gis({
                 <OwnerFilterPicker
                   available={ownerFiltersReady}
                   picks={ownerPicks}
+                  onPreset={(next) => setOwnerPicks(new Set(next))}
                   state={marketState(active)}
                   onToggle={(entry) =>
                     setOwnerPicks((current) => {
@@ -4925,7 +4949,7 @@ export default function Gis({
             </PanelSection>
           ) : (
             <PanelSection title="Parcels">
-              <p className="text-xs text-muted">Outlines only. Turn on Assessor shading under Layers to colour parcels by land use or value.</p>
+              <p className="text-xs text-muted">Outlines only. Turn on Land use colours under Layers, or tick Colour on map in Filter, to colour parcels by land use or value.</p>
             </PanelSection>
           )}
 
@@ -5808,11 +5832,13 @@ function OwnerFilterPicker({
   picks,
   state,
   onToggle,
+  onPreset,
 }: {
   available: boolean
   picks: Set<OwnerFilter>
   state: string | null
   onToggle: (entry: OwnerFilter) => void
+  onPreset: (picks: OwnerFilter[]) => void
 }) {
   const year = new Date().getUTCFullYear()
   const options: [OwnerFilter, string, string][] = [
@@ -5828,6 +5854,21 @@ function OwnerFilterPicker({
     <div>
       <p className="mb-1 text-[11px] font-medium text-body">Owner</p>
       {available ? (
+        <>
+        {/* The owners most able to carry the financing themselves: held a
+            long time and likely owing nothing. Free and clear here already
+            means 30+ years held, so it is one tick, offered by name. */}
+        <button
+          type="button"
+          onClick={() => onPreset(['held10', 'freeClear'])}
+          aria-pressed={picks.has('held10') && picks.has('freeClear')}
+          className={`mb-1.5 w-full rounded-md border px-2 py-1 text-left text-[11px] text-body hover:border-brand/50 ${
+            picks.has('held10') && picks.has('freeClear') ? 'border-brand bg-brand/5' : 'border-line'
+          }`}
+        >
+          <span className="font-medium text-ink">Seller-financing prospects</span>
+          <span className="block text-[10px] text-faint">Held 10+ years and likely free and clear: the owners most able to carry a note.</span>
+        </button>
         <ul className="space-y-1">
           {options.map(([key, label, hint]) => (
             <li key={key}>
@@ -5841,6 +5882,7 @@ function OwnerFilterPicker({
             </li>
           ))}
         </ul>
+        </>
       ) : (
         <p className="text-[10px] text-faint">
           Held 10+ years, likely free and clear and out-of-state owner come to this market once its sale dates and
