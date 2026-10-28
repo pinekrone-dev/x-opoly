@@ -22,6 +22,7 @@ import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '..
 import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 import { csvCell } from '../lib/csv'
+import { countyCounts, describeMismatch, listingCounts, mismatches, readCount } from '../lib/listingCheck'
 import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
 
 /** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
@@ -5059,6 +5060,13 @@ export default function Gis({
                   record={{ ...parcel, ...((details?.[String(selected)] as Record<string, unknown> | undefined) ?? {}) }}
                   market={active}
                 />
+                <ListingCheck
+                  key={String(selected)}
+                  panel={meta?.panel}
+                  record={{ ...parcel, ...((details?.[String(selected)] as Record<string, unknown> | undefined) ?? {}) }}
+                  linked={known?.place?.fields ?? null}
+                  linkedName={known?.place?.name ?? null}
+                />
                 {/* The flood zone, on every parcel in a market FEMA maps,
                     whether or not the flood layer is switched on. */}
                 {floodLayer && flood && (
@@ -5606,6 +5614,84 @@ function OwnerPosition({ record, market }: { record: Record<string, unknown>; ma
           Inferred: the last sale was {FREE_CLEAR_YEARS}+ years ago, so a 30-year loan from the purchase would have run
           out. The roll carries no loans; a refinance since would not show here. Check title.
         </p>
+      ) : null}
+    </PanelSection>
+  )
+}
+
+/*
+ * The listing against the county's count of units and bedrooms.
+ *
+ * Filled from the CRM place linked to this parcel when it carries "Units" or
+ * "Beds" fields, and typeable here for a listing not saved anywhere. Shown
+ * only where the county publishes one of the two counts.
+ */
+function ListingCheck({
+  panel,
+  record,
+  linked,
+  linkedName,
+}: {
+  panel: PanelGroup[] | undefined
+  record: Record<string, unknown>
+  linked: { label: string; value?: string | null }[] | null
+  linkedName: string | null
+}) {
+  const county = countyCounts(panel, record)
+  const fromCrm = listingCounts(linked)
+  const [units, setUnits] = useState('')
+  const [beds, setBeds] = useState('')
+  // The CRM's counts fill the boxes once they arrive, unless someone has typed.
+  useEffect(() => {
+    if (fromCrm.units != null) setUnits((current) => current || String(fromCrm.units))
+    if (fromCrm.bedrooms != null) setBeds((current) => current || String(fromCrm.bedrooms))
+  }, [fromCrm.units, fromCrm.bedrooms])
+  if (county.units == null && county.bedrooms == null) return null
+  const found = mismatches({ units: readCount(units), bedrooms: readCount(beds) }, county)
+  const checked = readCount(units) != null || readCount(beds) != null
+  const input = 'w-14 rounded border border-line bg-surface px-1.5 py-0.5 text-xs text-ink'
+  return (
+    <PanelSection title="Listing check">
+      <p className="text-xs text-body">
+        County records{' '}
+        {[
+          county.units != null ? `${county.units} ${county.units === 1 ? 'unit' : 'units'}` : null,
+          county.bedrooms != null ? `${county.bedrooms} ${county.bedrooms === 1 ? 'bedroom' : 'bedrooms'}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        .
+      </p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-body">
+        <span>Listing says</span>
+        {county.units != null ? (
+          <label className="flex items-center gap-1">
+            <input className={input} inputMode="numeric" value={units} onChange={(e) => setUnits(e.target.value)} aria-label="Listing units" />
+            units
+          </label>
+        ) : null}
+        {county.bedrooms != null ? (
+          <label className="flex items-center gap-1">
+            <input className={input} inputMode="numeric" value={beds} onChange={(e) => setBeds(e.target.value)} aria-label="Listing bedrooms" />
+            bedrooms
+          </label>
+        ) : null}
+      </div>
+      {found.length ? (
+        <div role="alert" className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700">
+          <p className="font-semibold">Doesn't match county records</p>
+          {found.map((m) => (
+            <p key={m.field}>{describeMismatch(m)}</p>
+          ))}
+          <p className="mt-1 text-[11px] opacity-80">
+            Worth asking about before an offer: an unpermitted conversion, a combined lot, or a listing typo.
+          </p>
+        </div>
+      ) : checked ? (
+        <p className="mt-1.5 text-[11px] text-muted">Matches the county record.</p>
+      ) : null}
+      {linkedName && (fromCrm.units != null || fromCrm.bedrooms != null) ? (
+        <p className="mt-1 text-[10px] text-faint">Filled from {linkedName} in your CRM.</p>
       ) : null}
     </PanelSection>
   )
