@@ -1457,15 +1457,39 @@ export default function Gis({
   }, [active])
 
 
+  /*
+   * Where a link or a reload put the map, read before the map rewrites it.
+   * One map now: a position anywhere on it is a place to be, so it opens
+   * the county under it and the camera stays where the link says.
+   */
+  const linkedAt = useRef<{ lat: number; lng: number } | null>(null)
+  if (linkedAt.current === null) {
+    const [, lat, lng] = window.location.hash.replace('#', '').split('/').map(Number)
+    linkedAt.current = /^#[\d.]+\//.test(window.location.hash) && Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null
+  }
+
   useEffect(() => {
     catalogue('markets.json', FRESH)
-      .then((d) => {
+      .then(async (d) => {
         const live: Market[] = (d.markets || []).filter((m: Market) => m.status === 'live')
         setMarkets(live)
+        const isLive = (slug: string | null | undefined) => live.find((m) => m.slug === slug)?.slug
+        // A map position in the link: the county under it, smallest first
+        // where counties overlap, and no framing — the link already frames.
+        const at = linkedAt.current
+        if (!activeRef.current && at) {
+          const all = await api.gisExtents().then((a) => a.extents ?? []).catch(() => [] as MarketExtent[])
+          const holds = (x: MarketExtent) => at.lng >= x.box[0] && at.lng <= x.box[2] && at.lat >= x.box[1] && at.lat <= x.box[3]
+          const area = (x: MarketExtent) => (x.box[2] - x.box[0]) * (x.box[3] - x.box[1])
+          const under = all.filter(holds).sort((a, b) => area(a) - area(b))[0]
+          const opening = isLive(under?.slug) || isLive(lastMarket()) || isLive(defaultMarket) || live[0]?.slug || null
+          frameNext.current = null
+          setActive(opening)
+          return
+        }
         // The URL's market first, then the last one opened in this browser,
         // then the one chosen in settings, each only if it is still live,
         // then the first in the catalogue.
-        const isLive = (slug: string | null | undefined) => live.find((m) => m.slug === slug)?.slug
         const preferred = isLive(lastMarket()) || isLive(defaultMarket)
         const opening = activeRef.current || preferred || live[0]?.slug || null
         frameNext.current = opening
