@@ -4670,76 +4670,6 @@ export default function Gis({
           </div>
         )}
 
-        {rail === 'search' && (
-          <div className="space-y-2">
-            <input
-              className="w-full rounded-md border border-line bg-surface px-2 py-1.5 text-sm text-ink"
-              placeholder="Address, owner or parcel id"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                // Enter goes to the best match rather than waiting for a
-                // click on it: typing an address and pressing Enter is how
-                // people expect to arrive at a parcel. With no record matching
-                // as typed, the address is looked up and the map goes there.
-                if (event.key !== 'Enter') return
-                event.preventDefault()
-                if (filtered?.length) pickFromSearch(filtered[0].id as number | string)
-                else void goToAddress(query)
-              }}
-            />
-            {query.trim().length >= 3 && !searching && !filtered?.length ? (
-              <button
-                type="button"
-                className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50 disabled:opacity-60"
-                disabled={locating}
-                onClick={() => void goToAddress(query)}
-              >
-                {locating ? 'Finding it…' : (
-                  <>
-                    No parcel record matches that as typed. <span className="font-medium text-brand">Find this address on the map</span>
-                  </>
-                )}
-              </button>
-            ) : null}
-            {!(server?.ready || index) && (
-              <p className="text-[11px] text-muted">Loading the market's records…</p>
-            )}
-            {query.trim() !== '' && filtered && (
-              <>
-                <p className="text-[11px] text-muted">
-                  {/*
-                    * How many matched, which is not how many are listed. The
-                    * server answers with a page; saying "200 matches" when a
-                    * county holds four thousand would be a lie the old path
-                    * could not tell because it held everything.
-                    */}
-                  {summary.count.toLocaleString()} match{summary.count === 1 ? '' : 'es'}
-                  {summary.count > filtered.length && `, showing the first ${filtered.length}`}
-                </p>
-                <ul className="divide-y divide-line">
-                  {filtered.slice(0, 200).map((row) => (
-                    <li key={String(row.id)}>
-                      <button
-                        type="button"
-                        className="w-full py-1.5 text-left hover:bg-sunken"
-                        onClick={() => pickFromSearch(row.id as number | string)}
-                      >
-                        <span className="block truncate text-xs font-medium text-ink">
-                          {String(row.ad || `Parcel ${row.gid ?? row.id}`)}
-                        </span>
-                        <span className="block truncate text-[11px] text-muted">
-                          {money(Number(row.mv) || 0)} · {String(row.ow || 'Owner not published')}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-          </div>
-        )}
-
         {rail === 'filter' && (
           <div className="space-y-3">
             {!(server?.ready || index) ? (
@@ -5507,49 +5437,25 @@ export default function Gis({
             ) : null
           }
         >
-          {/* What the CRM already knows. A parcel with a deal on it is the
-              reason to have clicked, so it leads. */}
-          {parcel && (
-            <PanelSection title="Your records">
-              {known === null ? (
-                <p className="text-[11px] text-muted">Checking your records…</p>
-              ) : known.place ? (
-                <>
-                  <button
-                    type="button"
-                    className="text-xs font-semibold text-brand hover:underline"
-                    onClick={() => navigate(`/places/${known.place?.id}`)}
-                  >
-                    In your CRM · {known.place.name || 'Place'}
-                  </button>
-                  {known.deals.length > 0 && (
-                    <ul className="mt-1 space-y-0.5">
-                      {known.deals.map((deal) => (
-                        <li key={deal.id}>
-                          <button
-                            type="button"
-                            className="text-[11px] text-body hover:underline"
-                            onClick={() => navigate(`/deals/${deal.id}`)}
-                          >
-                            {deal.name} · {deal.stage}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded-md border border-line px-2 py-1 text-xs font-medium text-ink hover:bg-sunken disabled:opacity-50"
-                  disabled={saving}
-                  onClick={addToCrm}
-                >
-                  {saving ? 'Saving…' : 'Add to CRM'}
-                </button>
-              )}
+          {/* The header's button adds the parcel or opens it in the CRM;
+              what is left to say here is the deals it is part of. */}
+          {parcel && known?.deals.length ? (
+            <PanelSection title="Deals on this parcel">
+              <ul className="space-y-0.5">
+                {known.deals.map((deal) => (
+                  <li key={deal.id}>
+                    <button
+                      type="button"
+                      className="text-[11px] text-body hover:underline"
+                      onClick={() => navigate(`/deals/${deal.id}`)}
+                    >
+                      {deal.name} · {deal.stage}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </PanelSection>
-          )}
+          ) : null}
         </ParcelPanel>
       )}
       </>
@@ -6152,7 +6058,7 @@ function ListingCheck({
 /*
  * The address bar, always on the map beside the rail.
  *
- * Its own text, not the Search tab's: typing an address here goes to a
+ * Its own text, not the query's: typing an address here goes to a
  * parcel and leaves the filter alone. Suggestions are the open county's
  * records that match as typed; Enter takes the first, and with none it
  * looks the address up and flies there, into whichever county holds it.
@@ -6243,8 +6149,8 @@ function AddressBar({
         </svg>
         <input
           className="min-w-0 flex-1 bg-transparent text-sm text-ink outline-none placeholder:text-faint"
-          placeholder="Go to an address"
-          aria-label="Go to an address"
+          placeholder="Address, owner or parcel id"
+          aria-label="Go to an address, owner or parcel"
           value={text}
           onChange={(event) => {
             setText(event.target.value)

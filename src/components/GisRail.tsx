@@ -13,7 +13,7 @@ import { useState } from 'react'
  * apart — the count in Report is the same set the map is drawing.
  */
 
-export type RailTab = 'layers' | 'search' | 'filter' | 'report'
+export type RailTab = 'layers' | 'filter' | 'report'
 
 const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
   {
@@ -35,7 +35,6 @@ const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
     label: 'Layers',
     icon: <path d="m12 3 9 5-9 5-9-5 9-5ZM3 13l9 5 9-5M3 17l9 5 9-5" />,
   },
-  { id: 'search', label: 'Search', icon: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></> },
   {
     id: 'report',
     label: 'Report',
