@@ -2694,7 +2694,7 @@ export default function MapCanvas({
 
       {options && (
         <div
-          className={`absolute z-[520] ${basemapPicker === 'bottom-left' ? 'bottom-8 flex flex-col-reverse' : 'top-3'} ${basemapPicker === 'top-right' ? 'right-3' : ''}`}
+          className={`basemap-picker absolute z-[520] ${basemapPicker === 'bottom-left' ? 'bottom-8 flex flex-col-reverse' : 'top-3'} ${basemapPicker === 'top-right' ? 'right-3' : ''}`}
           // Left of the map proper: the parcel map's rail sets the inset it
           // covers, and a map without a rail sets nothing, so the fallback
           // keeps the picker off the edge.
