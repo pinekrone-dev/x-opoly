@@ -53,6 +53,11 @@ concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
+# Read-only: these deploy or probe with their own credentials and never
+# write to the repository with the workflow's token.
+permissions:
+  contents: read
+
 jobs:
   # --- test, build, and prove the build on staging ---------------------------
   staging:
