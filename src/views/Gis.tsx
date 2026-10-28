@@ -352,6 +352,9 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   txdot: LAYER_ICONS.absorption,
   comps: LAYER_ICONS.comps,
   vessels: LAYER_ICONS.ships,
+  transmission: LAYER_ICONS.pylon,
+  substations: LAYER_ICONS.power,
+  'power-plants': LAYER_ICONS.power,
 }
 
 /*
