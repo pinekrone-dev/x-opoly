@@ -2636,6 +2636,10 @@ export default function Gis({
             setServer({ ready: false, market: active })
             return
           }
+          // A daily allowance spent says so, rather than the filter seeming
+          // to do nothing.
+          const spent = cause as { status?: number; body?: { error?: string } } | null
+          if (spent?.status === 429 && spent.body?.error) setError(spent.body.error)
           // Otherwise leave the previous answer standing rather than blanking
           // the panel on one failed request; the next keystroke tries again.
         })

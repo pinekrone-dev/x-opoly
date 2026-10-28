@@ -94,14 +94,16 @@ let ingest
  * the opposite of what it claims.
  */
 let anonymous
+let env
 
 before(async () => {
   resetKeyCache()
-  app = await createServer({
+  env = {
     DATA_DIR: temp.directory,
     DB_FILE: `${temp.directory}/test.db`,
     JWKS_FETCH: jwks,
-  })
+  }
+  app = await createServer(env)
   call = client()
   await call('/api/auth/register', {
     method: 'POST',
@@ -287,6 +289,56 @@ describe('searching a county', () => {
     const res = await call('/api/gis/parcels?market=austin-tx&vmin=&vmax=')
     assert.equal(res.body.count, 3)
     assert.equal(res.body.ids, null, 'empty inputs are not a filter')
+  })
+
+  test('filtered searches are charged for the rows they read, and stop at the day\'s allowance', async () => {
+    // The deployment's first account is the operator's and exempt, so this
+    // is a second one: free signup, the confirming email caught in passing.
+    Object.assign(env, { FREE_ACCESS: '1', RESEND_API_KEY: 're_test_stub' })
+    const realFetch = globalThis.fetch
+    let mail = null
+    globalThis.fetch = async (url, init) =>
+      String(url).startsWith('https://api.resend.com/')
+        ? ((mail = JSON.parse(init.body)), new Response('{"id":"e1"}', { status: 200 }))
+        : realFetch(url, init)
+    const broker = client()
+    try {
+      await broker('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ email: 'second@example.com', password: 'a long enough password', name: 'Second' }),
+      })
+      const token = new URL(mail.text.match(/https?:\/\/\S+/)[0]).searchParams.get('verify')
+      await broker('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) })
+    } finally {
+      globalThis.fetch = realFetch
+    }
+    assert.equal((await broker('/api/gis/parcels?market=austin-tx&amin=5')).status, 200)
+
+    // Three parcels: a filtered search reads them twice, six rows a time,
+    // and this account has just run one.
+    env.SCAN_ROWS_PER_ACCOUNT = '10'
+    const call = broker
+    try {
+      const refused = await call('/api/gis/parcels?market=austin-tx&amin=5')
+      assert.equal(refused.status, 429)
+      assert.equal(refused.body.code, 'scan_budget')
+      assert.equal((await call('/api/gis/parcels?market=austin-tx')).status, 200, 'an unfiltered page reads by index and is not charged')
+      // Nor is a text search alone where the market has its text index; this
+      // one has none, so its search scans like a filter and is charged.
+      assert.equal((await call('/api/gis/parcels?market=austin-tx&q=congress')).status, 429)
+    } finally {
+      delete env.SCAN_ROWS_PER_ACCOUNT
+    }
+    env.SCAN_ROWS_PER_DAY = '10'
+    try {
+      const closed = await call('/api/gis/parcels?market=austin-tx&vmin=1')
+      assert.equal(closed.status, 503, "the site's ceiling closes the store for the day")
+      assert.equal(closed.body.closed, true, 'so the app falls back to the county file')
+    } finally {
+      delete env.SCAN_ROWS_PER_DAY
+      delete env.FREE_ACCESS
+      delete env.RESEND_API_KEY
+    }
   })
 
   test('a market with nothing published says so, so the app can fall back', async () => {
