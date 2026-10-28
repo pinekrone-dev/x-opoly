@@ -834,31 +834,46 @@ try {
     await page.click('[data-tour="layers"], text=Layers', { timeout: 5000 }).catch(() => undefined)
     await page.waitForTimeout(600)
 
-    const picker = await page.$('#gis-market')
-    check('the market picker is on the panel', picker != null)
-    if (picker) {
-      const options = await page.$$eval('#gis-market option', (nodes) =>
-        nodes.map((n) => n.value).filter(Boolean))
-      check('the picker lists the published markets', options.length > 0, options.join(' '))
-
-      /*
-       * Every market, not just the first.
-       *
-       * "None of them load" is a different fault from "one of them loads",
-       * and a test that only ever opens the market that happens to sort first
-       * cannot tell the two apart.
-       */
-      /*
-       * The market already showing goes last.
-       *
-       * Selecting the option that is already selected changes nothing, so no
-       * tiles are read and the count for it comes back zero — not because
-       * that county is broken but because nothing happened. Starting at the
-       * second option and coming back to the first makes every step in this
-       * loop a real change of market, which is the thing being tested.
-       */
-      for (const slug of [...options.slice(1), options[0]]) {
-        await page.selectOption('#gis-market', slug).catch(() => undefined)
+    /*
+     * The counties, opened by place.
+     *
+     * There is no market picker any more: the map is one map, and the county
+     * under the middle of it is the one open. So each county is opened the
+     * way a broker reaches it — a fresh load of the map over that county —
+     * from the extents the server publishes. A sample spread over the three
+     * parcel stores and the county-file path, rather than all thirty-odd,
+     * which would hold the deploy for ten minutes to learn little more.
+     */
+    const extents = await page.evaluate(async () => {
+      try {
+        const res = await fetch('/api/gis/extents', { cache: 'no-store' })
+        return res.ok ? ((await res.json()).extents || []) : []
+      } catch {
+        return []
+      }
+    })
+    check('the map knows where its counties are', extents.length > 0, `${extents.length} extents`)
+    const SAMPLE = ['austin-tx', 'phoenix-az', 'los-angeles-ca', 'chicago-il', 'charlotte-nc']
+    const sample = SAMPLE.map((slug) => extents.find((x) => x.slug === slug)).filter(Boolean)
+    const options = sample.map((x) => x.slug)
+    if (sample.length) {
+      for (const where of sample) {
+        const slug = where.slug
+        // Away first, so the hash is read by a real load rather than taken
+        // as a same-document change the map never hears about.
+        await page.goto('about:blank')
+        await page.goto(`${BASE}/gis#14/${where.center[1]}/${where.center[0]}`, {
+          waitUntil: 'domcontentloaded', timeout: 45000,
+        })
+        await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 }).catch(() => null)
+        for (const label of ['Skip', 'Done']) {
+          await page.click(`button:has-text("${label}")`, { timeout: 1500 }).catch(() => undefined)
+        }
+        // The Layers tab is where the open county states its parcel count.
+        // A rail button toggles, so it is pressed only if that tab is shut.
+        if (!(await page.$('text=Pan to another county'))) {
+          await page.click('[data-tour="rail"] button:has-text("Layers")', { timeout: 5000 }).catch(() => undefined)
+        }
         // The market's meta, its server status and its first search, in that
         // order. Generous because a cold Worker adds a second on the first ask.
         await page.waitForTimeout(7000)
@@ -950,27 +965,16 @@ try {
         `status ${lite.status}, ${lite.features} features ${lite.error ?? ''}`)
 
       /*
-       * A position left over from somewhere else.
+       * A pasted map link opens where it says.
        *
-       * The map keeps its view in the URL so a refresh returns you to the
-       * block you were reading. The hash outlives the tab, though, so one
-       * belonging to another county used to be restored over a market a
-       * thousand miles away — parcels loaded, camera in a different state,
-       * and reloading put it straight back because the hash came too. A
-       * failure a reload cannot clear is the worst kind, so it is pinned
-       * here with a position no market of ours is anywhere near.
+       * The map keeps its view in the URL, so a link a broker sends, or a
+       * reload, puts the reader on the same block. This used to check the
+       * opposite — that a position outside the one open market was moved
+       * away from — when the map was one county at a time. It is one map now,
+       * and a position anywhere on it is a place to be, not a mistake.
        */
-      const target = options[0]
-      // Away first, so this is a real document load.
-      //
-      // Navigating from /gis to /gis#... differs only by the fragment, which
-      // the browser treats as a same-document navigation: nothing reloads, the
-      // map is never rebuilt, and the case under test — a fresh visit carrying
-      // somebody else's position — never happens. The first version of this
-      // check did exactly that and reported a failure the product does not
-      // have, while saying nothing about the one it did.
       await page.goto('about:blank')
-      await page.goto(`${BASE}/gis#12/40.7128/-74.0060`, {
+      await page.goto(`${BASE}/gis#12/39.7392/-104.9903`, {
         waitUntil: 'domcontentloaded', timeout: 45000,
       })
       await page.waitForSelector('canvas.maplibregl-canvas', { timeout: 40000 }).catch(() => null)
@@ -981,10 +985,9 @@ try {
       const parts = landed.replace('#', '').split('/')
       const lat = Number(parts[1])
       const lng = Number(parts[2])
-      check('a hash from another part of the country does not strand the map',
-        Number.isFinite(lat) && Number.isFinite(lng) &&
-          (Math.abs(lat - 40.7128) > 1 || Math.abs(lng - -74.006) > 1),
-        `${target} opened at ${landed || '(no hash written)'}`)
+      check('a pasted map link opens where it says',
+        Math.abs(lat - 39.7392) < 0.2 && Math.abs(lng - -104.9903) < 0.2,
+        `opened at ${landed || '(no hash written)'}`)
     }
   }
 

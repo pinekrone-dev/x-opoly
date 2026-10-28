@@ -48,8 +48,11 @@ export default function GisRail({
   tab,
   onTab,
   badge,
+  floating,
   children,
 }: {
+  /** Kept on the map beside the rail, panel open or shut: the address bar. */
+  floating?: React.ReactNode
   open: boolean
   tab: RailTab
   onTab: (tab: RailTab | null) => void
@@ -104,6 +107,7 @@ export default function GisRail({
           <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>
         </section>
       )}
+      {floating ? <div className="pointer-events-auto ml-3 mt-3 self-start">{floating}</div> : null}
     </div>
   )
 }
