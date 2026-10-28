@@ -422,6 +422,9 @@
   .gis-map .basemap-picker {
     bottom: calc(var(--tabbar) + 0.75rem);
   }
+  .gis-map .map-zoom-hint {
+    bottom: calc(var(--tabbar) + 0.25rem);
+  }
   .gis-legend-fab {
     bottom: calc(var(--tabbar) + 0.75rem);
   }

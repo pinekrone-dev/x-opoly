@@ -63,7 +63,7 @@ describe('the zoom below which parcels are not drawn', () => {
   test('a county with no outlines on it explains itself', () => {
     // Otherwise it reads as missing data, which is the wrong conclusion: the
     // data is there and the panel is already searching all of it.
-    assert.match(source, /Zoom in to see parcel outlines/)
+    assert.match(source, /Zoom in for parcel outlines/)
   })
 })
 

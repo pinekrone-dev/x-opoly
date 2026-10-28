@@ -2708,20 +2708,28 @@ export default function MapCanvas({
         </div>
       ) : null}
 
-      {basemapNote || parcelNote || (parcels && tooFarOut) ? (
+      {basemapNote || parcelNote ? (
         <div
           role="status"
           className="pointer-events-none absolute inset-x-0 top-3 z-[600] mx-auto w-fit max-w-[90%] space-y-1 rounded-lg border border-line bg-surface/95 px-3 py-1.5 text-xs text-body shadow-sm"
         >
           {basemapNote ? <p>{basemapNote}</p> : null}
           {parcelNote ? <p>{parcelNote}</p> : null}
-          {/* Otherwise a county with no outlines on it reads as missing data,
-              which is exactly the wrong conclusion — the data is there and the
-              panel is already searching all of it. */}
-          {parcels && tooFarOut && !parcelNote ? (
-            <p>Zoom in to see parcel outlines. Searching and filtering already cover the whole county.</p>
-          ) : null}
         </div>
+      ) : null}
+
+      {/* Otherwise a county with no outlines on it reads as missing data,
+          which is exactly the wrong conclusion — the data is there and the
+          panel is already searching all of it. A hint, not a warning, so it
+          sits small along the bottom edge with the credits rather than over
+          the map. */}
+      {parcels && tooFarOut && !parcelNote ? (
+        <p
+          role="status"
+          className="map-zoom-hint pointer-events-none absolute bottom-1.5 left-1/2 z-[500] max-w-[60%] -translate-x-1/2 truncate rounded bg-surface/80 px-2 py-0.5 text-[10px] text-muted"
+        >
+          Zoom in for parcel outlines · search and filters cover the whole county
+        </p>
       ) : null}
 
       {options && (
