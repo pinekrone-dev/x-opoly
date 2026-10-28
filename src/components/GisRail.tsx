@@ -294,4 +294,8 @@ export const LAYER_ICONS = {
   power: <><path d="M13 2L5 13h6l-1 9 8-11h-6z" /></>,
   // A pylon, for the transmission lines themselves.
   pylon: <><path d="M12 2L7 22M12 2l5 20M8.5 16h7M9.7 11h4.6M5 7h14" /></>,
+  // A tank in the ground: the grade line, and the tank below it.
+  tank: <><path d="M2 9h20" /><rect x="5" y="12" width="14" height="7" rx="3.5" /><path d="M12 9v3" /></>,
+  // A drop, for what leaked from one.
+  leak: <><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z" /><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5" /></>,
 }

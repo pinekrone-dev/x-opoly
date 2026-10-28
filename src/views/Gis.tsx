@@ -278,13 +278,14 @@ const BUILDINGS_LAYER: PublishedLayer = {
 
 /** Where a market is, from its parcel archive's header. */
 /** The filter's category tabs. Power and Places are lib/nearby's groups. */
-type FilterTab = 'property' | 'zoning' | 'owner' | 'power' | 'places'
+type FilterTab = 'property' | 'zoning' | 'owner' | 'power' | 'hazards' | 'places'
 
 const FILTER_TABS: { id: FilterTab; label: string }[] = [
   { id: 'property', label: 'Property' },
   { id: 'zoning', label: 'Zoning' },
   { id: 'owner', label: 'Owner' },
   { id: 'power', label: 'Power' },
+  { id: 'hazards', label: 'Hazards' },
   { id: 'places', label: 'Places' },
 ]
 
@@ -363,6 +364,8 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   txdot: LAYER_ICONS.absorption,
   comps: LAYER_ICONS.comps,
   vessels: LAYER_ICONS.ships,
+  ust: LAYER_ICONS.tank,
+  lust: LAYER_ICONS.leak,
   transmission: LAYER_ICONS.pylon,
   substations: LAYER_ICONS.power,
   'power-plants': LAYER_ICONS.power,
@@ -2773,6 +2776,7 @@ export default function Gis({
       zoning: zoningKeep.size + zoningDrop.size + (zoningCodes.length ? 1 : 0) + (floodPick ? 1 : 0),
       owner: ownerPicks.size,
       power: 0,
+      hazards: 0,
       places: 0,
     }
     for (const group of NEAR_GROUPS) counts[group.id] = nearPicks.filter((p) => group.layers.includes(p.layer)).length
@@ -6286,7 +6290,7 @@ function FilterTabs({
   counts: Record<FilterTab, number>
 }) {
   return (
-    <div className="flex gap-0.5 rounded-md bg-sunken p-0.5" role="tablist" aria-label="Filter categories">
+    <div className="grid grid-cols-3 gap-0.5 rounded-md bg-sunken p-0.5" role="tablist" aria-label="Filter categories">
       {FILTER_TABS.map((entry) => (
         <button
           key={entry.id}
