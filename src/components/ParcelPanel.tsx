@@ -89,7 +89,10 @@ export default function ParcelPanel({
   embedded = false,
   children,
   extra,
+  action,
 }: {
+  /** One button beside the title: the card's main thing to do, kept in view. */
+  action?: React.ReactNode
   title: string
   subtitle: string
   groups: PanelGroup[]
@@ -136,6 +139,7 @@ export default function ParcelPanel({
           <h2 className="truncate text-sm font-semibold text-ink">{title}</h2>
           <p className="truncate text-xs text-muted">{subtitle}</p>
         </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
         <button type="button" className="text-muted hover:text-ink" aria-label="Close parcel" onClick={onClose}>
           ×
         </button>

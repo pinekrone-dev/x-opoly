@@ -3981,7 +3981,7 @@ export default function Gis({
       <MapCanvas
           tiles={tiles}
           basemaps={basemaps}
-          basemapPicker="top-left"
+          basemapPicker="bottom-left"
           properties={[]}
           parcels={
             meta?.tiles && meta.heavyBase
@@ -5279,6 +5279,30 @@ export default function Gis({
             setSelected(null)
             setFeaturePick(null)
           }}
+          action={
+            // In the header, where it is seen: the parcel into the CRM in one
+            // click, or straight to it when it is already there.
+            parcel && known ? (
+              known.place ? (
+                <button
+                  type="button"
+                  className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10"
+                  onClick={() => navigate(`/places/${known.place?.id}`)}
+                >
+                  In CRM ✓
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
+                  disabled={saving}
+                  onClick={addToCrm}
+                >
+                  {saving ? 'Saving…' : '+ Add to CRM'}
+                </button>
+              )
+            ) : null
+          }
           extra={
             parcel ? (
               <>
