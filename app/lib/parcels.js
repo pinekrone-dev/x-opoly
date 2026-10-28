@@ -1205,9 +1205,21 @@ export async function searchParcels(
   db,
   market,
   filters = {},
-  { limit = PAGE_SIZE, offset = 0, summary: given = undefined } = {},
+  { limit = PAGE_SIZE, offset = 0, summary: given = undefined, tally = null } = {},
 ) {
   await ensureParcelSchema(db)
+  // Every query below goes through here, so a caller holding a tally learns
+  // what the search read: the figure the database bills, not an estimate.
+  const all = async (statement, values) => {
+    if (!tally || typeof db.allMeta !== 'function') {
+      if (tally) tally.unknown = true
+      return db.all(statement, values)
+    }
+    const { rows: got, read } = await db.allMeta(statement, values)
+    if (read == null) tally.unknown = true
+    else tally.read += read
+    return got
+  }
   const summary = given === undefined ? await marketSummary(db, market) : given
   const { sql, params, from: source } = where(market, filters, {
     fts: Boolean(summary?.fts),
@@ -1228,7 +1240,7 @@ export async function searchParcels(
     const blank = summary.count - counted
     const byAsset = blank > 0 ? [...named, ['Unclassified', blank]] : named
     byAsset.sort((a, b) => b[1] - a[1])
-    const rows = await db.all(
+    const rows = await all(
       `SELECT ${ROW_COLUMNS} FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ? OFFSET ?`,
       [...params, page, from],
     )
@@ -1267,7 +1279,7 @@ export async function searchParcels(
      UNION ALL
      SELECT '', 0, 0, 0, (SELECT json_group_array(pid) FROM (SELECT pid FROM m LIMIT ?))`
   const wantIds = filtersActive(filters)
-  const both = await db.all(scan, [...params, wantIds ? MAX_HIGHLIGHT_IDS + 1 : 0])
+  const both = await all(scan, [...params, wantIds ? MAX_HIGHLIGHT_IDS + 1 : 0])
   const grouped = both.filter((row) => row.ids == null).sort((a, b) => Number(b.count) - Number(a.count))
   const count = grouped.reduce((sum, row) => sum + Number(row.count), 0)
   const total = grouped.reduce((sum, row) => sum + Number(row.total), 0)
@@ -1294,7 +1306,7 @@ export async function searchParcels(
     if (from + page <= held.length || held.length <= MAX_HIGHLIGHT_IDS) {
       const wanted = held.slice(from, from + page).map((row) => row.pid)
       const fetched = wanted.length
-        ? await db.all(
+        ? await all(
             `SELECT ${ROW_COLUMNS} FROM parcels WHERE market = ? AND pid IN (SELECT value FROM json_each(?))`,
             [market, JSON.stringify(wanted)],
           )
@@ -1304,7 +1316,7 @@ export async function searchParcels(
     }
   }
   if (!rows) {
-    rows = await db.all(
+    rows = await all(
       `SELECT ${ROW_COLUMNS} FROM ${source} WHERE ${sql} ORDER BY mv DESC LIMIT ? OFFSET ?`,
       [...params, page, from],
     )

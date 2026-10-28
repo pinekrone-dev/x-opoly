@@ -146,6 +146,12 @@ export function d1Adapter(d1) {
       return results ?? []
     },
 
+    /** The rows, and how many the database read to find them: what it bills. */
+    async allMeta(sql, params = []) {
+      const { results, meta } = await d1.prepare(sql).bind(...params).all()
+      return { rows: results ?? [], read: Number.isFinite(meta?.rows_read) ? meta.rows_read : null }
+    },
+
     async get(sql, params = []) {
       return (await d1.prepare(sql).bind(...params).first()) ?? null
     },

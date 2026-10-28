@@ -2642,14 +2642,32 @@ export default function Gis({
    * not worth querying six times while someone types an address. The delay is
    * short enough that the result still feels like typing.
    */
+  /*
+   * The answers already fetched this session, by market and filter.
+   * Ticking a box and unticking it, or stepping back through a filter, asks
+   * the same questions again; they are answered from here, with no request
+   * and nothing read from the store. Five minutes, the edge's own window.
+   */
+  const answered = useRef(new Map<string, { at: number; result: ParcelSearch }>())
   useEffect(() => {
     if (!active || !server?.ready) return undefined
+    const key = `${active}|${queryKey}`
+    const held = answered.current.get(key)
+    if (held && Date.now() - held.at < 5 * 60 * 1000) {
+      setFound(held.result)
+      setSearching(false)
+      return undefined
+    }
     let cancelled = false
     setSearching(true)
+    // Long enough that typing a price or an address asks once, when the
+    // typing stops, rather than once a keystroke.
     const timer = setTimeout(() => {
       api.parcels
         .search(active, serverQuery, { limit: 200 })
         .then((result) => {
+          if (answered.current.size > 60) answered.current.clear()
+          answered.current.set(key, { at: Date.now(), result })
           if (!cancelled) setFound(result)
         })
         .catch((cause: unknown) => {
@@ -2673,7 +2691,7 @@ export default function Gis({
         .finally(() => {
           if (!cancelled) setSearching(false)
         })
-    }, 220)
+    }, 400)
     return () => {
       cancelled = true
       clearTimeout(timer)
@@ -6175,6 +6193,8 @@ function AddressBar({
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
   const [hits, setHits] = useState<Record<string, string | number | null>[]>([])
+  // Suggestions already fetched, so backspacing over an address asks nothing.
+  const suggested = useRef(new Map<string, Record<string, string | number | null>[]>())
   const wanted = text.trim()
 
   useEffect(() => {
@@ -6187,17 +6207,26 @@ function AddressBar({
       setHits(rows.filter((row) => String(row.ad ?? '').toLowerCase().includes(needle)).slice(0, 6))
       return undefined
     }
+    const key = `${market}|${wanted.toLowerCase()}`
+    const held = suggested.current.get(key)
+    if (held) {
+      setHits(held)
+      return undefined
+    }
     let cancelled = false
     const timer = setTimeout(() => {
       api.parcels
         .search(market, { query: wanted }, { limit: 6 })
         .then((page) => {
-          if (!cancelled) setHits(page.rows as Record<string, string | number | null>[])
+          const got = page.rows as Record<string, string | number | null>[]
+          if (suggested.current.size > 200) suggested.current.clear()
+          suggested.current.set(key, got)
+          if (!cancelled) setHits(got)
         })
         .catch(() => {
           if (!cancelled) setHits([])
         })
-    }, 250)
+    }, 350)
     return () => {
       cancelled = true
       clearTimeout(timer)
