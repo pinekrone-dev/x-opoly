@@ -9,6 +9,8 @@
  * holds for Claude the way it holds for a browser.
  */
 
+import { fullAddress } from '../../src/lib/address.ts'
+
 export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
@@ -214,8 +216,10 @@ const PARCEL_FIELDS = {
 }
 
 /** A parcel row as Claude reads it: plain names, nothing blank. */
-export function readable(row = {}) {
+export function readable(row = {}, market = '') {
   const out = {}
+  const place = fullAddress(row, market)
+  if (place.full) out.fullAddress = place.full
   for (const [key, label] of Object.entries(PARCEL_FIELDS)) {
     const value = row[key]
     if (value !== null && value !== undefined && value !== '') out[label] = value
@@ -281,7 +285,7 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
         acreage: Math.round(Number(b.acreage) || 0),
         byAsset: Object.fromEntries((b.byAsset || []).slice(0, 12)),
         shown: (b.rows || []).length,
-        matches: (b.rows || []).slice(0, limit).map(readable),
+        matches: (b.rows || []).slice(0, limit).map((row) => readable(row, input.market)),
       })
     }
 
@@ -291,7 +295,7 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
       const answer = await ask(`/api/gis/parcel?${q}`)
       if (answer.status !== 200) return failure(refusal(answer))
       const parcel = answer.body.parcel || {}
-      const out = { parcel: { ...readable(parcel), details: parcel.rest ?? undefined } }
+      const out = { parcel: { ...readable(parcel, input.market), details: parcel.rest ?? undefined } }
       if (input.records !== false) {
         const records = await ask(`/api/gis/records?${q}`)
         if (records.status === 200 && records.body?.supported) {
@@ -344,7 +348,7 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: String(p.ad || `Parcel ${p.gid ?? input.id}`),
-          address: p.ad ?? null,
+          address: fullAddress(p, input.market).full || p.ad || null,
           acreage: p.ac ?? null,
           market: input.market,
           parcelId: String(input.id),
