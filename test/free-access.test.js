@@ -111,6 +111,12 @@ describe('free with an account', () => {
     assert.notEqual(statuses[0], 429)
     assert.notEqual(statuses[1], 429)
     assert.equal(statuses[2], 429)
+    // The map reading tiles by range is not a county taken whole: past the
+    // county-file limit, the parcel archive still answers its ranges.
+    for (let i = 0; i < 20; i += 1) {
+      const tile = await stranger('/catalog/austin-tx/parcels.pmtiles', { headers: { range: 'bytes=0-127' } })
+      assert.notEqual(tile.status, 429, `tile read ${i + 1}`)
+    }
   })
 
   test('signed out, the records stay shut', async () => {
