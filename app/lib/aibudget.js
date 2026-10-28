@@ -196,6 +196,16 @@ export const SCRAPE_LIMITS = {
   ROWS_PER_ADDRESS: 150000,
   // New accounts per address per day.
   SIGNUPS_PER_ADDRESS: 3,
+  /*
+   * Parcel rows a filtered search reads, per day: what D1 bills by. The
+   * plan includes 25 billion a month and charges $0.001 a million after,
+   * so the site's ceiling holds a month to about 60 billion even if every
+   * day were spent — some $35 over at the very worst. An account's is
+   * about two hundred filtered searches in Los Angeles, the largest county.
+   */
+  SCAN_ROWS_PER_ACCOUNT: 1_000_000_000,
+  SCAN_ROWS_PER_ADDRESS: 2_000_000_000,
+  SCAN_ROWS_PER_DAY: 2_000_000_000,
 }
 
 export function scrapeLimit(env = {}, name) {
