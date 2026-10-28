@@ -174,6 +174,9 @@ import {
   searchParcels,
   sealMarket,
   tagMarket,
+  tagOwners,
+  OWNER_TAG_BUDGET,
+  OWNER_TAG_MAX,
   listBoxes,
   parcelGrid,
   putBuildingTags,
@@ -194,6 +197,7 @@ import {
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
+import { OWNER_FILTERS } from '../src/lib/owners.ts'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
@@ -2618,6 +2622,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       zoningCodes: list('zn'),
       flood: ['in', 'out'].includes(c.req.query('flood')) ? c.req.query('flood') : null,
       buildings: ['vacant', 'built'].includes(c.req.query('bld')) ? c.req.query('bld') : null,
+      owners: list('own').filter((name) => OWNER_FILTERS.includes(name)),
       coverageMax: (() => {
         const v = Number(c.req.query('cov'))
         return c.req.query('cov') && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
@@ -2859,7 +2864,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         },
         429,
       )
-    const WRITES = new Set(['clear', 'drop', 'rows', 'building-tags', 'tag', 'reindex'])
+    const WRITES = new Set(['clear', 'drop', 'rows', 'building-tags', 'tag', 'owner-tag', 'reindex'])
     if (WRITES.has(action)) {
       const left = await room(db, env, 1)
       if (!left.ok) return overCap(left)
@@ -2965,6 +2970,21 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         })
         await charge(db, (step.changed ?? 0) * ROWS_PER.tag)
         return c.json({ market, flood: Boolean(flood), zoning: Boolean(zoning), ...step })
+      }
+      if (action === 'owner-tag') {
+        /*
+         * Read the next stretch of the market's records into the sale-year
+         * and mailing-state columns the owner filters use. Checked against
+         * the cap for the whole stretch before anything is read, because a
+         * stretch can write one row per parcel it reads.
+         */
+        const asked = Number(c.req.query('rows'))
+        const rows = Number.isFinite(asked) && asked > 0 ? Math.min(asked, OWNER_TAG_MAX) : OWNER_TAG_BUDGET
+        const left = await room(db, env, rows * ROWS_PER.owner)
+        if (!left.ok) return overCap(left)
+        const step = await tagOwners(parcelsFor(market), market, { budget: rows, reset: c.req.query('reset') === '1' })
+        await charge(db, (step.changed ?? 0) * ROWS_PER.owner)
+        return c.json({ market, ...step })
       }
       if (action === 'reindex') {
         // Mirror the market into the text index, a bounded step at a time.

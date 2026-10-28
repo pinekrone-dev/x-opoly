@@ -28,6 +28,8 @@
  */
 
 /** The searchable shape. Wide enough to filter, narrow enough to index. */
+import { mailingState, ownerClauses, saleYear } from '../../src/lib/owners.ts'
+
 export const PARCEL_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS parcels (
     market TEXT NOT NULL,
@@ -209,6 +211,20 @@ const PARCEL_ADDED_COLUMNS = [
   ['parcels', 'bh', 'REAL'],
   ['parcel_markets', 'btagged', 'INTEGER NOT NULL DEFAULT 0'],
   ['parcel_markets', 'btagged_at', 'TEXT'],
+  /*
+   * The owner's position, read once from the record by tagOwners so the
+   * owner filters are plain columns rather than JSON parsed per row: `sy`
+   * the year of the last sale, `ms` the state the owner's mail goes to
+   * (both NULL where the record does not say). Read in SQL from `rest`
+   * instead, Las Vegas took eight seconds and Phoenix would not finish.
+   * Not indexed, like the zoning and flood tags, so filling them costs one
+   * written row per parcel and a filter scans the market's rows.
+   */
+  ['parcels', 'sy', 'INTEGER'],
+  ['parcels', 'ms', 'TEXT'],
+  ['parcel_markets', 'otagged', 'INTEGER NOT NULL DEFAULT 0'],
+  ['parcel_markets', 'otag_cursor', 'INTEGER NOT NULL DEFAULT 0'],
+  ['parcel_markets', 'otagged_at', 'TEXT'],
 ]
 
 /*
@@ -437,6 +453,76 @@ export async function tagMarket(db, market, { check, budget = TAG_BUDGET, reset 
   const done = rows.length < cap
   if (done) await finish()
   return { checked: rows.length, changed: statements.length - 1, cursor: done ? null : last, done }
+}
+
+/** Parcels one owner-tagging request reads, by default, and at most. */
+export const OWNER_TAG_BUDGET = 5000
+export const OWNER_TAG_MAX = 20000
+
+/**
+ * Read the next stretch of a market's records for the owner filters: the
+ * sale year and the mailing state, by the rules in src/lib/owners.ts, into
+ * `sy` and `ms`.
+ *
+ * Walked in rowid order from a cursor the store keeps, like tagMarket, and
+ * written only where the answer differs from what the row holds: a parcel
+ * whose record carries neither a sale date nor a mailing ZIP costs a read
+ * and no write, which is most of Los Angeles. The pass that reaches the end
+ * marks the market, and that is what turns the filters on for it.
+ */
+export async function tagOwners(db, market, { budget = OWNER_TAG_BUDGET, reset = false, now = () => new Date() } = {}) {
+  await ensureParcelSchema(db)
+  const state = await db.get('SELECT n, otagged, otag_cursor FROM parcel_markets WHERE market = ?', [market])
+  if (!state || !Number(state.n)) return { checked: 0, changed: 0, cursor: null, done: true, missing: true }
+  if (!reset && Number(state.otagged) === 1 && !Number(state.otag_cursor)) {
+    return { checked: 0, changed: 0, cursor: null, done: true, already: true }
+  }
+  const cursor = reset ? 0 : Number(state.otag_cursor) || 0
+  const cap = Math.min(Math.max(1, Number(budget) || OWNER_TAG_BUDGET), OWNER_TAG_MAX)
+  const rows = await db.all(
+    'SELECT rowid AS r, rest, sy, ms FROM parcels WHERE market = ? AND rowid > ? ORDER BY rowid LIMIT ?',
+    [market, cursor, cap],
+  )
+  const finish = async () => {
+    await db.run('UPDATE parcel_markets SET otagged = 1, otag_cursor = 0, otagged_at = ? WHERE market = ?', [now().toISOString(), market])
+    forgetSummary(market)
+  }
+  if (!rows.length) {
+    await finish()
+    return { checked: 0, changed: 0, cursor: null, done: true }
+  }
+  const changes = []
+  for (const row of rows) {
+    let record = {}
+    try {
+      record = row.rest ? JSON.parse(row.rest) : {}
+    } catch {
+      /* unreadable extras: nothing to read the owner from */
+    }
+    const sy = saleYear({ ...record, sy: null })
+    const ms = mailingState(record.ma)
+    if (sy === (row.sy == null ? null : Number(row.sy)) && ms === (row.ms ?? null)) continue
+    changes.push([row.r, sy, ms])
+  }
+  const last = rows[rows.length - 1].r
+  // One statement for the whole stretch, the changes travelling as JSON
+  // (D1 allows a hundred bound parameters, not five thousand), and the
+  // cursor in the same batch so a request that dies re-reads the stretch
+  // rather than skipping it.
+  const statements = []
+  if (changes.length) {
+    statements.push([
+      `UPDATE parcels SET sy = j.value ->> 1, ms = j.value ->> 2
+         FROM json_each(?) AS j
+        WHERE parcels.rowid = j.value ->> 0 AND parcels.market = ?`,
+      [JSON.stringify(changes), market],
+    ])
+  }
+  statements.push(['UPDATE parcel_markets SET otag_cursor = ? WHERE market = ?', [last, market]])
+  await db.batch(statements)
+  const done = rows.length < cap
+  if (done) await finish()
+  return { checked: rows.length, changed: changes.length, cursor: done ? null : last, done }
 }
 
 /**
@@ -852,6 +938,8 @@ export async function marketSummary(db, market) {
           tagged: Number(row.tagged ?? 0) === 1,
           // And buildings, once the building pass has.
           btagged: Number(row.btagged ?? 0) === 1,
+          // And the owner filters, once tagOwners has been through.
+          otagged: Number(row.otagged ?? 0) === 1,
           taggedAt: row.tagged_at || null,
           btaggedAt: row.btagged_at || null,
         }
@@ -872,6 +960,8 @@ export function hydrate(row) {
   if ('bn' in row) out.bn = row.bn == null ? null : Number(row.bn)
   if ('ba' in row) out.ba = row.ba == null ? null : Number(row.ba)
   if ('bh' in row) out.bh = row.bh == null ? null : Number(row.bh)
+  if (row.sy != null) out.sy = Number(row.sy)
+  if (row.ms != null) out.ms = row.ms
   if (row.rest) {
     try {
       Object.assign(out, JSON.parse(row.rest))
@@ -893,7 +983,7 @@ export function hydrate(row) {
  * report — so they are three readings of this one predicate rather than three
  * queries that happen to look alike.
  */
-function where(market, filters = {}, { fts = false } = {}) {
+function where(market, filters = {}, { fts = false, owned = false } = {}) {
   const clauses = ['market = ?']
   const params = [market]
   /*
@@ -973,6 +1063,12 @@ function where(market, filters = {}, { fts = false } = {}) {
     clauses.push(filters.owner.kind === 'b' ? 'bo = ?' : 'po = ?')
     params.push(String(filters.owner.id))
   }
+
+  // How long they have held it, and where their mail goes: read from the
+  // sale date and mailing address the record carries (see owners.js).
+  const traits = ownerClauses(filters.owners || [], market, new Date(), { columns: owned })
+  clauses.push(...traits.clauses)
+  params.push(...traits.params)
   const q = (filters.query || '').trim().toLowerCase()
   if (q && fts) {
     const match = ftsQuery(q)
@@ -1003,6 +1099,7 @@ export function filtersActive(filters = {}) {
   if ((filters.query || '').trim()) return true
   if ((filters.assets || []).filter((a) => a !== '').length) return true
   if (filters.owner && filters.owner.id) return true
+  if ((filters.owners || []).length) return true
   if ((filters.zoningCategories || []).length || (filters.zoningNot || []).length || (filters.zoningCodes || []).length) return true
   if (filters.flood === 'in' || filters.flood === 'out') return true
   if (Array.isArray(filters.box) && filters.box.length === 4) return true
@@ -1020,7 +1117,7 @@ export function filtersActive(filters = {}) {
  * and what the whole matching set adds up to — the three things the panel
  * needs, from one predicate, in one round trip from the browser's side.
  */
-const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh'
+const ROW_COLUMNS = 'parcels.pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh, sy, ms'
 
 export async function searchParcels(
   db,
@@ -1030,7 +1127,10 @@ export async function searchParcels(
 ) {
   await ensureParcelSchema(db)
   const summary = given === undefined ? await marketSummary(db, market) : given
-  const { sql, params, from: source } = where(market, filters, { fts: Boolean(summary?.fts) })
+  const { sql, params, from: source } = where(market, filters, {
+    fts: Boolean(summary?.fts),
+    owned: Boolean(summary?.otagged),
+  })
   const page = Math.min(Math.max(Number(limit) || PAGE_SIZE, 1), 1000)
   const from = Math.max(Number(offset) || 0, 0)
 
@@ -1145,7 +1245,7 @@ export async function searchParcels(
 export async function getParcel(db, market, id) {
   await ensureParcelSchema(db)
   const row = await db.get(
-    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh
+    `SELECT pid, ad, ow, gid, at, sc, mv, ac, po, bo, w, s, e, n, rest, zc, zn, fz, bn, ba, bh, sy, ms
        FROM parcels WHERE market = ? AND pid = ?`,
     [market, String(id)],
   )
