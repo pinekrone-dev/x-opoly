@@ -19,6 +19,11 @@ on:
         required: false
         default: ''
 
+# Read-only: these deploy or probe with their own credentials and never
+# write to the repository with the workflow's token.
+permissions:
+  contents: read
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
