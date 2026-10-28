@@ -129,6 +129,10 @@ PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2,minneapolis-mn=PARCELS_2
 # writes. PARCEL_WRITES_SPENT declares a month already spent before the
 # ledger existed: October 2026 took the 91M re-tagging burst, so nothing
 # more is written to the parcel stores until November.
+# Free: an account, no payment. Turns the subscription gate off and keeps
+# self-serve signup open; the daily limits in app/lib/aibudget.js
+# (SCRAPE_LIMITS) and the row allowance are what stop a bulk scrape.
+FREE_ACCESS = "1"
 PARCEL_WRITE_CAP = "27000000"
 PARCEL_WRITES_SPENT = "2026-10=27000000"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
@@ -199,6 +203,7 @@ routes = []
 crons = []
 
 [env.staging.vars]
+FREE_ACCESS = "1"
 # Same reasoning as production above: Carto throttles anonymous use with
 # "API required" tiles served as 200s, so OSM is the free host that works.
 TILE_PROVIDER = "osm"

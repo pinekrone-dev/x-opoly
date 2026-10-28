@@ -88,8 +88,8 @@ export function MarketingHeader({
           </button>
           {selfServe ? (
             <button type="button" className="btn-primary whitespace-nowrap px-3.5 py-1.5" onClick={onGetStarted}>
-              <span className="sm:hidden">Free trial</span>
-              <span className="hidden sm:inline">Start free trial</span>
+              <span className="sm:hidden">Sign up free</span>
+              <span className="hidden sm:inline">Create free account</span>
             </button>
           ) : null}
         </nav>

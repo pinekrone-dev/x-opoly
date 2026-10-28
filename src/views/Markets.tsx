@@ -223,15 +223,14 @@ export default function Markets({
           </div>
 
           <div className="mt-16 rounded-xl border border-line bg-paper p-8 text-center">
-            <p className="text-lg font-semibold text-ink">Every market, one subscription</p>
+            <p className="text-lg font-semibold text-ink">Every market, free with an account</p>
             <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-muted">
-              $29 a month per workspace, teammates included, cancel any time. A market that is not here yet is
-              a note away.
+              No card, teammates included. A market that is not here yet is a note away.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {selfServe ? (
                 <button type="button" className="btn-primary px-5 py-2.5" onClick={onGetStarted}>
-                  Start a 14-day free trial
+                  Create a free account
                 </button>
               ) : null}
               <a className="btn border border-line-strong px-4 py-2.5 text-body hover:border-muted" href="mailto:kevin@realestateaistudio.com?subject=A%20market%20for%20Land%20Quotient">

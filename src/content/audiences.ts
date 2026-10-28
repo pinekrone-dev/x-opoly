@@ -162,7 +162,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     eyebrow: 'For investors and acquisitions',
     title: 'Find the owner before the listing exists',
     lede:
-      'The certified appraisal roll for ten markets, with every parcel’s owner of record, mailing address, assessed value and last deed date, grouped into the portfolios and back offices that actually hold them. Filter to your buy box, export the list, and work it in the CRM.',
+      'The certified appraisal roll for 30+ counties, with every parcel’s owner of record, mailing address, assessed value and last deed date, grouped into the portfolios and back offices that actually hold them. Filter to your buy box, export the list, and work it in the CRM.',
     stats: [
       { key: 'parcels', label: 'parcels on the map' },
       { key: 'value', label: 'of assessed value' },
@@ -240,7 +240,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     },
     included: [
       'Unlimited surveys and sites',
-      'Parcel maps for ten markets, owner of record where the county publishes it',
+      'Parcel maps for 30+ counties, owner of record where the county publishes it',
       'Zoning, permit and entitlement layers',
       'Census demographic choropleths',
       'AI flyer and listing extraction',
@@ -252,7 +252,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     meta: {
       title: 'Land Quotient for investors — find the owner before the listing exists',
       description:
-        'Owner of record, portfolios and mailing addresses from the county roll for ten markets, filtered to your buy box and exported. $29/month, teammates included.',
+        'Owner of record, portfolios and mailing addresses from the county roll for 30+ counties, filtered to your buy box and exported. Free with an account, teammates included.',
     },
   },
 
@@ -262,9 +262,9 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     eyebrow: 'For developers',
     title: 'See what can be built, what is being built, and who owns the dirt',
     lede:
-      'County parcel maps for ten markets with zoning districts, the permit and entitlement pipeline, flood zones and opportunity zones stacked as layers, and the assessor’s owner of record behind every parcel you click.',
+      'County parcel maps for 30+ counties with zoning districts, the permit and entitlement pipeline, flood zones and opportunity zones stacked as layers, and the assessor’s owner of record behind every parcel you click.',
     stats: [
-      { key: 'parcels', label: 'parcels across ten markets' },
+      { key: 'parcels', label: 'parcels across 30+ counties' },
       { key: 'zoning', label: 'zoning districts on the map' },
       { key: 'markets', label: 'markets, each one county’s own roll' },
     ],
@@ -344,13 +344,13 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
         },
         {
           q: 'Is the owner name always there?',
-          a: 'It is on eight of the ten markets. Orange County withholds it by written policy and New Jersey no longer publishes it; both carry the tax billing address instead.',
+          a: 'It is on most markets. Orange County withholds it by written policy and New Jersey no longer publishes it; both carry the tax billing address instead.',
         },
       ],
     },
     included: [
       'Unlimited surveys and sites',
-      'Parcel maps for ten markets, owner of record where the county publishes it',
+      'Parcel maps for 30+ counties, owner of record where the county publishes it',
       'Zoning, permit and entitlement layers',
       'Census demographic choropleths',
       'AI flyer and listing extraction',
@@ -362,7 +362,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     meta: {
       title: 'Land Quotient for developers — zoning, entitlements and the permit pipeline on one parcel map',
       description:
-        'What can be built, what is being built, and who owns the dirt. Zoning, permits, entitlements, flood and opportunity zones over the county roll for ten markets. $29/month.',
+        'What can be built, what is being built, and who owns the dirt. Zoning, permits, entitlements, flood and opportunity zones over the county roll for 30+ counties. Free with an account.',
     },
   },
 
@@ -449,7 +449,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     },
     included: [
       'Unlimited surveys and sites',
-      'Parcel maps for ten markets, owner of record where the county publishes it',
+      'Parcel maps for 30+ counties, owner of record where the county publishes it',
       'Zoning, permit and entitlement layers',
       'Census demographic choropleths',
       'AI flyer and listing extraction',
@@ -461,7 +461,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
     meta: {
       title: 'Land Quotient for investment sales brokers — every owner in your product type',
       description:
-        'The owners in your asset class ranked by what they hold, from the county roll, with your comps mapped against them. Ten markets, $29/month, teammates included.',
+        'The owners in your asset class ranked by what they hold, from the county roll, with your comps mapped against them. 30+ counties, free with an account, teammates included.',
     },
   },
 }

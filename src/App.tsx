@@ -209,7 +209,11 @@ export default function App() {
     const params = new URLSearchParams(window.location.search)
     const hasLinkToken = params.has('invite') || params.has('verify') || params.has('reset')
     const showLanding =
-      session.billing.configured && !session.setupRequired && !hasLinkToken && door === 'landing' && route.view !== 'billingReturn'
+      (session.billing.configured || Boolean(session.billing.free)) &&
+      !session.setupRequired &&
+      !hasLinkToken &&
+      door === 'landing' &&
+      route.view !== 'billingReturn'
 
     if (showLanding) {
       return (
@@ -232,7 +236,7 @@ export default function App() {
           setWelcoming(true)
           signedIn(user)
         }}
-        onBack={session.billing.configured && !session.setupRequired && !hasLinkToken ? () => setDoor('landing') : undefined}
+        onBack={(session.billing.configured || session.billing.free) && !session.setupRequired && !hasLinkToken ? () => setDoor('landing') : undefined}
       />
     )
   }

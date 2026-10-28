@@ -56,11 +56,12 @@ describe('public pages', () => {
     assert.deepEqual(built, [...PAGES].sort())
   })
 
-  test('the header links to the pricing page, which offers the trial', () => {
+  test('the header links to the pricing page, which offers the free account', () => {
     const chrome = fs.readFileSync('src/components/MarketingChrome.tsx', 'utf8')
     assert.ok(chrome.includes('href="/pricing"'))
     const page = fs.readFileSync('src/views/PricingPage.tsx', 'utf8')
-    assert.ok(page.includes('Start your {TRIAL_LINE}'))
+    assert.ok(page.includes('Create your free account'))
+    assert.ok(!/\$\d+|free trial/i.test(page), 'no price and no trial on a free product')
   })
 
   test('every preview card is a 1200x630 PNG', () => {
