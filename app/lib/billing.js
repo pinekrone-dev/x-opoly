@@ -48,6 +48,17 @@ export function stripeConfigured(env = {}) {
   return Boolean(secretKey(env))
 }
 
+/**
+ * Whether the product is free: an account, no payment. FREE_ACCESS turns
+ * the subscription gate off for everyone while leaving self-serve signup
+ * open (which otherwise exists only to sell subscriptions), so the account
+ * is the price of entry and the usage limits are what stop a scrape.
+ * Stripe keys can stay configured for the webhook and existing customers.
+ */
+export function freeAccess(env = {}) {
+  return ['1', 'true', 'yes'].includes(String(env.FREE_ACCESS ?? '').trim().toLowerCase())
+}
+
 export class BillingError extends Error {
   constructor(message) {
     super(message)

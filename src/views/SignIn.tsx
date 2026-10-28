@@ -278,8 +278,8 @@ export default function SignIn({
 
         {mode === 'signUp' ? (
           <p className="mb-4 rounded-lg border border-brand/30 bg-brand-tint p-3 text-xs leading-relaxed text-body">
-            Your own workspace for <strong className="text-ink">$29/month</strong>. Confirm your email,
-            add a card, and you are mapping sites in minutes.
+            Your own workspace, <strong className="text-ink">free</strong>. Confirm your email and you are
+            mapping sites in minutes. No card.
           </p>
         ) : null}
 

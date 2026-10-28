@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 
 import { AlsoOn, MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
-import PricingCard, { PRICE_LINE, TRIAL_LINE } from '../components/Pricing'
+import PricingCard, { LIMITS_LINE } from '../components/Pricing'
 
 /**
- * The pricing page: the one plan, the trial, and how leaving works.
+ * The pricing page: it is free with an account, and what the account comes with.
  *
  * Its own address so it can be linked and shared on its own, with its own
  * preview card, rather than as an anchor halfway down the landing page. The
@@ -14,7 +14,7 @@ import PricingCard, { PRICE_LINE, TRIAL_LINE } from '../components/Pricing'
 
 const INCLUDED = [
   'Unlimited market surveys, sites and tours',
-  'The parcel map: owners, zoning and permits in ten markets',
+  'The parcel map: owners, zoning and permits in 30+ counties',
   'CRM for deals, people, companies and places',
   'Census demographics around every site',
   'Client share links, tour books and PDFs',
@@ -23,28 +23,20 @@ const INCLUDED = [
 
 const QUESTIONS = [
   {
-    q: 'Do I need a card for the trial?',
-    a: 'Yes. A card is taken at the start so the product carries on without interruption when the trial ends. Nothing is charged for the first 14 days.',
+    q: 'Is it really free?',
+    a: 'Yes. Create an account and confirm your email. There is no card, no trial clock and no paid tier.',
   },
   {
-    q: 'When am I charged?',
-    a: `On the day the trial ends, then monthly after that: ${PRICE_LINE} a month for the workspace. We email you a week before the first charge.`,
+    q: 'Why do I need an account?',
+    a: 'The county records are the product. An account keeps them in the hands of people working deals rather than scripts copying them wholesale.',
   },
   {
-    q: 'How do I cancel?',
-    a: 'In Settings, with one button and one confirmation. No call and no retention flow. You keep access to the end of the trial or the month you have paid for, and a confirmation email follows.',
+    q: 'Are there limits?',
+    a: LIMITS_LINE,
   },
   {
-    q: 'Is there a per seat charge?',
-    a: 'No. One price per workspace, with your teammates included, and every feature is in it. There is no upsell tier.',
-  },
-  {
-    q: 'I have an invite code.',
-    a: 'Enter it on the payment step with "Have an invite code?". A code that covers the whole price needs no card at all.',
-  },
-  {
-    q: 'Can I come back after cancelling?',
-    a: 'Yes. Your surveys and records stay where you left them, and starting again is one checkout. The free trial is once per workspace.',
+    q: 'Can my team use it?',
+    a: 'Yes. Invite teammates from Settings as editors or view-only; they join your workspace at no cost.',
   },
 ]
 
@@ -58,7 +50,7 @@ export default function PricingPage({
   onGetStarted: () => void
 }) {
   useEffect(() => {
-    document.title = 'Land Quotient pricing: 14 days free, then $29 a month'
+    document.title = 'Land Quotient is free with an account'
   }, [])
 
   return (
@@ -85,10 +77,10 @@ export default function PricingPage({
           <div className="relative mx-auto max-w-5xl px-5 py-16 text-center sm:py-20">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand-soft">Pricing</p>
             <h1 className="mx-auto mt-3 max-w-2xl text-3xl font-bold leading-tight tracking-tight text-white sm:text-[2.6rem]">
-              One plan, everything in it. Try it free for 14 days.
+              Free. Everything in it. Just make an account.
             </h1>
             <p className="mx-auto mt-4 max-w-xl text-[15px] leading-relaxed text-slate-300">
-              {PRICE_LINE} a month per workspace after the trial, teammates included. Cancel any time in Settings.
+              No card, no trial clock, teammates included.
             </p>
             {selfServe ? (
               <button
@@ -96,7 +88,7 @@ export default function PricingPage({
                 className="btn mt-8 rounded-lg bg-brand px-6 py-3 text-white hover:bg-brand-soft hover:text-brand-night"
                 onClick={onGetStarted}
               >
-                Start your {TRIAL_LINE}
+                Create your free account
               </button>
             ) : null}
           </div>
@@ -108,7 +100,7 @@ export default function PricingPage({
 
         <section className="mx-auto max-w-5xl px-5 py-14">
           <h2 className="border-t border-line pt-5 font-mono text-[11px] uppercase tracking-[0.16em] text-brand">
-            The trial and your card
+            The free account
           </h2>
           <dl className="mt-6 grid gap-4 md:grid-cols-2">
             {QUESTIONS.map((item) => (
@@ -122,7 +114,7 @@ export default function PricingPage({
           {selfServe ? (
             <div className="mt-12 text-center">
               <button type="button" className="btn-primary px-6 py-3" onClick={onGetStarted}>
-                Start your {TRIAL_LINE}
+                Create your free account
               </button>
               <p className="mt-3 text-xs text-faint">
                 More questions? <a className="underline hover:text-body" href="/faq">Read the FAQ</a>.

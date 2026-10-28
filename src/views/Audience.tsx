@@ -113,7 +113,7 @@ export default function Audience({
                 className="btn rounded-lg bg-brand px-5 py-2.5 text-white hover:bg-brand-soft hover:text-brand-night"
                 onClick={primaryCta}
               >
-                {selfServe ? 'Start a 14-day free trial' : 'Sign in'}
+                {selfServe ? 'Create a free account' : 'Sign in'}
               </button>
               <a
                 className="btn rounded-lg border border-brand-edge px-4 py-2.5 text-slate-200 hover:border-brand-soft hover:text-brand-soft"

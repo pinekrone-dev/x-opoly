@@ -145,6 +145,7 @@ import {
   trialDays,
   trialEligible,
   verifyWebhook,
+  freeAccess,
 } from './lib/billing.js'
 import { SmsUnavailable, codeMessage, sendSms, smsConfigured } from './lib/sms.js'
 import { GeocodeError, geocode } from './lib/geocode.js'
@@ -185,7 +186,7 @@ import {
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
 import { liveMarkets, marketPage, sitemapXml } from './lib/marketPages.js'
-import { spend, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
+import { scrapeLimit, spend, spendCount, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
 import {
   FlyerExtractionError,
@@ -669,7 +670,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   }
 
   app.use('/api/*', async (c, next) => {
-    if (!stripeConfigured(env)) return next()
+    if (!stripeConfigured(env) || freeAccess(env)) return next()
     const user = c.get('user')
     if (!user) return next()
 
@@ -738,11 +739,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       setupRequired: !(await hasUsers()),
       smsConfigured: smsConfigured(env),
       billing: {
-        configured: stripeConfigured(env),
-        // Selling to strangers needs both halves: a way to charge them and a
-        // way to verify they own the email they signed up with.
-        selfServe: stripeConfigured(env) && emailConfigured(env),
-        publishableKey: publishableKey(env),
+        // Free: no paywall anywhere, and the public pages say so.
+        configured: stripeConfigured(env) && !freeAccess(env),
+        free: freeAccess(env),
+        // Opening signup to strangers needs a way to verify they own the
+        // email they signed up with, and a reason: a subscription to sell,
+        // or a free product whose account is the price of entry.
+        selfServe: (stripeConfigured(env) || freeAccess(env)) && emailConfigured(env),
+        publishableKey: freeAccess(env) ? null : publishableKey(env),
       },
     })
   })
@@ -778,13 +782,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           if (!redeemed.ok) return c.json({ error: redeemed.error }, 403)
           teamId = redeemed.teamId
           role = redeemed.role
-        } else if (!stripeConfigured(env) || !emailConfigured(env)) {
+        } else if (!(stripeConfigured(env) || freeAccess(env)) || !emailConfigured(env)) {
           // Self-serve signup exists to sell subscriptions. Without billing
           // there is nothing to sell, and without email sending the address
           // could never be verified — either way the door stays invite-only.
           return c.json({ error: 'Registration is closed on this instance.' }, 403)
         } else {
           selfServe = true
+          // A durable cap on new accounts from one address, so a free
+          // product cannot be scraped by opening accounts faster than the
+          // per-account limits close them.
+          const signups = await spendCount(db, {
+            key: `ip:${clientAddress(c)}`,
+            kind: 'signups',
+            cap: scrapeLimit(env, 'SIGNUPS_PER_ADDRESS'),
+          }).catch(() => ({ allowed: true }))
+          if (!signups.allowed) {
+            return c.json({ error: 'Too many new accounts from this network today. Try again tomorrow.', code: 'signup_limit' }, 429)
+          }
         }
       }
     }
@@ -1482,6 +1497,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     if (!ownsTeam(user)) return c.json({ error: 'Only the workspace owner can manage billing.' }, 403)
     if (!stripeConfigured(env)) return c.json({ error: 'Billing is not configured on this server.' }, 400)
+    if (freeAccess(env)) return c.json({ error: 'Land Quotient is free. There is nothing to pay for.', code: 'free' }, 400)
     try {
       const origin = new URL(c.req.url).origin
       const body = await c.req.json().catch(() => ({}))
@@ -2215,6 +2231,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (user) {
       const paying =
         !stripeConfigured(env) ||
+        freeAccess(env) ||
         (await teamIsExempt(user.teamId, user.email)) ||
         (await billingState(db, env, user.teamId).catch(() => ({ active: false }))).active
       if (paying) viewer = { id: user.id }
@@ -2247,6 +2264,29 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           ? limited(c, 'catalog-county', 6, 60 * 60 * 1000, viewer.id)
           : limited(c, 'catalog-file', 600, 60 * 60 * 1000, viewer.id)
       if (throttled) return throttled
+      /*
+       * A whole county file is the one thing on this route that is a
+       * county's worth of data in one answer, so it is also counted
+       * durably, per account and per address, for the day: the burst
+       * limiter above lives in one isolate and resets with it.
+       */
+      if (whole && !viewer.pipeline && viewer.id !== 'setup') {
+        const address = `ip:${clientAddress(c)}`
+        const mine = await spendCount(db, { key: `acct:${viewer.id}`, kind: 'county-files', cap: scrapeLimit(env, 'COUNTY_FILES_PER_ACCOUNT') }).catch(() => ({ allowed: true }))
+        const here = mine.allowed
+          ? await spendCount(db, { key: address, kind: 'county-files', cap: scrapeLimit(env, 'COUNTY_FILES_PER_ADDRESS') }).catch(() => ({ allowed: true }))
+          : mine
+        if (!here.allowed) {
+          c.header('Retry-After', String(here.retryAfterSeconds))
+          return c.json(
+            {
+              error: `You have opened ${here.cap} whole-county files today, the daily limit. It resets at midnight UTC.`,
+              code: 'county_files',
+            },
+            429,
+          )
+        }
+      }
     }
 
     /*
@@ -2730,13 +2770,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const user = c.get('user')
     if (!user || !(amount > 0)) return null
     if (await teamIsExempt(user.teamId, user.email)) return null
-    const verdict = await spendRows(db, { teamId: user.teamId, amount, env }).catch(() => ({ allowed: true }))
+    const workspace = await spendRows(db, { teamId: user.teamId, amount, env }).catch(() => ({ allowed: true }))
+    // And per address, across every workspace signed in from it, so ten
+    // free accounts on one machine read no more than an office would.
+    const verdict = workspace.allowed
+      ? await spendCount(db, { key: `ip:${clientAddress(c)}`, kind: 'rows', amount, cap: scrapeLimit(env, 'ROWS_PER_ADDRESS') }).catch(() => ({ allowed: true }))
+      : workspace
     if (verdict.allowed) return null
     c.header('Retry-After', String(verdict.retryAfterSeconds))
     return c.json(
       {
         error:
-          `This workspace has viewed its ${verdict.cap.toLocaleString()} parcel records for today. ` +
+          `${workspace.allowed ? 'This network' : 'This workspace'} has viewed its ${verdict.cap.toLocaleString()} parcel records for today. ` +
           'The allowance resets at midnight UTC. Write to us if you need more for a project.',
         code: 'row_budget',
       },

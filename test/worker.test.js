@@ -190,7 +190,7 @@ describe('the Cloudflare Worker', () => {
     assert.equal(og(app, 'og:url'), `${BASE}/survey/abc123`, 'not the home page')
 
     const page = (await call(env, '/pricing')).body
-    assert.equal(og(page, 'og:title'), '14 days free, then $29 a month', 'a public page is served as built')
+    assert.equal(og(page, 'og:title'), 'Free with an account', 'a public page is served as built')
     assert.equal(og(page, 'og:url'), `${BASE}/pricing`)
   })
 
