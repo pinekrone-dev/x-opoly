@@ -286,4 +286,8 @@ export const LAYER_ICONS = {
   forecasts: <><path d="M3 18l5-6 4 3 5-7" /><path d="M13 8h4v4" /><path d="M3 21h18" /></>,
   entitlements: <><path d="M6 3h9l4 4v14H6z" /><path d="M15 3v4h4" /><circle cx="12" cy="14" r="2.5" /><path d="M12 16.5V19" /></>,
   ships: <><path d="M3 14h18l-3 5H6z" /><path d="M6 14V9h12v5" /><path d="M12 9V4M9 6h6" /></>,
+  // A lightning bolt, for the grid: lines, substations, plants.
+  power: <><path d="M13 2L5 13h6l-1 9 8-11h-6z" /></>,
+  // A pylon, for the transmission lines themselves.
+  pylon: <><path d="M12 2L7 22M12 2l5 20M8.5 16h7M9.7 11h4.6M5 7h14" /></>,
 }
