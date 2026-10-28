@@ -2882,7 +2882,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         const parcel = await getParcel(parcelsFor(market), market, id).catch(() => null)
         if (!parcel) return notFound(c, 'No such parcel in that market.')
         const answer = await parcelRecords(market, parcel)
-        const complete = answer.sources.every((source) => !source.error)
+        const complete = answer.sources.every((source) => !source.error) && !answer.loans?.error
         return c.json(answer, 200, { 'x-records-complete': complete ? '1' : '0' })
       },
       {

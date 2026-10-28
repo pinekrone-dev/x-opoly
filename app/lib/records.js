@@ -513,8 +513,182 @@ export const SOURCES = {
   ],
 }
 
+/*
+ * Mortgages on record: the recorded instrument that secures a promissory
+ * note. The note itself is a private contract and is filed nowhere; the
+ * mortgage names the borrower (almost always who signed the note) and the
+ * lender, and a later satisfaction says it was paid off. Only cities that
+ * publish their recorder's index as open data are here — New York (ACRIS,
+ * keyed by borough, block and lot) and Philadelphia (the Records
+ * Department's transfer index, keyed by OPA account). Elsewhere the index
+ * is behind a portal or sold, and is not routed around.
+ *
+ * Each loan row: { id, date, type, amount, borrowers, lenders, satisfied,
+ * satisfiedOn }. `satisfied` is true when a satisfaction or release was
+ * recorded later naming the same lender, null when none was: a
+ * missing satisfaction is not proof the loan is open (lenders file them
+ * late, and a refinance can pay off through a consolidation instead).
+ */
+const PARTY_NOISE = /\b(THE|INC|LLC|L L C|LP|L P|LLP|CORP|CORPORATION|CO|COMPANY|N ?A|NATIONAL ASSOCIATION|FSB|ITS SUCCESSORS AND ASSIGNS|AS NOMINEE FOR)\b/g
+const partyKey = (name) =>
+  String(name ?? '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9 ]/g, ' ')
+    .replace(PARTY_NOISE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+export function sameParty(a, b) {
+  const x = partyKey(a)
+  const y = partyKey(b)
+  if (!x || !y) return false
+  if (x === y || x.includes(y) || y.includes(x)) return true
+  const head = (k) => k.split(' ').slice(0, 2).join(' ')
+  return head(x).length > 5 && head(x) === head(y)
+}
+
+/*
+ * Pair loans with their satisfactions. A satisfaction is the lender's
+ * document, so it is matched on the lender's name, never the borrower's: a
+ * borrower with three loans would otherwise see one payoff mark all three
+ * paid. Oldest loan first, and each satisfaction pays off one loan only.
+ */
+function settle(loans, releases) {
+  const used = new Set()
+  const byDate = (a, b) => String(a.date ?? '').localeCompare(String(b.date ?? ''))
+  const ordered = [...releases].sort(byDate)
+  for (const loan of [...loans].sort(byDate)) {
+    const match = ordered.find(
+      (r, i) =>
+        !used.has(i) &&
+        (!loan.date || !r.date || r.date >= loan.date) &&
+        r.parties.some((p) => loan.lenders.some((n) => sameParty(p, n))),
+    )
+    if (match) used.add(ordered.indexOf(match))
+    loan.satisfied = match ? true : null
+    loan.satisfiedOn = match?.date ?? null
+  }
+  return loans
+}
+
+const ACRIS_LOANS = new Set(['MTGE', 'M&CON', 'AGMT', 'SMTG'])
+const ACRIS_RELEASES = new Set(['SAT', 'PSAT'])
+const ACRIS_TYPES = { MTGE: 'Mortgage', 'M&CON': 'Mortgage and consolidation', AGMT: 'Mortgage agreement', SMTG: 'Subordinate mortgage' }
+const quoted = (ids) => ids.map((id) => `'${String(id).replace(/[^A-Za-z0-9_-]/g, '')}'`).join(',')
+
+export const LOANS = {
+  'new-york-ny': {
+    label: 'ACRIS mortgages',
+    by: 'BBL',
+    portal: 'https://a836-acris.nyc.gov/DS/DocumentSearch/BBL',
+    async read(parcel, fetcher) {
+      const key = bbl(parcel)
+      if (!key) return []
+      const legals = await getJson(
+        soda('data.cityofnewyork.us', '8h5j-fqxa', {
+          borough: key.boro,
+          block: String(Number(key.block)),
+          lot: String(Number(key.lot)),
+          $select: 'document_id',
+          $limit: '300',
+        }),
+        fetcher,
+      )
+      const ids = [...new Set(legals.map((r) => r.document_id).filter(Boolean))]
+      if (!ids.length) return []
+      const types = [...ACRIS_LOANS, ...ACRIS_RELEASES].map((t) => `'${t}'`).join(',')
+      const master = await getJson(
+        soda('data.cityofnewyork.us', 'bnx9-e6tj', {
+          $where: `document_id in (${quoted(ids)}) AND doc_type in (${types})`,
+          $select: 'document_id,doc_type,document_date,document_amt',
+          $limit: '200',
+        }),
+        fetcher,
+      )
+      if (!master.length) return []
+      const parties = await getJson(
+        soda('data.cityofnewyork.us', '636b-3b5g', {
+          $where: `document_id in (${quoted(master.map((r) => r.document_id))})`,
+          $select: 'document_id,party_type,name',
+          $limit: '1000',
+        }),
+        fetcher,
+      )
+      const named = new Map()
+      for (const p of parties) {
+        const entry = named.get(p.document_id) ?? { 1: [], 2: [] }
+        if (p.party_type === '1' || p.party_type === '2') entry[p.party_type].push(clean(p.name))
+        named.set(p.document_id, entry)
+      }
+      const loans = []
+      const releases = []
+      for (const r of master) {
+        const who = named.get(r.document_id) ?? { 1: [], 2: [] }
+        if (ACRIS_RELEASES.has(r.doc_type)) {
+          releases.push({ date: day(r.document_date), parties: [...who[1], ...who[2]].filter(Boolean) })
+          continue
+        }
+        loans.push({
+          id: r.document_id,
+          date: day(r.document_date),
+          type: ACRIS_TYPES[r.doc_type] ?? r.doc_type,
+          amount: Number(r.document_amt) > 0 ? Number(r.document_amt) : null,
+          // On an ACRIS mortgage, party 1 is the mortgagor (the borrower)
+          // and party 2 the mortgagee (the lender).
+          borrowers: [...new Set(who[1].filter(Boolean))],
+          lenders: [...new Set(who[2].filter(Boolean))],
+        })
+      }
+      return newestFirst(settle(loans, releases))
+    },
+  },
+
+  'philadelphia-pa': {
+    label: 'Recorded mortgages',
+    by: 'OPA account',
+    portal: 'https://epay.phila-records.com/phillyepay/web/',
+    async read(parcel, fetcher) {
+      const opa = digits(parcel.gid)
+      if (opa.length !== 9) return []
+      const sql = `SELECT document_id, document_type, grantors, grantees, document_date, recording_date
+        FROM rtt_summary WHERE opa_account_num = '${opa}'
+          AND document_type IN ('MORTGAGE', 'SATISFACTION OF MORTGAGE', 'RELEASE OF MORTGAGE')
+        ORDER BY recording_date DESC LIMIT 80`
+      const body = await getJson(`https://phl.carto.com/api/v2/sql?q=${encodeURIComponent(sql)}`, fetcher)
+      const split = (text) => String(text ?? '').split(/\s*;\s*|\s*\|\s*/).map(clean).filter(Boolean)
+      const loans = []
+      const releases = []
+      for (const r of body.rows ?? []) {
+        const date = day(r.document_date ?? r.recording_date)
+        if (r.document_type === 'MORTGAGE') {
+          // The index files a mortgage's mortgagor as grantor and the
+          // lender as grantee.
+          loans.push({ id: String(r.document_id), date, type: 'Mortgage', amount: null, borrowers: split(r.grantors), lenders: split(r.grantees) })
+        } else {
+          releases.push({ date, parties: [...split(r.grantors), ...split(r.grantees)] })
+        }
+      }
+      return newestFirst(settle(loans, releases))
+    },
+  },
+}
+
+/** Whether this market has a mortgage source. */
+export const loansSupported = (market) => Boolean(LOANS[market])
+
+/** One parcel's recorded mortgages, or null where the city publishes none. */
+export async function parcelLoans(market, parcel, { fetcher = fetch } = {}) {
+  const source = LOANS[market]
+  if (!source) return null
+  const base = { label: source.label, by: source.by, portal: source.portal }
+  try {
+    return { ...base, rows: await source.read(parcel, fetcher) }
+  } catch {
+    return { ...base, rows: [], error: 'could not be read just now' }
+  }
+}
+
 /** Whether this market has any permit or code-case source. */
-export const recordsSupported = (market) => Boolean(SOURCES[market])
+export const recordsSupported = (market) => Boolean(SOURCES[market] || LOANS[market])
 
 /**
  * Read every source for one parcel. Sources run at once, each with its own
@@ -522,6 +696,7 @@ export const recordsSupported = (market) => Boolean(SOURCES[market])
  */
 export async function parcelRecords(market, parcel, { fetcher = fetch } = {}) {
   const sources = SOURCES[market] ?? []
+  const loans = parcelLoans(market, parcel, { fetcher })
   const answers = await Promise.all(
     sources.map(async (source) => {
       const base = { kind: source.kind, label: source.label, by: source.by, portal: source.portal }
@@ -533,5 +708,5 @@ export async function parcelRecords(market, parcel, { fetcher = fetch } = {}) {
       }
     }),
   )
-  return { market, supported: sources.length > 0, sources: answers }
+  return { market, supported: sources.length > 0 || Boolean(LOANS[market]), sources: answers, loans: await loans }
 }
