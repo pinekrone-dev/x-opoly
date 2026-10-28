@@ -2239,7 +2239,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         freeAccess(env) ||
         (await teamIsExempt(user.teamId, user.email)) ||
         (await billingState(db, env, user.teamId).catch(() => ({ active: false }))).active
-      if (paying) viewer = { id: user.id }
+      // The operator's own team (and comped ones) read past the daily
+      // county-file limit, as they do past every other allowance.
+      if (paying) viewer = { id: user.id, exempt: await teamIsExempt(user.teamId, user.email).catch(() => false) }
     }
     if (catalogViewers.size > 5000) catalogViewers.clear()
     catalogViewers.set(token, { viewer, until: Date.now() + 60 * 1000 })
@@ -2277,7 +2279,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        */
       // A read by byte range is the map drawing tiles, not a county taken
       // whole: it has the range limiter above, and is never counted here.
-      if (whole && !ranged && !viewer.pipeline && viewer.id !== 'setup') {
+      if (whole && !ranged && !viewer.pipeline && !viewer.exempt && viewer.id !== 'setup') {
         const address = `ip:${clientAddress(c)}`
         const mine = await spendCount(db, { key: `acct:${viewer.id}`, kind: 'county-files', cap: scrapeLimit(env, 'COUNTY_FILES_PER_ACCOUNT') }).catch(() => ({ allowed: true }))
         const here = mine.allowed
