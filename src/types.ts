@@ -113,6 +113,8 @@ export interface TeamMember {
 /** What /api/auth/me says about billing, before anyone signs in. */
 export interface BillingConfig {
   configured: boolean
+  /** Free: an account, no payment, so no paywall and no checkout. */
+  free?: boolean
   selfServe: boolean
   publishableKey: string | null
 }

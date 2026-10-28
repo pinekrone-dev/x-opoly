@@ -26,7 +26,7 @@ const GROUPS = [
       },
       {
         q: 'What does it cost?',
-        a: 'Twenty nine dollars a month per workspace, with your teammates included. Every feature is in that price. There is no per seat charge and no upsell tier.',
+        a: 'Nothing. It is free with an account, teammates included, every feature in it. Fair-use limits (50,000 parcel records a day per workspace, exports of up to 5,000 rows) keep the county records from being copied in bulk.',
       },
       {
         q: 'Do I have to install anything?',
@@ -84,16 +84,8 @@ const GROUPS = [
         a: 'Your workspace and the people you invite into it. A survey is only visible outside that when you create a share link for it, and you can stop sharing at any point.',
       },
       {
-        q: 'Is there a free trial?',
-        a: 'Yes. Every new workspace gets 14 days free. A card is taken at the start so the product carries on without interruption, and nothing is charged until the trial ends. Cancel before then and you are never charged.',
-      },
-      {
-        q: 'Can I cancel?',
-        a: 'Any time, in Settings. No call, no retention flow. You keep access to the end of the period you have paid for, or the rest of your trial, and a confirmation email follows.',
-      },
-      {
-        q: 'How do I pay?',
-        a: 'By card at checkout, handled by Stripe. Promo codes are entered there. Card details never touch our own systems.',
+        q: 'Do I need a card?',
+        a: 'No. Create an account and confirm your email; there is nothing to pay and no trial that ends.',
       },
     ],
   },
@@ -172,12 +164,12 @@ export default function Faq({
           <div className="mt-16 rounded-xl border border-line bg-paper p-8 text-center">
             <p className="text-lg font-semibold text-ink">Ready to put a requirement on the map?</p>
             <p className="mx-auto mt-2 max-w-md text-[13px] leading-relaxed text-muted">
-              One plan, everything included, cancel any time.
+              Free with an account, everything included.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               {selfServe ? (
                 <button type="button" className="btn-primary px-5 py-2.5" onClick={onGetStarted}>
-                  Start a 14-day free trial
+                  Create a free account
                 </button>
               ) : null}
               <a className="btn border border-line-strong px-4 py-2.5 text-body hover:border-muted" href="/#how">

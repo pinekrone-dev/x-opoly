@@ -2,7 +2,7 @@
 
 > Land Quotient is a parcel map and site-selection tool for commercial real estate: every assessor parcel in a county on one map, with zoning, FEMA flood zones, building footprints and owner portfolios on each lot, and plain-English questions answered across the whole county.
 
-Land Quotient is built for commercial brokers, developers, investment-sales teams and investors who need to find sites and owners quickly. It is a paid web app (a free trial is available) at https://landquotient.com.
+Land Quotient is built for commercial brokers, developers, investment-sales teams and investors who need to find sites and owners quickly. It is a free web app (an account is required) at https://landquotient.com.
 
 ## What it does
 

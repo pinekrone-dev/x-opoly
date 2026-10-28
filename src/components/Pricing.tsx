@@ -5,10 +5,12 @@
  * and each page only chooses which included lines to list for its reader.
  */
 
-export const PRICE_LINE = '$29'
+/** Free with an account (FREE_ACCESS on the server): no card, no trial clock. */
+export const PRICE_LINE = 'Free'
 
-/** The trial every new workspace starts on; the server's TRIAL_DAYS default. */
-export const TRIAL_LINE = '14-day free trial'
+/** What the free account comes with, said once so every page says the same. */
+export const LIMITS_LINE =
+  'Fair-use limits keep the county records from being copied in bulk: 50,000 parcel records a day per workspace and exports of up to 5,000 rows at a time.'
 
 export default function PricingCard({
   included,
@@ -26,11 +28,8 @@ export default function PricingCard({
       <div className="overflow-hidden rounded-xl border border-line shadow-xl shadow-slate-900/10">
         <div className="bg-brand-night p-7 text-center">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand-soft">Land Quotient</p>
-          <p className="mt-3 text-5xl font-bold tracking-tight text-white">
-            {PRICE_LINE}
-            <span className="text-base font-medium text-slate-400"> / month</span>
-          </p>
-          <p className="mt-2 text-xs text-slate-400">per workspace, teammates included</p>
+          <p className="mt-3 text-5xl font-bold tracking-tight text-white">{PRICE_LINE}</p>
+          <p className="mt-2 text-xs text-slate-400">with an account, teammates included, no card</p>
         </div>
         <ul className="space-y-3 bg-surface p-7 text-sm text-body">
           {included.map((line) => (
@@ -55,11 +54,10 @@ export default function PricingCard({
           {selfServe ? (
             <>
               <button type="button" className="btn-primary w-full py-3" onClick={onGetStarted}>
-                Start your {TRIAL_LINE}
+                Create your free account
               </button>
               <p className="mt-3 text-center text-[11px] leading-relaxed text-faint">
-                Create your account, confirm your email, and add a card. Nothing is charged until the trial ends,
-                then {PRICE_LINE}/month. Cancel any time in Settings. Powered by Stripe.
+                Create your account and confirm your email. That is all. {LIMITS_LINE}
               </p>
             </>
           ) : (

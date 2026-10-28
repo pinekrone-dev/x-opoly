@@ -160,3 +160,45 @@ export async function spendRows(db, { teamId, amount, env, now = Date.now() }) {
   const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
   return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
 }
+
+/**
+ * A durable daily counter for anything: rows served to an address, whole
+ * county files to an account. Kept in ai_usage beside the AI and row
+ * budgets, keyed by whatever `key` names ("ip:203.0.113.4", a team id), so
+ * a limit holds across every isolate and data centre rather than per
+ * isolate the way the burst limiter does.
+ */
+export async function spendCount(db, { key, kind, amount = 1, cap, now = Date.now() }) {
+  if (!key || !(amount > 0) || !(cap > 0)) return { allowed: true, cap, used: 0 }
+  const day = today(now)
+  const row = await db.get(
+    `INSERT INTO ai_usage (team_id, day, kind, count) VALUES (?, ?, ?, ?)
+     ON CONFLICT(team_id, day, kind) DO UPDATE SET count = count + excluded.count
+     RETURNING count`,
+    [String(key), day, kind, Math.ceil(amount)],
+  )
+  const used = Number(row?.count ?? amount)
+  if (used <= cap) return { allowed: true, cap, used }
+  const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
+  return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
+}
+
+/** The scraping limits, each overridable by an env var of the same name. */
+export const SCRAPE_LIMITS = {
+  // Whole county files (index, details, the full archive) per account per
+  // day. A broker opens a market once a session; a county is two files.
+  COUNTY_FILES_PER_ACCOUNT: 12,
+  // And per network address, which is what makes a stack of free accounts
+  // on one machine no faster than one.
+  COUNTY_FILES_PER_ADDRESS: 30,
+  // Parcel records served per address per day, across every workspace
+  // signed in from it. An office on one NAT is several workspaces' worth.
+  ROWS_PER_ADDRESS: 150000,
+  // New accounts per address per day.
+  SIGNUPS_PER_ADDRESS: 3,
+}
+
+export function scrapeLimit(env = {}, name) {
+  const n = Number(env[name])
+  return Number.isFinite(n) && n > 0 ? n : SCRAPE_LIMITS[name]
+}

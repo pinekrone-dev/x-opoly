@@ -181,7 +181,7 @@ ul{padding-left:20px}dt{font-weight:600;color:var(--ink);margin-top:12px}dd{marg
 <div class="crumb"><a href="/markets">Markets</a> / ${escapeHtml(name)}</div>
 <h1>${escapeHtml(name)} parcel map</h1>
 <p class="lede">${escapeHtml(blurb || `Every parcel in ${region} on one map, with the county's own record on each lot.`)}</p>
-<div class="cta"><a class="btn primary" href="/gis/${escapeHtml(market.slug)}">Open the ${escapeHtml(name)} map</a><a class="btn ghost" href="/pricing">Start a 14-day free trial</a></div>
+<div class="cta"><a class="btn primary" href="/gis/${escapeHtml(market.slug)}">Open the ${escapeHtml(name)} map</a><a class="btn ghost" href="/pricing">Create a free account</a></div>
 </div></div>
 <main>
 <div class="stats">
