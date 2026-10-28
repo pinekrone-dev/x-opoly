@@ -188,6 +188,8 @@ export const SCRAPE_LIMITS = {
   // Whole county files (index, details, the full archive) per account per
   // day. A broker opens a market once a session; a county is two files.
   COUNTY_FILES_PER_ACCOUNT: 12,
+  // And in any one hour, so a day's allowance is not spent in a minute.
+  COUNTY_FILES_PER_HOUR: 6,
   // And per network address, which is what makes a stack of free accounts
   // on one machine no faster than one.
   COUNTY_FILES_PER_ADDRESS: 30,
