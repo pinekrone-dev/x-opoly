@@ -679,3 +679,31 @@ export interface AskAnswer {
   page?: { size: number; offset: number; next: number | null; total: number | null } | null
   truncated?: string | null
 }
+
+/** One permit or code case, as the city's open data has it. */
+export interface CityRecord {
+  id: string | null
+  date: string | null
+  type: string | null
+  status: string | null
+  open: boolean
+  description: string | null
+}
+
+/** One city dataset's answer for a parcel. */
+export interface CityRecordSource {
+  kind: 'permit' | 'case'
+  label: string
+  /** How the parcel was matched: its id ("BBL", "APN") or its street address. */
+  by: string
+  portal: string
+  rows: CityRecord[]
+  open: number
+  error?: string
+}
+
+export interface ParcelRecords {
+  market: string
+  supported: boolean
+  sources: CityRecordSource[]
+}

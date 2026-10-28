@@ -1,4 +1,4 @@
-import type { BookStyle,
+import type { ParcelRecords, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -356,6 +356,12 @@ export const api = {
       if (page.offset) params.set('offset', String(page.offset))
       return request<ParcelSearch>(`/api/gis/parcels?${params.toString()}`)
     },
+
+    /** A parcel's permits and code cases, from the city's own open data. */
+    records: (market: string, id: string | number) =>
+      request<ParcelRecords>(
+        `/api/gis/records?market=${encodeURIComponent(market)}&id=${encodeURIComponent(String(id))}`,
+      ),
 
     /** One parcel, whole, for the card. */
     one: (market: string, id: string | number) =>
