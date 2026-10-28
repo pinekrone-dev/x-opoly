@@ -198,7 +198,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
       },
       {
         title: 'Bring your comps and shade the map by value',
-        body: 'Paste a CSV or JSON of sales and listings and they plot as their own layer with price, cap rate, price per square foot and sale date. Assessor shading colours every parcel by asset type or value, and census demographics shade the tracts around it.',
+        body: 'Paste a CSV or JSON of sales and listings and they plot as their own layer with price, cap rate, price per square foot and sale date. Land use colours shade every parcel by asset type or value, and census demographics shade the tracts around it.',
         shot: SHOTS.legend,
       },
     ],
@@ -402,7 +402,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
       },
       {
         title: 'Map the comps against the roll',
-        body: 'Paste your sales and listings as CSV or JSON and they plot as their own layer with price, cap rate and price per square foot. Assessor shading beside them shows which owners are sitting on an assessed value that the comps have already passed.',
+        body: 'Paste your sales and listings as CSV or JSON and they plot as their own layer with price, cap rate and price per square foot. Land use colours beside them show which owners are sitting on an assessed value that the comps have already passed.',
         shot: SHOTS.legend,
       },
       {
