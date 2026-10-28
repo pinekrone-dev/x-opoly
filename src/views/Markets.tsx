@@ -13,7 +13,7 @@ import { compact, fetchMarkets, money, totals, type Market } from '../lib/catalo
  */
 
 /** Published for every market from national sources (prospector layer_sources.NATIONAL). */
-const POWER = ['Transmission lines', 'Substations', 'Power plants']
+const POWER = ['Transmission lines', 'Substations', 'Power plants', 'Underground fuel tanks', 'Leaking fuel tanks']
 
 /** What each market publishes on top of the roll, as the catalogue lists it. */
 const OVERLAYS: Record<string, string[]> = {
