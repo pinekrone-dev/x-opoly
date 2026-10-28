@@ -2275,7 +2275,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * durably, per account and per address, for the day: the burst
        * limiter above lives in one isolate and resets with it.
        */
-      if (whole && !viewer.pipeline && viewer.id !== 'setup') {
+      // A read by byte range is the map drawing tiles, not a county taken
+      // whole: it has the range limiter above, and is never counted here.
+      if (whole && !ranged && !viewer.pipeline && viewer.id !== 'setup') {
         const address = `ip:${clientAddress(c)}`
         const mine = await spendCount(db, { key: `acct:${viewer.id}`, kind: 'county-files', cap: scrapeLimit(env, 'COUNTY_FILES_PER_ACCOUNT') }).catch(() => ({ allowed: true }))
         const here = mine.allowed
@@ -2773,7 +2775,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   app.get('/api/gis/extents', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    return edgeCached(c, 'extents', 6 * 60 * 60, async () => {
+    // Versioned, and an empty answer is never kept: a deployment with no
+    // bucket bound once cached "no counties" for six hours.
+    return edgeCached(c, 'extents-v2', 6 * 60 * 60, async () => {
       const listed = await catalogJson('markets.json').catch(() => null)
       const markets = (Array.isArray(listed) ? listed : listed?.markets ?? []).filter((m) => m?.status === 'live')
       const extents = await Promise.all(
@@ -2788,8 +2792,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           }
         }),
       )
-      return c.json({ extents: extents.filter(Boolean) })
-    })
+      const found = extents.filter(Boolean)
+      return c.json({ extents: found }, 200, { 'x-extents-count': String(found.length) })
+    }, { cacheable: (res) => res.status === 200 && Number(res.headers.get('x-extents-count')) > 0 })
   })
 
   /*
