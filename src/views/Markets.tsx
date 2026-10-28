@@ -12,6 +12,9 @@ import { compact, fetchMarkets, money, totals, type Market } from '../lib/catalo
  * map does not have.
  */
 
+/** Published for every market from national sources (prospector layer_sources.NATIONAL). */
+const POWER = ['Transmission lines', 'Substations', 'Power plants']
+
 /** What each market publishes on top of the roll, as the catalogue lists it. */
 const OVERLAYS: Record<string, string[]> = {
   'austin-tx': ['Zoning', 'Permits', 'Entitlements', 'Road projects', 'Opportunity zones', 'Schools'],
@@ -205,7 +208,7 @@ export default function Markets({
                         {f.l}
                       </span>
                     ))}
-                    {(OVERLAYS[m.slug] ?? []).map((o) => (
+                    {[...(OVERLAYS[m.slug] ?? []), ...POWER].map((o) => (
                       <span key={o} className="rounded-full border border-line px-2.5 py-0.5 text-[11px] text-body">
                         {o}
                       </span>
