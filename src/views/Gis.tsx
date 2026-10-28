@@ -23,6 +23,7 @@ import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buil
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 import { csvCell } from '../lib/csv'
 import { safeHtml } from '../lib/safeHtml'
+import { fullAddress, zipPlaces } from '../lib/address'
 import { countyCounts, describeMismatch, listingCounts, mismatches, readCount } from '../lib/listingCheck'
 import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
 import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
@@ -933,8 +934,13 @@ const GIS_TIPS: Coachmark[] = [
 /** The columns worth handing to someone else, in the order they read. */
 const CSV_COLUMNS: [string, string][] = [
   ['gid', 'Parcel'],
-  ['ad', 'Address'],
-  ['zp', 'ZIP'],
+  // The whole address first, ready for a letter or a CRM; then its parts
+  // for a mail merge. Worked out in lib/address from the record and the ZIP.
+  ['__full', 'Full address'],
+  ['ad', 'Street'],
+  ['__city', 'City'],
+  ['__state', 'State'],
+  ['__zip', 'ZIP'],
   ['ow', 'Owner of record'],
   ['ma', 'Owner mailing address'],
   ['at', 'Asset type'],
@@ -1010,18 +1016,29 @@ const HOLDINGS_SHOWN = 200
  * and legal names contain commas, so anything less loses a column halfway
  * down a file nobody re-reads.
  */
-function exportCsv(rows: Record<string, string | number | null>[], slug: string) {
+async function exportCsv(rows: Record<string, string | number | null>[], slug: string) {
   const cell = csvCell
+  const table = await zipPlaces()
   const header = [...CSV_COLUMNS.map(([, label]) => label), ...CSV_OWNER_COLUMNS].join(',')
   const body = rows
-    .map((row) =>
-      [
+    .map((row) => {
+      const place = fullAddress(row, slug, table)
+      const computed: Record<string, string> = { __full: place.full, __city: place.city, __state: place.state, __zip: place.zip }
+      return [
         ...CSV_COLUMNS.map(([key]) =>
-          cell(key === 'fz' ? floodWords(row[key]) : key === 'bn' || key === 'ba' || key === 'bh' ? buildingCell(key, row[key]) : row[key] ?? null),
+          cell(
+            key in computed
+              ? computed[key]
+              : key === 'fz'
+                ? floodWords(row[key])
+                : key === 'bn' || key === 'ba' || key === 'bh'
+                  ? buildingCell(key, row[key])
+                  : row[key] ?? null,
+          ),
         ),
         ...ownerCells(row, slug).map((value) => cell(value)),
-      ].join(','),
-    )
+      ].join(',')
+    })
     .join('\n')
   const blob = new Blob([`${header}\n${body}\n`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -3146,7 +3163,7 @@ export default function Gis({
   const exportRows = async () => {
     if (!active || exporting) return
     if (!server?.ready) {
-      exportCsv((filtered ?? rows).slice(0, CSV_LIMIT), active)
+      await exportCsv((filtered ?? rows).slice(0, CSV_LIMIT), active)
       return
     }
     setExporting(true)
@@ -3161,7 +3178,7 @@ export default function Gis({
         if (!page.rows.length) break
         collected.push(...(page.rows as Record<string, string | number | null>[]))
       }
-      exportCsv(collected.slice(0, want), active)
+      await exportCsv(collected.slice(0, want), active)
     } catch {
       setError('Could not collect the rows for that export.')
     } finally {
@@ -3961,10 +3978,13 @@ export default function Gis({
     if (!parcel || !active || selected == null) return
     setSaving(true)
     try {
+      // The whole address, town and state included, and the property's ZIP,
+      // never the owner's (lib/address).
+      const place = fullAddress(parcel, active, await zipPlaces())
       const { record } = await api.crm.create<Place>('places', {
         name: String(parcel.ad || `Parcel ${parcel.gid ?? selected}`),
-        address: parcel.ad ?? null,
-        zip: parcel.zp ?? null,
+        address: place.full || parcel.ad || null,
+        zip: place.zip || null,
         acreage: parcel.ac ?? null,
         market: active,
         parcelId: String(selected),
@@ -5122,7 +5142,12 @@ export default function Gis({
                 </div>
                 <p className="text-[11px] leading-snug text-faint">
                   Figures are the county's own, reproduced rather than estimated. An assessed
-                  value is a tax figure, not a market appraisal.
+                  value is a tax figure, not a market appraisal. Towns for exported addresses come
+                  from the property's ZIP, by{' '}
+                  <a className="underline" href="https://www.geonames.org" target="_blank" rel="noopener noreferrer">
+                    GeoNames
+                  </a>{' '}
+                  (CC BY 4.0).
                 </p>
               </>
             )}
