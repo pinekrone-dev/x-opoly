@@ -148,17 +148,7 @@ export function rowBudget(env = {}) {
 export async function spendRows(db, { teamId, amount, env, now = Date.now() }) {
   const cap = rowBudget(env)
   if (!teamId || !(amount > 0)) return { allowed: true, cap, used: 0 }
-  const row = await db.get(
-    `INSERT INTO ai_usage (team_id, day, kind, count) VALUES (?, ?, 'rows', ?)
-     ON CONFLICT(team_id, day, kind) DO UPDATE SET count = count + excluded.count
-     RETURNING count`,
-    [teamId, today(now), Math.ceil(amount)],
-  )
-  const used = Number(row?.count ?? amount)
-  if (used <= cap) return { allowed: true, cap, used }
-  const day = today(now)
-  const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
-  return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
+  return metered(db, { key: teamId, kind: 'rows', amount, cap, now })
 }
 
 /**
@@ -170,17 +160,91 @@ export async function spendRows(db, { teamId, amount, env, now = Date.now() }) {
  */
 export async function spendCount(db, { key, kind, amount = 1, cap, now = Date.now() }) {
   if (!key || !(amount > 0) || !(cap > 0)) return { allowed: true, cap, used: 0 }
-  const day = today(now)
+  return metered(db, { key: String(key), kind, amount, cap, now })
+}
+
+/*
+ * The counters, written in batches.
+ *
+ * Every search used to write its counters straight away: the workspace's
+ * rows, the address's rows, and for a filtered search the rows it read,
+ * three times over. Five database writes for one look at the map, which is
+ * more than the search itself costs, and writes are what the database bills
+ * for. So each isolate keeps a running tally and writes it every minute, or
+ * every twentieth of the allowance, whichever comes first; it reads the
+ * stored count once a minute to see what other isolates have added.
+ *
+ * Two places still write every time. Near an allowance, where isolates have
+ * to agree on the count for the refusal to land where it should; and for
+ * small allowances (three signups an address, a dozen county files), where
+ * a minute's slack would be most of the limit. An isolate recycled with a
+ * tally unwritten loses at most a minute or a twentieth of an allowance,
+ * which is the price of not paying a write per click.
+ */
+const TALLY_MS = 60 * 1000
+const tallies = new WeakMap()
+
+function tallyFor(db) {
+  let held = tallies.get(db)
+  if (!held) {
+    held = new Map()
+    tallies.set(db, held)
+  }
+  return held
+}
+
+async function addStored(db, key, day, kind, amount) {
   const row = await db.get(
     `INSERT INTO ai_usage (team_id, day, kind, count) VALUES (?, ?, ?, ?)
      ON CONFLICT(team_id, day, kind) DO UPDATE SET count = count + excluded.count
      RETURNING count`,
-    [String(key), day, kind, Math.ceil(amount)],
+    [key, day, kind, Math.ceil(amount)],
   )
-  const used = Number(row?.count ?? amount)
-  if (used <= cap) return { allowed: true, cap, used }
-  const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
-  return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
+  return Number(row?.count ?? amount)
+}
+
+async function metered(db, { key, kind, amount, cap, now }) {
+  const day = today(now)
+  const verdict = (used) => {
+    if (used <= cap) return { allowed: true, cap, used }
+    const resets = Math.ceil((new Date(day).getTime() + DAY_MS - now) / 1000)
+    return { allowed: false, cap, used, retryAfterSeconds: Math.max(60, resets) }
+  }
+  const held = tallyFor(db)
+  if (held.size > 20000) held.clear()
+  const id = `${key}|${day}|${kind}`
+  let entry = held.get(id)
+  if (cap < 1000) {
+    // Written every time, with anything this isolate was still holding.
+    const used = await addStored(db, key, day, kind, amount + (entry?.pending ?? 0))
+    held.set(id, { stored: used, pending: 0, readAt: now, writtenAt: now })
+    return verdict(used)
+  }
+  if (!entry || now - entry.readAt > TALLY_MS) {
+    const row = await db.get('SELECT count FROM ai_usage WHERE team_id = ? AND day = ? AND kind = ?', [key, day, kind])
+    entry = { stored: Number(row?.count ?? 0), pending: entry?.pending ?? 0, readAt: now, writtenAt: entry?.writtenAt ?? now }
+    held.set(id, entry)
+  }
+  const after = entry.stored + entry.pending + amount
+  const near = after > cap * 0.8
+  entry.pending += amount
+  if (near || entry.pending >= cap / 20 || now - entry.writtenAt > TALLY_MS) {
+    entry.stored = await addStored(db, key, day, kind, entry.pending)
+    entry.pending = 0
+    entry.readAt = now
+    entry.writtenAt = now
+  }
+  return verdict(entry.stored + entry.pending)
+}
+
+/** Whether a counter is already past its cap, without adding to it: a read. */
+export async function overCount(db, { key, kind, cap, now = Date.now() }) {
+  if (!key || !(cap > 0)) return false
+  const day = today(now)
+  const entry = tallyFor(db).get(`${key}|${day}|${kind}`)
+  if (entry && now - entry.readAt <= TALLY_MS) return entry.stored + entry.pending > cap
+  const row = await db.get('SELECT count FROM ai_usage WHERE team_id = ? AND day = ? AND kind = ?', [String(key), day, kind])
+  return Number(row?.count ?? 0) > cap
 }
 
 /** The scraping limits, each overridable by an env var of the same name. */
