@@ -173,3 +173,32 @@ describe('a circle drawn for the Ask panel', () => {
     assert.deepEqual(readCircle({ lat: 33.5, lng: -112, miles: 5 }), { lat: 33.5, lng: -112, miles: 5 })
   })
 })
+
+describe('criteria joined by all or some', () => {
+  let db
+  const P = (id, at, mv, ac) => ({ id, ad: `${id} Main St`, at, mv, ac, bb: [-112.0005, 33.4995, -111.9995, 33.5005] })
+  before(async () => {
+    db = nodeAdapter(new DatabaseSync(':memory:'))
+    await db.migrate()
+    await putParcels(db, 'phoenix-az', [P(1, 'Land', 100, 10), P(2, 'Land', 5000, 1), P(3, 'Retail', 100, 1), P(4, 'Retail', 5000, 10)])
+    await sealMarket(db, 'phoenix-az', { keys: ['id', 'ad', 'mv', 'ac'] })
+  })
+  const ids = async (filters) => (await searchParcels(db, 'phoenix-az', filters)).ids.map(Number).sort()
+
+  test('all: every criterion; some: any one of them', async () => {
+    const criteria = { assets: ['Land'], acresMin: 5 }
+    assert.deepEqual(await ids(criteria), [1])
+    assert.deepEqual(await ids({ ...criteria, match: 'any' }), [1, 2, 4])
+  })
+
+  test('a value range is one criterion, not two', async () => {
+    assert.deepEqual(await ids({ valueMin: 50, valueMax: 200, assets: ['Retail'], match: 'any' }), [1, 3, 4])
+  })
+
+  test('the circle is scope: outside it is out whichever way the criteria join', async () => {
+    const far = { lat: 40, lng: -100, miles: 1 }
+    assert.equal((await searchParcels(db, 'phoenix-az', { assets: ['Land'], acresMin: 5, match: 'any', circle: far })).count, 0)
+    const near = { lat: 33.5, lng: -112, miles: 1 }
+    assert.deepEqual(await ids({ assets: ['Land'], acresMin: 5, match: 'any', circle: near }), [1, 2, 4])
+  })
+})

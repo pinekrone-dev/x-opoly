@@ -585,6 +585,8 @@ export interface ParcelQuery {
   owners?: OwnerFilter[]
   /** A circle drawn in the Ask panel. */
   circle?: AskCircle | null
+  /** Meet every criterion (the default), or any one of them. */
+  match?: 'all' | 'any'
 }
 
 /** A circle drawn on the map for the Ask panel: centre and radius in miles (at most 20). */

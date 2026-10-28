@@ -997,20 +997,24 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
    */
   let from = 'parcels'
 
+  /*
+   * The criteria: what a parcel has to be. Each is one parenthesised test
+   * with its own parameters, kept apart from the scope (the market, the
+   * area, the holder, the text) so that "some" can join them with OR — a
+   * parcel meeting any one of them — while "all", the default, joins them
+   * with AND like every other clause.
+   */
+  const criteria = []
+  const criterion = (sql, ...values) => criteria.push({ sql, params: values })
+
   const assets = (filters.assets || []).filter((a) => a !== '')
-  if (assets.length) {
-    clauses.push(`at IN (${assets.map(() => '?').join(',')})`)
-    params.push(...assets)
-  }
+  if (assets.length) criterion(`at IN (${assets.map(() => '?').join(',')})`, ...assets)
   const range = (column, min, max) => {
-    if (min != null && Number.isFinite(min)) {
-      clauses.push(`${column} >= ?`)
-      params.push(min)
-    }
-    if (max != null && Number.isFinite(max)) {
-      clauses.push(`${column} <= ?`)
-      params.push(max)
-    }
+    const lo = min != null && Number.isFinite(min)
+    const hi = max != null && Number.isFinite(max)
+    if (lo && hi) criterion(`${column} >= ? AND ${column} <= ?`, min, max)
+    else if (lo) criterion(`${column} >= ?`, min)
+    else if (hi) criterion(`${column} <= ?`, max)
   }
   range('mv', filters.valueMin, filters.valueMax)
   range('ac', filters.acresMin, filters.acresMax)
@@ -1026,30 +1030,38 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
   const codes = (filters.zoningCodes || []).filter(Boolean)
   if (zoningIn.length || codes.length) {
     const either = []
+    const values = []
     if (zoningIn.length) {
       either.push(`zc IN (${zoningIn.map(() => '?').join(',')})`)
-      params.push(...zoningIn)
+      values.push(...zoningIn)
     }
     if (codes.length) {
       either.push(`zn IN (${codes.map(() => '?').join(',')})`)
-      params.push(...codes)
+      values.push(...codes)
     }
-    clauses.push(either.length > 1 ? `(${either.join(' OR ')})` : either[0])
+    criterion(either.join(' OR '), ...values)
   }
-  if (zoningOut.length) {
-    clauses.push(`zc <> '' AND zc NOT IN (${zoningOut.map(() => '?').join(',')})`)
-    params.push(...zoningOut)
-  }
-  if (filters.flood === 'in') clauses.push('fz = 1')
-  if (filters.flood === 'out') clauses.push('fz = 0')
+  if (zoningOut.length) criterion(`zc <> '' AND zc NOT IN (${zoningOut.map(() => '?').join(',')})`, ...zoningOut)
+  if (filters.flood === 'in') criterion('fz = 1')
+  if (filters.flood === 'out') criterion('fz = 0')
 
   // What stands on it: no building at all, or some; and how much of the lot
   // the buildings cover, for "under-built" (the lot's acres from the roll).
-  if (filters.buildings === 'vacant') clauses.push('bn = 0')
-  if (filters.buildings === 'built') clauses.push('bn > 0')
+  if (filters.buildings === 'vacant') criterion('bn = 0')
+  if (filters.buildings === 'built') criterion('bn > 0')
   if (filters.coverageMax != null && Number.isFinite(filters.coverageMax)) {
-    clauses.push('bn IS NOT NULL AND ac > 0 AND ba <= ac * 4046.86 * ?')
-    params.push(filters.coverageMax)
+    criterion('bn IS NOT NULL AND ac > 0 AND ba <= ac * 4046.86 * ?', filters.coverageMax)
+  }
+
+  // How long they have held it, and where their mail goes: read from the
+  // sale date and mailing address the record carries (see owners.js). Each
+  // reading is its own criterion; its parameters are counted off its text.
+  const traits = ownerClauses(filters.owners || [], market, new Date(), { columns: owned })
+  let used = 0
+  for (const sql of traits.clauses) {
+    const n = (sql.match(/\?/g) || []).length
+    criterion(sql, ...traits.params.slice(used, used + n))
+    used += n
   }
 
   // An area of the map: parcels whose box touches it.
@@ -1083,11 +1095,20 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
     params.push(String(filters.owner.id))
   }
 
-  // How long they have held it, and where their mail goes: read from the
-  // sale date and mailing address the record carries (see owners.js).
-  const traits = ownerClauses(filters.owners || [], market, new Date(), { columns: owned })
-  clauses.push(...traits.clauses)
-  params.push(...traits.params)
+  // The criteria, all of them or any one ("some"), after the scope.
+  if (criteria.length) {
+    const any = filters.match === 'any' && criteria.length > 1
+    if (any) {
+      clauses.push(`(${criteria.map((c) => `(${c.sql})`).join(' OR ')})`)
+      for (const c of criteria) params.push(...c.params)
+    } else {
+      for (const c of criteria) {
+        clauses.push(`(${c.sql})`)
+        params.push(...c.params)
+      }
+    }
+  }
+
   const q = (filters.query || '').trim().toLowerCase()
   if (q && fts) {
     const match = ftsQuery(q)
