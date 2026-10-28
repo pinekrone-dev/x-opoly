@@ -3498,6 +3498,13 @@ export default function Gis({
       value,
       acres,
       ownerFilters: [...ownerPicks],
+      zoningKeep: [...zoningKeep],
+      zoningDrop: [...zoningDrop],
+      flood: floodPick,
+      buildings: buildingPick,
+      near: nearPicks,
+      match: matchMode,
+      circle: areaCircle,
     }
   }
 
@@ -3551,6 +3558,33 @@ export default function Gis({
       const known: OwnerFilter[] = ['held10', 'freeClear', 'outOfState']
       setOwnerPicks(new Set((st.ownerFilters as unknown[]).filter((v): v is OwnerFilter => known.includes(v as OwnerFilter))))
     }
+    if (Array.isArray(st.zoningKeep)) setZoningKeep(new Set((st.zoningKeep as unknown[]).map(String)))
+    if (Array.isArray(st.zoningDrop)) setZoningDrop(new Set((st.zoningDrop as unknown[]).map(String)))
+    if (st.flood === 'in' || st.flood === 'out' || st.flood === null) setFloodPick(st.flood as 'in' | 'out' | null)
+    if (st.buildings === 'vacant' || st.buildings === 'built' || st.buildings === null) {
+      setBuildingPick(st.buildings as 'vacant' | 'built' | null)
+    }
+    if (Array.isArray(st.near)) {
+      setNearPicks(
+        (st.near as { layer?: unknown; miles?: unknown }[])
+          .filter((n) => typeof n?.layer === 'string' && Number.isFinite(Number(n?.miles)))
+          .slice(0, 4)
+          .map((n) => ({ layer: String(n.layer), miles: Number(n.miles) })),
+      )
+    }
+    if (st.match === 'all' || st.match === 'any') setMatchMode(st.match)
+    const ring = st.circle as { lat?: unknown; lng?: unknown; miles?: unknown } | null | undefined
+    if (ring && [ring.lat, ring.lng, ring.miles].every((v) => Number.isFinite(Number(v)))) {
+      const circle = { lat: Number(ring.lat), lng: Number(ring.lng), miles: Math.min(20, Number(ring.miles)) }
+      setAskMiles(circle.miles)
+      setAskCircle(circle)
+      setAreaCircle(circle)
+      setRadiusOn(true)
+    } else if (ring === null) {
+      setRadiusOn(false)
+      setAreaCircle(null)
+      setAskCircle(null)
+    }
 
     const centre = st.center as [number, number] | undefined
     if (Array.isArray(centre) && centre.length === 2 && centre.every(Number.isFinite)) {
@@ -3567,6 +3601,27 @@ export default function Gis({
     setLayerPick(null)
     setViewNote({ tone: 'ok', text: `Opened "${view.name}".` })
   }
+
+  /*
+   * A link to a saved map, ?view=<id>, from a colleague or from the Claude
+   * connector's make_map: opened once the county's own view has been
+   * framed, so the saved camera wins, then dropped from the address so a
+   * reload does not reapply it over whatever was done since.
+   */
+  const linkedView = useRef<string | null>(new URLSearchParams(window.location.search).get('view'))
+  useEffect(() => {
+    const wanted = linkedView.current
+    if (!wanted || !views || !meta) return
+    linkedView.current = null
+    const found = views.find((view) => String(view.id) === wanted)
+    const url = new URL(window.location.href)
+    url.searchParams.delete('view')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    if (found) applyView(found)
+    else setViewNote({ tone: 'warn', text: 'That saved map is not in this workspace, or was deleted.' })
+    // applyView is a plain function of this render; the effect runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [views, meta])
 
   async function saveCurrentView() {
     const label = viewName.trim()

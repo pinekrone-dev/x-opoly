@@ -231,7 +231,11 @@ async function answer(request, env, ctx) {
   // The public market pages and the sitemap are written by the app too,
   // from the live market list, so a new county is listed with no deploy.
   const pages = /^\/markets\/[a-z0-9-]{2,40}\/?$/.test(url.pathname) || url.pathname === '/sitemap.xml'
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages) {
+  // Sign in with Land Quotient and the Claude connector: the app answers
+  // these, including the approval page, which is HTML the app writes.
+  const connector =
+    url.pathname === '/mcp' || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/oauth-')
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages || connector) {
     if (env.DB) {
       // Let the request through even if migrating failed: routes that do not
       // touch the database still work, and the ones that do will report the
