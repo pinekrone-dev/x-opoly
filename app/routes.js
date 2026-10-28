@@ -2369,7 +2369,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // a browser that kept a range for a day went on pairing the old
     // directory with the new tiles after a county was rebuilt, which the
     // map reported as "county parcels could not be loaded".
-    const browserTtl = key === 'markets.json' || /\/layers\.json$/.test(key) || /\.pmtiles$/.test(key) ? 300 : 86400
+    // And an hour, not a day, for a market's index and records: a rebuild
+    // that added columns (the owner filters' sale year and mailing state)
+    // was invisible for a day to a browser that had opened the market.
+    const browserTtl =
+      key === 'markets.json' || /\/layers\.json$/.test(key) || /\.pmtiles$/.test(key)
+        ? 300
+        : /\/(index|details|codes|extras)\.json$/.test(key)
+          ? 3600
+          : 86400
     const headers = {
       'content-type': contentType,
       // The public files may be kept and read anywhere; the rest is for the
@@ -2422,8 +2430,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a rebuild is seen within a minute and the old ranges are simply
        * never asked for again.
        */
+      // Every market file, not only the archives: an index read by range was
+      // served from yesterday's build for an hour after a rebuild, because
+      // its ranges were kept under the file name alone.
       let version = ''
-      if (/\.pmtiles$/.test(key) && typeof bucket.head === 'function') {
+      if (/\.(pmtiles|json|geojson)$/.test(key) && key !== 'markets.json' && typeof bucket.head === 'function') {
         const known = await edgeCached(c, `catalog/${key}#version`, 60, async () => {
           const found = await bucket.head(key)
           return c.json({ etag: found ? found.httpEtag || found.etag || '' : null })
