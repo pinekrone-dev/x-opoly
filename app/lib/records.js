@@ -75,6 +75,8 @@ const soda = (host, dataset, params) => {
 }
 
 const day = (value) => {
+  // ArcGIS answers dates as epoch milliseconds.
+  if (typeof value === 'number' && Number.isFinite(value) && value > 1e11) return new Date(value).toISOString().slice(0, 10)
   const text = String(value ?? '')
   const iso = /^(\d{4}-\d{2}-\d{2})/.exec(text)
   if (iso) return iso[1]
@@ -107,6 +109,33 @@ const unexpired = (value) => {
   const date = day(value)
   return !date || date >= new Date().toISOString().slice(0, 10)
 }
+
+/*
+ * One ArcGIS layer query, answered as plain attribute rows. A layer that
+ * refuses says so in a 200 with an `error` body, which is a failure here.
+ */
+async function arcgis(layer, where, fetcher, extra = {}) {
+  const query = new URLSearchParams({
+    where,
+    outFields: '*',
+    returnGeometry: 'false',
+    f: 'json',
+    resultRecordCount: '200',
+    ...extra,
+  })
+  const body = await getJson(`${layer}/query?${query.toString()}`, fetcher)
+  if (body?.error) throw new Error(body.error.message || 'layer error')
+  return (body?.features ?? []).map((f) => f.attributes ?? {})
+}
+
+// The parcel's own box, for a layer that has no parcel field to ask by.
+function boxOf(parcel) {
+  const bb = Array.isArray(parcel.bb) ? parcel.bb.map(Number) : null
+  return bb && bb.length === 4 && bb.every(Number.isFinite) ? bb : null
+}
+
+// A county APN as its own layers write it, letters and dashes kept.
+const apn = (value) => String(value ?? '').toUpperCase().replace(/[^0-9A-Z-]/g, '')
 
 const newestFirst = (rows) =>
   rows.sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? ''))).slice(0, PER_SOURCE)
@@ -480,6 +509,300 @@ export const SOURCES = {
           open: !/closed/i.test(r.status ?? ''),
           description: clean(r.last_update),
         }))
+      },
+    },
+  ],
+
+  /*
+   * Maricopa County: the county's own permits and code cases cover the
+   * unincorporated county, by APN; Phoenix's (current two years, located
+   * by point, no parcel field) and its property-maintenance cases (by
+   * address); Mesa's permits and code cases by APN. A parcel in another
+   * city simply finds nothing in these.
+   */
+  'phoenix-az': [
+    {
+      kind: 'permit',
+      label: 'Maricopa County permits (unincorporated)',
+      by: 'APN',
+      portal: 'https://www.maricopa.gov/5501/Permit-Center',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid)
+        if (!/^\d{3}-\d{2}-\d{3}[A-Z]?$/.test(id)) return []
+        const rows = await arcgis(
+          'https://services.arcgis.com/ykpntM6e3tHvzKRJ/arcgis/rest/services/Building_Permits_(view)/FeatureServer/0',
+          `APNDash='${id}'`,
+          fetcher,
+        )
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.PermitNumber),
+          date: day(r.IssuedDate ?? r.ApplicationDate),
+          type: [clean(r.PermitType), clean(r.WorkClass)].filter(Boolean).join(' · ') || null,
+          status: clean(r.PermitStatus),
+          open: !/complete|closed|expired|void|withdrawn|cancel/i.test(r.PermitStatus ?? ''),
+          description: clean(r.PermitDescription),
+        })))
+      },
+    },
+    {
+      kind: 'case',
+      label: 'Maricopa County code cases (unincorporated)',
+      by: 'APN',
+      portal: 'https://www.maricopa.gov/5501/Permit-Center',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid)
+        if (!/^\d{3}-\d{2}-\d{3}[A-Z]?$/.test(id)) return []
+        const rows = await arcgis(
+          'https://services.arcgis.com/ykpntM6e3tHvzKRJ/arcgis/rest/services/Permit_Cases_(View)/FeatureServer/0',
+          `APN='${id}'`,
+          fetcher,
+        )
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.CodeCaseNumber),
+          date: day(r.Opened),
+          type: clean(r.Type),
+          status: clean(r.Status),
+          open: r.Closed == null && !/^closed/i.test(r.Status ?? ''),
+          description: null,
+        })))
+      },
+    },
+    {
+      kind: 'permit',
+      label: 'Phoenix permits (last two years)',
+      by: 'location',
+      portal: 'https://apps-secure.phoenix.gov/PDD/Search/Permits',
+      async read(parcel, fetcher) {
+        const box = boxOf(parcel)
+        if (!box) return []
+        const rows = await arcgis('https://maps.phoenix.gov/pub/rest/services/Public/Planning_Permit/MapServer/1', '1=1', fetcher, {
+          geometry: box.join(','),
+          geometryType: 'esriGeometryEnvelope',
+          inSR: '4326',
+          spatialRel: 'esriSpatialRelIntersects',
+        })
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.PER_NUM),
+          date: day(r.PER_ISSUE_DATE ?? r.PER_ENT_DATE),
+          type: clean(r.PER_TYPE_DESC) ?? clean(r.PERMIT_NAME),
+          status: clean(r.PERMIT_STAT),
+          open: /^open$/i.test(r.PERMIT_STAT ?? ''),
+          description: clean(r.SCOPE_DESC),
+        })))
+      },
+    },
+    {
+      kind: 'case',
+      label: 'Phoenix property maintenance cases (2024 on)',
+      by: 'address',
+      portal: 'https://www.phoenix.gov/nsd',
+      async read(parcel, fetcher) {
+        const at = streetParts(parcel.ad)
+        if (!at) return []
+        const street = [at.number, at.direction, at.name].filter(Boolean).join(' ')
+        const rows = await arcgis(
+          'https://maps.phoenix.gov/pub/rest/services/Public/NSD_Property_Maintenance/MapServer/0',
+          `CSM_ADDRESS LIKE '${street} %'`,
+          fetcher,
+        )
+        // No date on these: the year is in the case number (PEF2024-…).
+        return rows
+          .map((r) => {
+            const year = /(\d{4})-/.exec(r.CSM_CASENO ?? '')
+            return {
+              id: clean(r.CSM_CASENO),
+              date: year ? `${year[1]}` : null,
+              type: 'Property maintenance',
+              status: clean(r.CSM_STATUS),
+              open: !/closed/i.test(r.CSM_STATUS ?? ''),
+              description: clean(r.NOTES),
+            }
+          })
+          .sort((a, b) => String(b.id ?? '').localeCompare(String(a.id ?? '')))
+          .slice(0, PER_SOURCE)
+      },
+    },
+    {
+      kind: 'permit',
+      label: 'Mesa permits',
+      by: 'APN',
+      portal: 'https://www.mesaaz.gov/business-development/building-permits',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid).replace(/-/g, '')
+        if (!/^\d{8}[A-Z]?$/.test(id)) return []
+        const rows = await getJson(soda('citydata.mesaaz.gov', 'dzpk-hxfb', { parcel_number: id, $order: 'issued_date DESC' }), fetcher)
+        return rows.map((r) => ({
+          id: clean(r.permit_number),
+          date: day(r.issued_date),
+          type: clean(r.permit_type) ?? clean(r.type_of_work),
+          status: clean(r.status),
+          open: !/finaled|closed|expired|void|withdrawn/i.test(r.status ?? ''),
+          description: clean(r.description_of_work),
+        }))
+      },
+    },
+    {
+      kind: 'case',
+      label: 'Mesa code compliance',
+      by: 'APN',
+      portal: 'https://www.mesaaz.gov/residents/code-compliance',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid).replace(/-/g, '')
+        if (!/^\d{8}[A-Z]?$/.test(id)) return []
+        const rows = await getJson(soda('citydata.mesaaz.gov', 'hgf6-yenu', { parcel_number: id, $order: 'opened_date DESC' }), fetcher)
+        return rows.map((r) => ({
+          id: clean(r.permit_number),
+          date: day(r.opened_date),
+          type: clean(r.permit_type),
+          status: clean(r.status),
+          open: !/closed/i.test(r.status ?? '') && !r.closed_date,
+          description: clean(r.description),
+        }))
+      },
+    },
+  ],
+
+  // Tucson: residential and commercial permits and code cases, by Pima parcel.
+  'tucson-az': [
+    ...[
+      [85, 'Tucson residential permits'],
+      [81, 'Tucson commercial permits'],
+    ].map(([layer, label]) => ({
+      kind: 'permit',
+      label,
+      by: 'parcel',
+      portal: 'https://cityoftucsonaz-energovweb.tylerhost.net/apps/selfservice',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid).replace(/-/g, '')
+        if (!/^[0-9A-Z]{8,10}$/.test(id)) return []
+        const rows = await arcgis(`https://gis.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/${layer}`, `PARCEL='${id}'`, fetcher)
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.NUMBER),
+          date: day(r.ISSUEDATE ?? r.APPLYDATE),
+          type: [clean(r.TYPE), clean(r.WORKCLASS)].filter(Boolean).join(' · ') || null,
+          status: clean(r.STATUS),
+          open: /^yes$/i.test(r.ACTIVE ?? '') || (!r.COMPLETEDATE && !/final|closed|expired|void|withdrawn/i.test(r.STATUS ?? '')),
+          description: clean(r.DESCRIPTION) ?? clean(r.StructureType),
+        })))
+      },
+    })),
+    {
+      kind: 'case',
+      label: 'Tucson code enforcement',
+      by: 'parcel',
+      portal: 'https://cityoftucsonaz-energovweb.tylerhost.net/apps/selfservice',
+      async read(parcel, fetcher) {
+        const id = apn(parcel.gid).replace(/-/g, '')
+        if (!/^[0-9A-Z]{8,10}$/.test(id)) return []
+        const rows = await arcgis('https://gis.tucsonaz.gov/arcgis/rest/services/PublicMaps/PermitsCode/MapServer/102', `PARCEL='${id}'`, fetcher)
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.CASENUMBER),
+          date: day(r.OPENEDDATE),
+          type: clean(r.type),
+          status: clean(r.status),
+          open: !r.CLOSEDDATE && !/^closed/i.test(r.status ?? ''),
+          description: clean(r.DESCRIPTION),
+        })))
+      },
+    },
+  ],
+
+  /*
+   * Clark County: Las Vegas's open-data permits (the recent rolling table)
+   * and Henderson's permits and current code violations, by APN. The
+   * county's own and North Las Vegas's are not published; Las Vegas's code
+   * cases are, but stopped updating in May 2026 and are left out rather
+   * than shown as current.
+   */
+  'las-vegas-nv': [
+    {
+      kind: 'permit',
+      label: 'Las Vegas building permits (recent)',
+      by: 'APN',
+      portal: 'https://www.lasvegasnevada.gov/Business/Permits-Licenses',
+      async read(parcel, fetcher) {
+        const id = digits(parcel.gid)
+        if (id.length !== 11) return []
+        const rows = await arcgis(
+          'https://services1.arcgis.com/F1v0ufATbBQScMtY/arcgis/rest/services/OpenData_Building_Permits_/FeatureServer/0',
+          `PRCLID=${Number(id)}`,
+          fetcher,
+        )
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.APNO),
+          date: day(r.ISSDTTM),
+          type: [clean(r.APTYPE), clean(r.WORKTYPE)].filter(Boolean).join(' · ') || null,
+          status: clean(r.BLDGAPPLSTATUS),
+          open: /issued|pending|review|applied/i.test(r.BLDGAPPLSTATUS ?? ''),
+          description: clean(r.APDESC) ?? clean(r.SUBDIV),
+        })))
+      },
+    },
+    ...[
+      [1, 'Henderson residential permits'],
+      [2, 'Henderson permits'],
+    ].map(([layer, label]) => ({
+      kind: 'permit',
+      label,
+      by: 'APN',
+      portal: 'https://www.cityofhenderson.com/government/departments/building-and-fire-safety',
+      async read(parcel, fetcher) {
+        const id = digits(parcel.gid)
+        if (id.length !== 11) return []
+        const rows = await arcgis(`https://maps.cityofhenderson.com/arcgis/rest/services/public/OpenDevPermits/MapServer/${layer}`, `SPATIALID='${id}'`, fetcher)
+        return newestFirst(rows.map((r) => ({
+          id: clean(r.CASENUMBER),
+          date: day(r.ISSUEDATE ?? r.APPLICATIONDATE),
+          type: [clean(r.CASETYPE), clean(r.CASEWORKCLASS ?? r.WORKCLASS)].filter(Boolean).join(' · ') || null,
+          status: clean(r.STATUS),
+          open: !/final|closed|expired|void|withdrawn|complete/i.test(r.STATUS ?? ''),
+          description: clean(r.DESCRIPTION),
+        })))
+      },
+    })),
+    {
+      kind: 'case',
+      label: 'Henderson open code violations',
+      by: 'APN',
+      portal: 'https://www.cityofhenderson.com/government/departments/code-enforcement',
+      async read(parcel, fetcher) {
+        const id = digits(parcel.gid)
+        if (id.length !== 11) return []
+        const rows = await arcgis('https://maps.cityofhenderson.com/arcgis/rest/services/public/ComDevServices/MapServer/0', `PARCEL='${id}'`, fetcher)
+        // A snapshot of current cases: no date or status, so every row is open.
+        return rows.slice(0, PER_SOURCE).map((r) => ({
+          id: clean(r.CASE),
+          date: null,
+          type: 'Code violation',
+          status: 'Open',
+          open: true,
+          description: clean(r.VIOLATION),
+        }))
+      },
+    },
+  ],
+
+  // Provo's building permits, by street address; Provo publishes no parcel id on them.
+  'utah-county-ut': [
+    {
+      kind: 'permit',
+      label: 'Provo building permits',
+      by: 'address',
+      portal: 'https://www.provo.gov/departments/development-services',
+      async read(parcel, fetcher) {
+        const at = streetParts(parcel.ad)
+        if (!at) return []
+        const street = [at.number, at.direction, at.name, at.suffix].filter(Boolean).join(' ')
+        const F = 'xxClient_BP_Applications_View_'
+        const rows = await arcgis('https://gispublicweb.provo.gov/arcgis/rest/services/DevServ/CurrentProjects/MapServer/1', `ADDRESS_ADDRESS='${street}'`, fetcher)
+        return newestFirst(rows.map((r) => ({
+          id: clean(r[`${F}PermitNumber`]),
+          date: day(r[`${F}dateIssued`] ?? r[`${F}dateEntered`]),
+          type: clean(r[`${F}Type`]),
+          status: clean(r[`${F}Status`]) ?? (r[`${F}dateFinalized`] ? 'Finaled' : null),
+          open: !r[`${F}dateFinalized`] && !/final|closed|expired|void/i.test(r[`${F}Status`] ?? ''),
+          description: clean(r[`${F}Description`]) ?? clean(r[`${F}BuildingUse`]),
+        })))
       },
     },
   ],

@@ -5092,7 +5092,14 @@ export default function Gis({
                   linked={known?.place?.fields ?? null}
                   linkedName={known?.place?.name ?? null}
                 />
-                {server?.ready && active ? <CityRecords key={`${active}:${selected}`} market={active} id={selected} /> : null}
+                {active && RECORD_MARKETS.has(active) ? (
+                  <CityRecords
+                    key={`${active}:${selected}`}
+                    market={active}
+                    id={selected}
+                    parcel={{ gid: parcel.gid, ad: parcel.ad, bb: parcel.bb ?? selectedBox }}
+                  />
+                ) : null}
                 {/* The flood zone, on every parcel in a market FEMA maps,
                     whether or not the flood layer is switched on. */}
                 {floodLayer && flood && (
@@ -5652,13 +5659,27 @@ function OwnerPosition({ record, market }: { record: Record<string, unknown>; ma
  * the parcel, since an address match can miss a record an id match would
  * not. Nothing shows for a market whose cities publish neither.
  */
-function CityRecords({ market, id }: { market: string; id: string | number }) {
+// The markets with a permit, code-case or mortgage source (app/lib/records.js).
+const RECORD_MARKETS = new Set([
+  'new-york-ny', 'chicago-il', 'philadelphia-pa', 'los-angeles-ca', 'boston-ma', 'austin-tx', 'dallas-tx',
+  'phoenix-az', 'tucson-az', 'las-vegas-nv', 'utah-county-ut',
+])
+
+function CityRecords({
+  market,
+  id,
+  parcel,
+}: {
+  market: string
+  id: string | number
+  parcel: { gid?: unknown; ad?: unknown; bb?: unknown }
+}) {
   const [answer, setAnswer] = useState<ParcelRecords | null | 'failed'>(null)
   const [openAll, setOpenAll] = useState<Record<string, boolean>>({})
   useEffect(() => {
     let cancelled = false
     api.parcels
-      .records(market, id)
+      .records(market, id, parcel)
       .then((result) => {
         if (!cancelled) setAnswer(result)
       })
