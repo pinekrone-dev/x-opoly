@@ -1064,6 +1064,21 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
     used += n
   }
 
+  /*
+   * Near a published layer — within a mile of a transmission line, inside
+   * an opportunity zone — as the grid cells lib/nearby kept for it. The
+   * parcel's centre picks its cell by the same arithmetic as cellOf there,
+   * and the cells arrive as one JSON list, so this is one lookup per row.
+   */
+  for (const grid of filters.nearGrids || []) {
+    criterion(
+      '(CAST(((w + e) / 2 + 180) / ? AS INTEGER) * 1000000 + CAST(((s + n) / 2 + 90) / ? AS INTEGER)) IN (SELECT value FROM json_each(?))',
+      grid.dx,
+      grid.dy,
+      JSON.stringify(grid.cells),
+    )
+  }
+
   // An area of the map: parcels whose box touches it.
   const box = Array.isArray(filters.box) && filters.box.length === 4 && filters.box.every(Number.isFinite) ? filters.box : null
   if (box) {
@@ -1170,6 +1185,7 @@ export function filtersActive(filters = {}) {
   if (Array.isArray(filters.box) && filters.box.length === 4) return true
   if (filters.buildings === 'vacant' || filters.buildings === 'built') return true
   if (readCircle(filters.circle)) return true
+  if ((filters.nearGrids || []).length) return true
   if (filters.coverageMax != null && Number.isFinite(filters.coverageMax)) return true
   return [filters.valueMin, filters.valueMax, filters.acresMin, filters.acresMax].some(
     (v) => v != null && Number.isFinite(v),

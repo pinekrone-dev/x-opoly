@@ -355,6 +355,7 @@ export const api = {
       if (filters.owners?.length) params.set('own', filters.owners.join(','))
       if (filters.circle) params.set('circle', `${filters.circle.lat},${filters.circle.lng},${filters.circle.miles}`)
       if (filters.match === 'any') params.set('match', 'any')
+      if (filters.near?.length) params.set('near', filters.near.map((p) => `${p.layer}:${p.miles}`).join(','))
       if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))

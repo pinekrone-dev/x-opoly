@@ -585,6 +585,8 @@ export interface ParcelQuery {
   owners?: OwnerFilter[]
   /** A circle drawn in the Ask panel. */
   circle?: AskCircle | null
+  /** Near a published layer: within so many miles, or inside (0). */
+  near?: { layer: string; miles: number }[]
   /** Meet every criterion (the default), or any one of them. */
   match?: 'all' | 'any'
 }
