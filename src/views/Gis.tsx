@@ -908,9 +908,9 @@ function SavedViews({
  */
 const GIS_TIPS: Coachmark[] = [
   {
-    target: '[data-tour="market"]',
+    target: '[data-tour="address"]',
     title: 'One map, every county',
-    body: 'Each market is one county’s own record. Pan into another county and the map switches to it; zoomed out, every market is a label you can click.',
+    body: 'Type an address to go straight to its lot. Pan into another county and the map switches to it; zoomed out, every market is a label you can click.',
   },
   {
     target: '[data-tour="layers"]',
@@ -924,8 +924,8 @@ const GIS_TIPS: Coachmark[] = [
   },
   {
     target: '[data-tour="rail"]',
-    title: 'Search, filter, report',
-    body: 'Find a parcel by address or owner, narrow by asset type, value and acreage, then export what is left.',
+    title: 'Query, then report',
+    body: 'Query narrows the county by property, zoning, owner, power and hazards, all or some, within a radius if you like. Export what is left.',
   },
 ]
 
@@ -1424,17 +1424,18 @@ export default function Gis({
   const [filterTab, setFilterTab] = useState<FilterTab>('property')
   const [tableOpen, setTableOpen] = useState(false)
   /*
-   * With the Ask tab open the map is the circle's: it is there from the
-   * moment the tab opens, centred on the view, and a click moves it. No
-   * button to arm first. Leaving the tab gives clicks back to the parcels.
+   * The query's radius. Switched on in the Query panel, the circle appears
+   * at the middle of the view and a click on the map moves it while the
+   * panel is open; the criteria are held to it until it is switched off.
+   * Shut the panel and clicks go back to the parcels, the circle staying.
    */
-  const drawing = rail === 'ask'
-  // While the tab is open the filters are held to the circle as it moves.
+  const [radiusOn, setRadiusOn] = useState(false)
+  const drawing = rail === 'filter' && radiusOn
   useEffect(() => {
-    if (rail === 'ask' && askCircle) setAreaCircle(askCircle)
-  }, [rail, askCircle])
+    if (radiusOn && askCircle) setAreaCircle(askCircle)
+  }, [radiusOn, askCircle])
   useEffect(() => {
-    if (rail !== 'ask' || askCircle) return
+    if (!radiusOn || askCircle) return
     const box = viewRef.current
     if (!box) return
     setAskCircle({
@@ -1444,7 +1445,7 @@ export default function Gis({
     })
     // askMiles is read once, when the circle first appears.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rail, askCircle, active])
+  }, [radiusOn, askCircle, active])
 
   // The brain panel: a circle drawn on the map and a question about it.
   const [askText, setAskText] = useState('')
@@ -1600,6 +1601,7 @@ export default function Gis({
     setAreaBox(null)
     setAreaCircle(null)
     setAskCircle(null)
+    setRadiusOn(false)
     setQuery('')
     setOwners(null)
     setOwnerPick(null)
@@ -3798,7 +3800,7 @@ export default function Gis({
    *
    * The server reads the question once (with the file's header and three
    * rows) and runs everything else as code. What comes back is either
-   * filters, which go into the Filter tab exactly as a person would set
+   * filters, which go into the Query tab exactly as a person would set
    * them, or a set of parcels, which goes on the map or into a file.
    */
   async function runAsk() {
@@ -4197,28 +4199,6 @@ export default function Gis({
       >
         {rail === 'layers' && (
           <div className="space-y-3">
-            {/* The market belongs here rather than floating over the map:
-                coverage is per county, so choosing one is choosing what the
-                layer even is. */}
-            {/* No market picker: the map is the way between markets. It
-                follows wherever you pan, and zoomed out every market is a
-                label you can click. This only says where you are. */}
-            <div data-tour="market">
-              <p className="text-[11px] font-medium text-body">Viewing</p>
-              <p className="text-sm font-semibold text-ink">
-                {market ? `${market.name} · ${market.region}` : 'Loading…'}
-              </p>
-              {market?.stats && (
-                <p className="mt-1 text-[11px] text-muted">
-                  {market.stats.parcels.toLocaleString()} parcels · {money(market.stats.value)}
-                  {!(server?.ready || index) && <span> · loading detail…</span>}
-                </p>
-              )}
-              <p className="mt-1 text-[10px] text-faint">
-                Pan to another county and the map follows. Zoomed out, click any market's name to fly there.
-              </p>
-            </div>
-
             {/* Above the catalog, because a saved view is where you start
                 rather than something you reach after configuring by hand. */}
             <div data-tour="views">
@@ -4760,91 +4740,91 @@ export default function Gis({
           </div>
         )}
 
-        {(rail === 'filter' || rail === 'ask') && (
+        {rail === 'filter' && (
           <div className="space-y-3">
             {!(server?.ready || index) ? (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
-                {rail === 'ask' ? (
-                  /*
-                   * The radius filter: the same criteria as the Filter tab,
-                   * held to a circle on the map, and joined by all or some.
-                   * The circle is there as soon as the tab opens; a click on
-                   * the map moves it.
-                   */
-                  <div className="space-y-2 rounded-md border border-line bg-sunken/50 p-2">
-                    <p className="text-[11px] text-muted">Click the map to move the circle. Only parcels inside it count.</p>
-                    <label className="flex items-center gap-2 text-[11px] text-body">
-                      Radius
-                      <input
-                        type="range"
-                        min={0.25}
-                        max={20}
-                        step={0.25}
-                        value={askMiles}
-                        onChange={(event) => {
-                          const miles = Number(event.target.value)
-                          setAskMiles(miles)
-                          setAskCircle((current) => (current ? { ...current, miles } : current))
-                        }}
-                        className="flex-1"
-                        aria-label="Circle radius in miles"
-                      />
-                      <span className="w-14 text-right font-medium tabular-nums text-ink">{askMiles} mi</span>
-                    </label>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-body">Highlight parcels that meet</span>
-                      <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="radiogroup" aria-label="Match all or some criteria">
-                        {(
-                          [
-                            ['all', 'All'],
-                            ['any', 'Some'],
-                          ] as ['all' | 'any', string][]
-                        ).map(([mode, label]) => (
-                          <button
-                            key={mode}
-                            type="button"
-                            role="radio"
-                            aria-checked={matchMode === mode}
-                            onClick={() => setMatchMode(mode)}
-                            className={`px-2.5 py-1 ${matchMode === mode ? 'bg-ink text-white' : 'bg-surface text-body hover:bg-sunken'}`}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-faint">
-                      {matchMode === 'all'
-                        ? 'Every criterion you set below.'
-                        : 'At least one of the criteria you set below.'}
-                    </p>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50"
-                    onClick={() => setRail('ask')}
-                  >
-                    Filter within a radius instead? <span className="font-medium text-brand">Open Radius</span>
-                  </button>
-                )}
-                {areaBox || areaCircle ? (
-                  <p className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5 text-[11px] text-body">
-                    <span>
-                      {areaCircle
-                        ? `Only inside the ${areaCircle.miles}-mile circle you drew.`
-                        : 'Only the map area you asked about.'}
-                    </span>
-                    <button
-                      type="button"
-                      className="text-accent underline"
-                      onClick={() => {
-                        setAreaBox(null)
-                        setAreaCircle(null)
+                {/*
+                  * The query's frame: the whole county, or a circle on the
+                  * map; and whether a parcel must meet every criterion set
+                  * below or any one of them.
+                  */}
+                <div className="space-y-2 rounded-md border border-line bg-sunken/50 p-2">
+                  <label className="flex cursor-pointer items-center justify-between gap-2 text-[11px] font-medium text-body">
+                    <span>Within a radius</span>
+                    <input
+                      type="checkbox"
+                      className="accent-brand"
+                      checked={radiusOn}
+                      onChange={() => {
+                        if (radiusOn) {
+                          setRadiusOn(false)
+                          setAreaCircle(null)
+                          setAskCircle(null)
+                        } else {
+                          setRadiusOn(true)
+                          setAreaBox(null)
+                        }
                       }}
-                    >
+                    />
+                  </label>
+                  {radiusOn ? (
+                    <>
+                      <p className="text-[10px] text-muted">Click the map to move the circle. Only parcels inside it count.</p>
+                      <label className="flex items-center gap-2 text-[11px] text-body">
+                        Radius
+                        <input
+                          type="range"
+                          min={0.25}
+                          max={20}
+                          step={0.25}
+                          value={askMiles}
+                          onChange={(event) => {
+                            const miles = Number(event.target.value)
+                            setAskMiles(miles)
+                            setAskCircle((current) => (current ? { ...current, miles } : current))
+                          }}
+                          className="flex-1"
+                          aria-label="Circle radius in miles"
+                        />
+                        <span className="w-14 text-right font-medium tabular-nums text-ink">{askMiles} mi</span>
+                      </label>
+                    </>
+                  ) : (
+                    <p className="text-[10px] text-faint">Off: the whole county. On: a circle on the map, up to 20 miles.</p>
+                  )}
+                  <div className="flex items-center justify-between gap-2 border-t border-line pt-2">
+                    <span className="text-[11px] text-body">Highlight parcels that meet</span>
+                    <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="radiogroup" aria-label="Match all or some criteria">
+                      {(
+                        [
+                          ['all', 'All'],
+                          ['any', 'Some'],
+                        ] as ['all' | 'any', string][]
+                      ).map(([mode, label]) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          role="radio"
+                          aria-checked={matchMode === mode}
+                          onClick={() => setMatchMode(mode)}
+                          className={`px-2.5 py-1 ${matchMode === mode ? 'bg-ink text-white' : 'bg-surface text-body hover:bg-sunken'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-faint">
+                    {matchMode === 'all' ? 'Every criterion you set below.' : 'At least one of the criteria you set below.'}
+                  </p>
+                </div>
+                {areaBox && !areaCircle ? (
+                  <p className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5 text-[11px] text-body">
+                    <span>Only the map area you asked about.</span>
+                    <button type="button" className="text-accent underline" onClick={() => setAreaBox(null)}>
                       Whole county
                     </button>
                   </p>
@@ -5008,6 +4988,8 @@ export default function Gis({
                       setNearPicks([])
                       setAreaBox(null)
                       setAreaCircle(null)
+                      setAskCircle(null)
+                      setRadiusOn(false)
                       setQuery('')
                     }}
                   >
@@ -5175,7 +5157,7 @@ export default function Gis({
             </PanelSection>
           ) : (
             <PanelSection title="Parcels">
-              <p className="text-xs text-muted">Outlines only. Turn on Land use colours under Layers, or tick Colour on map in Filter, to colour parcels by land use or value.</p>
+              <p className="text-xs text-muted">Outlines only. Turn on Land use colours under Layers, or tick Colour on map in Query, to colour parcels by land use or value.</p>
             </PanelSection>
           )}
 
@@ -5706,7 +5688,7 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 /*
- * Zoning and flood in the Filter tab.
+ * Zoning and flood in the Query tab.
  *
  * Each zoning category cycles through any, only this, and anything but this,
  * which is the whole of "zoned anything but residential" in one click. Only
@@ -6247,6 +6229,7 @@ function AddressBar({
     <div className="relative w-full md:w-72">
       <form
         role="search"
+        data-tour="address"
         className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 shadow-md"
         onSubmit={(event) => {
           event.preventDefault()

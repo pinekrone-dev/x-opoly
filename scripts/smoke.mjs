@@ -869,10 +869,10 @@ try {
         for (const label of ['Skip', 'Done']) {
           await page.click(`button:has-text("${label}")`, { timeout: 1500 }).catch(() => undefined)
         }
-        // The Layers tab is where the open county states its parcel count.
+        // The Report tab is where the open county states its parcel count.
         // A rail button toggles, so it is pressed only if that tab is shut.
-        if (!(await page.$('text=Pan to another county'))) {
-          await page.click('[data-tour="rail"] button:has-text("Layers")', { timeout: 5000 }).catch(() => undefined)
+        if (!(await page.$('text=Open as a table'))) {
+          await page.click('[data-tour="rail"] button:has-text("Report")', { timeout: 5000 }).catch(() => undefined)
         }
         // The market's meta, its server status and its first search, in that
         // order. Generous because a cold Worker adds a second on the first ask.
@@ -922,7 +922,7 @@ try {
         await page.waitForTimeout(4000)
         const reached = await zoomOf()
         const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
-        const count = text.match(/([\d,]{4,})\s*parcels/i)
+        const count = text.match(/Parcels\s*([\d,]{4,})/)
         check(`${slug}: the panel states a parcel count`, count != null,
           count ? count[1] : text.slice(0, 240))
         check(`${slug}: nothing on the panel reports a failure`,
