@@ -204,6 +204,11 @@ crons = []
 
 [env.staging.vars]
 FREE_ACCESS = "1"
+# Staging has no customers, only the smoke test, which opens a dozen counties
+# a run from one runner address and one account. Production's daily limits
+# would refuse it by the second deploy of a day.
+COUNTY_FILES_PER_ACCOUNT = "500"
+COUNTY_FILES_PER_ADDRESS = "1000"
 # Same reasoning as production above: Carto throttles anonymous use with
 # "API required" tiles served as 200s, so OSM is the free host that works.
 TILE_PROVIDER = "osm"
