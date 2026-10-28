@@ -358,10 +358,14 @@ export const api = {
     },
 
     /** A parcel's permits and code cases, from the city's own open data. */
-    records: (market: string, id: string | number) =>
-      request<ParcelRecords>(
-        `/api/gis/records?market=${encodeURIComponent(market)}&id=${encodeURIComponent(String(id))}`,
-      ),
+    records: (market: string, id: string | number, parcel?: { gid?: unknown; ad?: unknown; bb?: unknown } | null) => {
+      const params = new URLSearchParams({ market, id: String(id) })
+      // For a market served from files, the server has no row to read these from.
+      if (parcel?.gid != null) params.set('gid', String(parcel.gid))
+      if (parcel?.ad) params.set('ad', String(parcel.ad))
+      if (Array.isArray(parcel?.bb) && parcel.bb.length === 4) params.set('bb', parcel.bb.join(','))
+      return request<ParcelRecords>(`/api/gis/records?${params.toString()}`)
+    },
 
     /** One parcel, whole, for the card. */
     one: (market: string, id: string | number) =>

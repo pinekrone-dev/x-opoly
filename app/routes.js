@@ -2885,19 +2885,35 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!id) return c.json({ error: 'id is required.' }, 400)
     const throttled = limited(c, 'records', 120, 10 * 60 * 1000)
     if (throttled) return throttled
+    /*
+     * A market served from files has no row here to read the parcel from,
+     * so the card sends what the lookups need: the county's id, the street
+     * address and the box. They only ever shape a query to a city's public
+     * API, and every source sanitises them before it does.
+     */
+    const sent = {
+      gid: (c.req.query('gid') ?? '').slice(0, 40),
+      ad: (c.req.query('ad') ?? '').slice(0, 120),
+      bb: (c.req.query('bb') ?? '').split(',').map(Number).slice(0, 4),
+    }
     return edgeCached(
       c,
       'records',
       6 * 60 * 60,
       async () => {
-        const parcel = await getParcel(parcelsFor(market), market, id).catch(() => null)
+        const stored = await getParcel(parcelsFor(market), market, id).catch(() => null)
+        const parcel =
+          stored ??
+          (sent.gid || sent.ad
+            ? { id, gid: sent.gid, ad: sent.ad, bb: sent.bb.length === 4 && sent.bb.every(Number.isFinite) ? sent.bb : null }
+            : null)
         if (!parcel) return notFound(c, 'No such parcel in that market.')
         const answer = await parcelRecords(market, parcel)
         const complete = answer.sources.every((source) => !source.error) && !answer.loans?.error
         return c.json(answer, 200, { 'x-records-complete': complete ? '1' : '0' })
       },
       {
-        params: { market, id },
+        params: { market, id, gid: sent.gid, ad: sent.ad },
         // An answer with a city that did not reply is not kept: the next
         // open should ask that city again rather than wait six hours.
         cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-records-complete') === '1',
