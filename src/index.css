@@ -360,6 +360,21 @@
   pointer-events: none;
 }
 
+/* Except when it is the handle a circle is dragged by. */
+.zone-label.zone-handle {
+  pointer-events: auto;
+  cursor: grab;
+  padding: 4px 8px;
+  border-radius: 9999px;
+  background: rgb(255 255 255 / 0.92);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.2);
+  color: #d6336c;
+  touch-action: none;
+}
+.zone-label.zone-handle:active {
+  cursor: grabbing;
+}
+
 /*
  * The GIS map's own controls, kept clear of the rail.
  *
