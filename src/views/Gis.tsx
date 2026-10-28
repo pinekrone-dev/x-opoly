@@ -22,6 +22,7 @@ import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '..
 import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 import { csvCell } from '../lib/csv'
+import { safeHtml } from '../lib/safeHtml'
 import { countyCounts, describeMismatch, listingCounts, mismatches, readCount } from '../lib/listingCheck'
 import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
 import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
@@ -4741,7 +4742,7 @@ export default function Gis({
             {meta?.attribution && (
               <p
                 className="border-t border-line pt-2 text-[11px] leading-snug text-faint"
-                dangerouslySetInnerHTML={{ __html: meta.attribution }}
+                dangerouslySetInnerHTML={{ __html: safeHtml(meta.attribution) }}
               />
             )}
           </div>
@@ -5213,7 +5214,7 @@ export default function Gis({
           {meta?.attribution && (
             <p
               className="border-t border-line pt-2 text-[11px] leading-snug text-faint"
-              dangerouslySetInnerHTML={{ __html: meta.attribution }}
+              dangerouslySetInnerHTML={{ __html: safeHtml(meta.attribution) }}
             />
           )}
         </div>
