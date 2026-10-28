@@ -296,6 +296,36 @@ export const SCHEMA_STATEMENTS = [
    * often, and a daily cap that resets several times a day is decorative.
    * One row per workspace per kind per day; swept after a week.
    */
+  /*
+   * Sign in with Land Quotient (app/lib/oauth.js): the applications that
+   * registered, the one-time approval codes, and the tokens issued from
+   * them. Secrets are stored as digests only.
+   */
+  `CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id     TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash    TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL,
+    user_id      TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    challenge    TEXT NOT NULL,
+    scope        TEXT NOT NULL,
+    expires_at   TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    client_id  TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    scope      TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user ON oauth_tokens(user_id)',
   `CREATE TABLE IF NOT EXISTS ai_usage (
     team_id TEXT NOT NULL,
     day     TEXT NOT NULL,
