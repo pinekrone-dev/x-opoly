@@ -1059,6 +1059,25 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
     params.push(box[0], box[2], box[1], box[3])
   }
 
+  /*
+   * A circle drawn on the map: parcels whose centre lies within it. The box
+   * around it narrows first, then the distance from each parcel's centre,
+   * measured flat with the longitude scaled to the circle's latitude, which
+   * at twenty miles is within a few metres of the true distance.
+   */
+  const circle = readCircle(filters.circle)
+  if (circle) {
+    const [w, s, e, n] = circleBox(circle)
+    clauses.push('e >= ? AND w <= ? AND n >= ? AND s <= ?')
+    params.push(w, e, s, n)
+    const k = Math.cos((circle.lat * Math.PI) / 180)
+    const r = (circle.miles * METERS_PER_MILE) / METERS_PER_DEGREE
+    clauses.push(
+      '((w + e) / 2 - ?) * ? * ((w + e) / 2 - ?) * ? + ((s + n) / 2 - ?) * ((s + n) / 2 - ?) <= ?',
+    )
+    params.push(circle.lng, k, circle.lng, k, circle.lat, circle.lat, r * r)
+  }
+
   if (filters.owner && filters.owner.id) {
     clauses.push(filters.owner.kind === 'b' ? 'bo = ?' : 'po = ?')
     params.push(String(filters.owner.id))
@@ -1094,6 +1113,31 @@ function where(market, filters = {}, { fts = false, owned = false } = {}) {
   return { sql: clauses.join(' AND '), params, from }
 }
 
+/** The widest circle the Ask panel draws, in miles of radius. */
+export const CIRCLE_MAX_MILES = 20
+
+const METERS_PER_MILE = 1609.344
+const METERS_PER_DEGREE = 111320
+
+/** A drawn circle as { lat, lng, miles }, or null when it is not one. */
+export function readCircle(value) {
+  if (!value || typeof value !== 'object') return null
+  const lat = Number(value.lat)
+  const lng = Number(value.lng)
+  const miles = Number(value.miles)
+  if (![lat, lng, miles].every(Number.isFinite) || Math.abs(lat) > 85 || Math.abs(lng) > 180) return null
+  if (miles <= 0 || miles > CIRCLE_MAX_MILES) return null
+  const round = (v, d) => Math.round(v * 10 ** d) / 10 ** d
+  return { lat: round(lat, 5), lng: round(lng, 5), miles: round(miles, 2) }
+}
+
+/** The box around a circle, [west, south, east, north]. */
+export function circleBox({ lat, lng, miles }) {
+  const dLat = (miles * METERS_PER_MILE) / METERS_PER_DEGREE
+  const dLng = dLat / Math.max(0.01, Math.cos((lat * Math.PI) / 180))
+  return [lng - dLng, lat - dLat, lng + dLng, lat + dLat]
+}
+
 /** Whether any filter is actually set, as opposed to an empty form. */
 export function filtersActive(filters = {}) {
   if ((filters.query || '').trim()) return true
@@ -1104,6 +1148,7 @@ export function filtersActive(filters = {}) {
   if (filters.flood === 'in' || filters.flood === 'out') return true
   if (Array.isArray(filters.box) && filters.box.length === 4) return true
   if (filters.buildings === 'vacant' || filters.buildings === 'built') return true
+  if (readCircle(filters.circle)) return true
   if (filters.coverageMax != null && Number.isFinite(filters.coverageMax)) return true
   return [filters.valueMin, filters.valueMax, filters.acresMin, filters.acresMax].some(
     (v) => v != null && Number.isFinite(v),
