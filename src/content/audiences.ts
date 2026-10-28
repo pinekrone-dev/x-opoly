@@ -303,7 +303,7 @@ export const AUDIENCES: Record<AudienceSlug, Audience> = {
       },
       {
         title: 'Filter to the site that pencils, then export it',
-        body: 'Ask in plain English and the filter fills itself: commercial or office parcels over half an acre worth more than $10M, inside a zone or a radius. Export the parcels as CSV, save the view, or send them into a survey to walk the sites.',
+        body: 'Drop a radius of up to 20 miles and set the criteria: commercial or office parcels over half an acre worth more than $10M, held ten years, owned out of state. Highlight the parcels that meet all of them, or any. Export them as CSV, save the view, or send them into a survey to walk the sites.',
         bullets: [
           'Flood zones in Las Vegas, Phoenix, New York, Washington, Orange County and North Jersey',
           'Opportunity zones in every market',

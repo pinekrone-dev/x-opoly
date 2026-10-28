@@ -354,6 +354,7 @@ export const api = {
       if (filters.coverageMax != null) params.set('cov', String(filters.coverageMax))
       if (filters.owners?.length) params.set('own', filters.owners.join(','))
       if (filters.circle) params.set('circle', `${filters.circle.lat},${filters.circle.lng},${filters.circle.miles}`)
+      if (filters.match === 'any') params.set('match', 'any')
       if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))

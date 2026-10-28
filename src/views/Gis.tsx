@@ -1398,6 +1398,8 @@ export default function Gis({
   const [askCircle, setAskCircle] = useState<AskCircle | null>(null)
   const [askMiles, setAskMiles] = useState(1)
   const [areaCircle, setAreaCircle] = useState<AskCircle | null>(null)
+  /** Whether a parcel must meet every criterion set, or any one of them. */
+  const [matchMode, setMatchMode] = useState<'all' | 'any'>('all')
   const [tableOpen, setTableOpen] = useState(false)
   /*
    * With the Ask tab open the map is the circle's: it is there from the
@@ -1405,6 +1407,10 @@ export default function Gis({
    * button to arm first. Leaving the tab gives clicks back to the parcels.
    */
   const drawing = rail === 'ask'
+  // While the tab is open the filters are held to the circle as it moves.
+  useEffect(() => {
+    if (rail === 'ask' && askCircle) setAreaCircle(askCircle)
+  }, [rail, askCircle])
   useEffect(() => {
     if (rail !== 'ask' || askCircle) return
     const box = viewRef.current
@@ -2553,8 +2559,9 @@ export default function Gis({
       owners: [...ownerPicks].sort(),
       box: areaBox,
       circle: areaCircle,
+      match: matchMode,
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox, areaCircle])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox, areaCircle, matchMode])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -2693,7 +2700,7 @@ export default function Gis({
     const aMin = lo(acres.min)
     const aMax = lo(acres.max)
     const anySet =
-      Boolean(needle) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 ||
+      Boolean(needle) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
       [vMin, vMax, aMin, aMax].some((n) => n != null && Number.isFinite(n))
     if (!anySet || !rows.length) return null
     // The owner filters read the sale year and mailing state the pipeline
@@ -2705,29 +2712,60 @@ export default function Gis({
         ? thisYear - HELD_YEARS
         : null
     const home = ownerPicks.has('outOfState') ? marketState(active) : null
+    const set = (n: number | null): n is number => n != null && Number.isFinite(n)
+
+    /*
+     * The criteria, as tests on a row: what "all" and "some" count. The
+     * holder, the text and the circle are scope, not criteria: a parcel
+     * outside them is out whichever way the criteria are joined. The same
+     * split as the server's (app/lib/parcels.js).
+     */
+    const tests: ((row: Record<string, string | number | null>) => boolean)[] = []
+    if (assets.size) tests.push((row) => assets.has(String(row.at || '')))
+    if (set(vMin) || set(vMax)) {
+      tests.push((row) => {
+        const mv = Number(row.mv) || 0
+        return !(set(vMin) && mv < vMin) && !(set(vMax) && mv > vMax)
+      })
+    }
+    if (set(aMin) || set(aMax)) {
+      tests.push((row) => {
+        const ac = Number(row.ac) || 0
+        return !(set(aMin) && ac < aMin) && !(set(aMax) && ac > aMax)
+      })
+    }
+    if (soldBy != null) tests.push((row) => Number(row.sy) > 0 && Number(row.sy) <= soldBy)
+    if (ownerPicks.has('outOfState')) tests.push((row) => Boolean(home && row.ms && row.ms !== home))
+    const any = matchMode === 'any' && tests.length > 1
+
+    // The circle, against each parcel's box from the index, measured as the
+    // server measures it: the box's centre, longitude scaled to latitude.
+    const bb = index?.bb ?? null
+    const k = areaCircle ? Math.cos((areaCircle.lat * Math.PI) / 180) : 1
+    const r = areaCircle ? (areaCircle.miles * 1609.344) / 111320 : 0
 
     const out: Record<string, string | number | null>[] = []
-    for (const row of rows) {
+    rows.forEach((row, i) => {
       // A chosen owner narrows the map to their holdings, which is the whole
       // point of the layer: one operator's footprint across the county.
-      if (ownerPick && String(row[ownerPick.kind === 'p' ? 'po' : 'bo'] ?? '') !== ownerPick.id) continue
-      if (assets.size && !assets.has(String(row.at || ''))) continue
-      if (soldBy != null && !(Number(row.sy) > 0 && Number(row.sy) <= soldBy)) continue
-      if (ownerPicks.has('outOfState') && !(home && row.ms && row.ms !== home)) continue
-      const mv = Number(row.mv) || 0
-      if (vMin != null && Number.isFinite(vMin) && mv < vMin) continue
-      if (vMax != null && Number.isFinite(vMax) && mv > vMax) continue
-      const ac = Number(row.ac) || 0
-      if (aMin != null && Number.isFinite(aMin) && ac < aMin) continue
-      if (aMax != null && Number.isFinite(aMax) && ac > aMax) continue
+      if (ownerPick && String(row[ownerPick.kind === 'p' ? 'po' : 'bo'] ?? '') !== ownerPick.id) return
+      if (areaCircle) {
+        if (!bb) return
+        const x = (bb[i * 4] + bb[i * 4 + 2]) / 2
+        const y = (bb[i * 4 + 1] + bb[i * 4 + 3]) / 2
+        const dx = (x - areaCircle.lng) * k
+        const dy = y - areaCircle.lat
+        if (dx * dx + dy * dy > r * r) return
+      }
       if (needle) {
         const hay = `${row.ad ?? ''} ${row.ow ?? ''} ${row.gid ?? ''} ${row.id ?? ''}`.toLowerCase()
-        if (!hay.includes(needle)) continue
+        if (!hay.includes(needle)) return
       }
+      if (tests.length && (any ? !tests.some((t) => t(row)) : !tests.every((t) => t(row)))) return
       out.push(row)
-    }
+    })
     return out
-  }, [rows, query, assets, value, acres, ownerPick, ownerPicks, server, found, active])
+  }, [rows, index, query, assets, value, acres, ownerPick, ownerPicks, areaCircle, matchMode, server, found, active])
 
   /*
    * What the map highlights.
@@ -3910,200 +3948,6 @@ export default function Gis({
           filter: filtered ? String(filtered.length.toLocaleString()) : undefined,
         }}
       >
-        {rail === 'ask' && (
-          <div className="space-y-3">
-            {/* Two steps: draw the area, then ask about it. The circle is the
-                whole question's scope, up to twenty miles across the radius
-                — a submarket, never a county — so every answer is local and
-                the parcel-by-parcel checks stay bounded. */}
-            <div>
-              <p className="text-[11px] text-muted">Click the map to move the circle. Only parcels inside it are searched.</p>
-              <label className="mt-1.5 flex items-center gap-2 text-[11px] text-body">
-                Radius
-                <input
-                  type="range"
-                  min={0.25}
-                  max={20}
-                  step={0.25}
-                  value={askMiles}
-                  onChange={(event) => {
-                    const miles = Number(event.target.value)
-                    setAskMiles(miles)
-                    setAskCircle((current) => (current ? { ...current, miles } : current))
-                  }}
-                  className="flex-1"
-                  aria-label="Circle radius in miles"
-                />
-                <span className="w-14 text-right font-medium tabular-nums text-ink">{askMiles} mi</span>
-              </label>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-ask">
-                Ask in plain English
-              </label>
-              <textarea
-                id="gis-ask"
-                rows={3}
-                className="w-full resize-none rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink disabled:opacity-60"
-                placeholder='e.g. "vacant land over 5 acres outside the flood zone" or "industrial zoned, no building, export it"'
-                value={askText}
-                disabled={!askCircle}
-                onChange={(event) => setAskText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    void runAsk()
-                  }
-                }}
-              />
-              <button
-                type="button"
-                className="mt-1.5 w-full rounded-md bg-brand px-2 py-1.5 text-xs font-semibold text-white hover:bg-brand-soft hover:text-brand-night disabled:opacity-50"
-                disabled={askBusy || !askText.trim() || !active || !askCircle}
-                onClick={() => void runAsk()}
-              >
-                {askBusy ? 'Working it out…' : askCircle ? `Ask about this ${askCircle.miles}-mile circle` : 'Draw a circle first'}
-              </button>
-            </div>
-
-            {askError ? <p className="text-[11px] leading-snug text-amber-600">{askError}</p> : null}
-
-            {askAnswer ? (
-              <div className="space-y-2 border-t border-line pt-3">
-                <p className="text-xs text-body">{askAnswer.explanation}</p>
-                <p className="text-[11px] text-faint">
-                  {askAnswer.source === 'ai' ? 'Read by AI once; everything after is run by the map.' : 'Read by rules, no AI used.'}
-                  {askAnswer.scored && askAnswer.plan.score ? ` Each parcel rated by Jev: "${askAnswer.plan.score}"` : ''}
-                  {askAnswer.note ? ` ${askAnswer.note}` : ''}
-                </p>
-                {askAnswer.mode === 'filters' ? (
-                  <div className="space-y-2">
-                    <p className="text-xs text-body">
-                      <strong className="text-ink">{summary.count.toLocaleString()}</strong> parcels match, all highlighted on the
-                      map. The filters are set in the Filter tab, where you can adjust them.
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50"
-                        onClick={() => setTableOpen(true)}
-                      >
-                        Open as a table
-                      </button>
-                      <button
-                        type="button"
-                        disabled={exporting}
-                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50 disabled:opacity-50"
-                        onClick={() => void exportRows()}
-                      >
-                        {exporting ? 'Collecting rows…' : `Download ${Math.min(summary.count, CSV_LIMIT).toLocaleString()} as CSV`}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <p className="text-xs text-body">
-                      {askAnswer.upload ? (
-                        <>
-                          {askAnswer.counts?.rows.toLocaleString()} rows · {askAnswer.counts?.matched.toLocaleString()} matched to a
-                          parcel · <strong className="text-ink">{askAnswer.counts?.passing.toLocaleString()}</strong> meet the question
-                        </>
-                      ) : (
-                        <>
-                          <strong className="text-ink">{askAnswer.counts?.passing.toLocaleString()}</strong> of{' '}
-                          {askAnswer.counts?.rows.toLocaleString()} checked meet the question
-                        </>
-                      )}
-                    </p>
-                    {askAnswer.truncated ? <p className="text-[11px] text-amber-600">{askAnswer.truncated}</p> : null}
-                    {askAnswer.page ? (
-                      <div className="flex items-center justify-between gap-2 rounded-md bg-sunken px-2 py-1.5">
-                        <p className="text-[11px] text-muted">
-                          {askAnswer.page.next != null
-                            ? `AI answers come 100 at a time.${
-                                askAnswer.page.total != null ? ` ${askAnswer.page.total.toLocaleString()} ${askAnswer.upload ? 'rows in the file' : 'parcels to look through'}.` : ''
-                              }`
-                            : 'That is every record for this question.'}
-                        </p>
-                        {askAnswer.page.next != null ? (
-                          <button
-                            type="button"
-                            className="shrink-0 rounded-md bg-ink px-2 py-1 text-[11px] font-medium text-white disabled:opacity-50"
-                            disabled={askBusy}
-                            onClick={() => void moreAsk()}
-                          >
-                            {askBusy ? 'Working…' : 'Next 100'}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50 disabled:opacity-50"
-                        disabled={!askAnswer.ids?.length}
-                        onClick={() => setAskShown((on) => !on)}
-                      >
-                        {askShown ? 'Clear from map' : 'Show on map'}
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-md border border-line px-2 py-1 text-[11px] font-medium text-body hover:border-brand/50"
-                        onClick={() => active && exportAsk(askAnswer, active, !askAnswer.upload)}
-                      >
-                        Download CSV
-                      </button>
-                    </div>
-                    <ul className="max-h-72 divide-y divide-line overflow-y-auto rounded-md border border-line">
-                      {(askAnswer.page ? askAnswer.rows ?? [] : (askAnswer.rows ?? []).slice(0, 100)).map((row) => (
-                        <li key={`${row.index}-${row.id ?? 'none'}`}>
-                          <button
-                            type="button"
-                            className="w-full px-2 py-1.5 text-left hover:bg-sunken disabled:cursor-default disabled:hover:bg-transparent"
-                            disabled={!row.id}
-                            onClick={() => row.id && pickFromSearch(row.id)}
-                          >
-                            <span className="flex items-center gap-1.5 text-[11px]">
-                              <span
-                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${row.passes ? 'bg-brand' : row.id ? 'bg-amber-500' : 'bg-line-strong'}`}
-                                aria-hidden
-                              />
-                              <span className="truncate font-medium text-ink">
-                                {row.address ?? (askAnswer.plan.columns?.address ? row.input?.[askAnswer.plan.columns.address] : null) ?? 'No address'}
-                              </span>
-                              {row.score != null ? (
-                                <span
-                                  className="ml-auto shrink-0 rounded bg-brand/10 px-1 text-[10px] font-semibold tabular-nums text-ink"
-                                  title="Jev's rating against the question"
-                                >
-                                  {Math.round(row.score * 100)}%
-                                </span>
-                              ) : null}
-                            </span>
-                            <span className="block truncate pl-3 text-[11px] text-muted">
-                              {[
-                                row.passes || !/zoned/i.test(row.why) ? row.zoning : null,
-                                row.floodZone && row.floodZone !== 'None' && (row.passes || !/flood/i.test(row.why)) ? `Flood ${row.floodZone}` : null,
-                                row.passes ? null : row.why,
-                              ]
-                                .filter(Boolean)
-                                .join(' · ') || 'Meets the question'}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                    {!askAnswer.page && (askAnswer.rows?.length ?? 0) > 100 ? (
-                      <p className="text-[11px] text-muted">The first 100 are listed; the CSV has all {askAnswer.rows?.length.toLocaleString()}.</p>
-                    ) : null}
-                  </>
-                )}
-              </div>
-            ) : null}
-          </div>
-        )}
-
         {rail === 'layers' && (
           <div className="space-y-3">
             {/* The market belongs here rather than floating over the map:
@@ -4653,19 +4497,76 @@ export default function Gis({
           </div>
         )}
 
-        {rail === 'filter' && (
+        {(rail === 'filter' || rail === 'ask') && (
           <div className="space-y-3">
             {!(server?.ready || index) ? (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
-                <button
-                  type="button"
-                  className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50"
-                  onClick={() => setRail('ask')}
-                >
-                  Rather draw an area and ask in plain English? <span className="font-medium text-brand">Open Ask</span>
-                </button>
+                {rail === 'ask' ? (
+                  /*
+                   * The radius filter: the same criteria as the Filter tab,
+                   * held to a circle on the map, and joined by all or some.
+                   * The circle is there as soon as the tab opens; a click on
+                   * the map moves it.
+                   */
+                  <div className="space-y-2 rounded-md border border-line bg-sunken/50 p-2">
+                    <p className="text-[11px] text-muted">Click the map to move the circle. Only parcels inside it count.</p>
+                    <label className="flex items-center gap-2 text-[11px] text-body">
+                      Radius
+                      <input
+                        type="range"
+                        min={0.25}
+                        max={20}
+                        step={0.25}
+                        value={askMiles}
+                        onChange={(event) => {
+                          const miles = Number(event.target.value)
+                          setAskMiles(miles)
+                          setAskCircle((current) => (current ? { ...current, miles } : current))
+                        }}
+                        className="flex-1"
+                        aria-label="Circle radius in miles"
+                      />
+                      <span className="w-14 text-right font-medium tabular-nums text-ink">{askMiles} mi</span>
+                    </label>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-body">Highlight parcels that meet</span>
+                      <div className="inline-flex overflow-hidden rounded-md border border-line text-[11px]" role="radiogroup" aria-label="Match all or some criteria">
+                        {(
+                          [
+                            ['all', 'All'],
+                            ['any', 'Some'],
+                          ] as ['all' | 'any', string][]
+                        ).map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            role="radio"
+                            aria-checked={matchMode === mode}
+                            onClick={() => setMatchMode(mode)}
+                            className={`px-2.5 py-1 ${matchMode === mode ? 'bg-ink text-white' : 'bg-surface text-body hover:bg-sunken'}`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-faint">
+                      {matchMode === 'all'
+                        ? 'Every criterion you set below.'
+                        : 'At least one of the criteria you set below.'}
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50"
+                    onClick={() => setRail('ask')}
+                  >
+                    Filter within a radius instead? <span className="font-medium text-brand">Open Radius</span>
+                  </button>
+                )}
                 {assetOptions.length > 0 ? (
                   <div>
                     <div className="mb-1 flex items-center justify-between gap-2">
