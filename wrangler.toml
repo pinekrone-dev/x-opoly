@@ -223,6 +223,16 @@ database_id = "221665a5-978a-446f-be9d-4ee60e10f0d6"
 binding = "BUCKET"
 bucket_name = "sitesurvey-cre-uploads-staging"
 
+# The parcel catalogue, the same bucket production reads. Staging lost its
+# catalogue when the public data domain stopped being a fallback (the route
+# serves only a bound bucket now), and every deploy's smoke test has failed
+# on it since: /catalog/markets.json answered 404 and the gate never opened.
+# Read behind sign-in here exactly as in production. The pipeline publishes
+# only to production's URL, so nothing writes to it from here.
+[[env.staging.r2_buckets]]
+binding = "PROSPECTOR_DATA"
+bucket_name = "prospector-data"
+
 # Durable Object bindings are not inherited by an environment, so staging
 # names its own; the class and its migration are shared.
 [[env.staging.durable_objects.bindings]]
