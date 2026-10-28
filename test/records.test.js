@@ -77,8 +77,8 @@ describe('asking the cities', () => {
   })
 
   test('markets without a source say so', async () => {
-    assert.equal(recordsSupported('phoenix-az'), false)
-    assert.equal((await parcelRecords('phoenix-az', {})).supported, false)
+    assert.equal(recordsSupported('denver-co'), false)
+    assert.equal((await parcelRecords('denver-co', {})).supported, false)
     for (const market of Object.keys(SOURCES)) assert.ok(SOURCES[market].length > 0)
   })
 })
@@ -135,7 +135,41 @@ describe('recorded mortgages', () => {
   })
 
   test('a market without an open recorder index has no mortgage section', async () => {
-    assert.equal(await parcelLoans('phoenix-az', {}), null)
+    assert.equal(await parcelLoans('phoenix-az', {}), null, 'Maricopa does not publish its recorder index')
     assert.equal((await parcelRecords('chicago-il', { ad: '' }, { fetcher: async () => reply([]) })).loans, null)
+  })
+})
+
+describe('the Southwest', () => {
+  test('Maricopa and Mesa ask by APN, Phoenix by the parcel box', async () => {
+    const asked = []
+    const fetcher = async (url) => {
+      asked.push(decodeURIComponent(url))
+      if (url.includes('citydata.mesaaz.gov')) return reply([])
+      return reply({ features: [{ attributes: { PermitNumber: 'BLDR1', IssuedDate: 1772582400000, PermitStatus: 'Issued', CodeCaseNumber: 'V1', Opened: 1792972800000, Closed: null, Status: 'Received' } }] })
+    }
+    const answer = await parcelRecords('phoenix-az', { gid: '502-40-002D', ad: '212 S Citrus Rd', bb: [-112.4, 33.4, -112.39, 33.41] }, { fetcher })
+    assert.ok(asked.some((u) => u.includes("APNDash='502-40-002D'")))
+    assert.ok(asked.some((u) => u.includes('parcel_number=50240002D')), 'Mesa writes the APN without dashes')
+    assert.ok(asked.some((u) => u.includes('Planning_Permit') && u.includes('esriGeometryEnvelope') && u.includes('-112.4,33.4,-112.39,33.41')))
+    const permits = answer.sources.find((s) => s.label.startsWith('Maricopa County permits'))
+    assert.equal(permits.rows[0].date, '2026-03-04', 'ArcGIS epoch milliseconds read as a day')
+    assert.equal(answer.sources.find((s) => s.label.startsWith('Maricopa County code')).open, 1)
+  })
+
+  test('an APN that is not shaped like one asks nothing', async () => {
+    let calls = 0
+    await parcelRecords('phoenix-az', { gid: "1' OR '1'='1", ad: '' }, { fetcher: async () => (calls++, reply({ features: [] })) })
+    assert.equal(calls, 0)
+  })
+
+  test('Tucson by Pima parcel, Clark County by the eleven-digit APN', async () => {
+    const asked = []
+    const fetcher = async (url) => (asked.push(decodeURIComponent(url)), reply({ features: [] }))
+    await parcelRecords('tucson-az', { gid: '110142280' }, { fetcher })
+    await parcelRecords('las-vegas-nv', { gid: '13811110170' }, { fetcher })
+    assert.ok(asked.some((u) => u.includes("PARCEL='110142280'")))
+    assert.ok(asked.some((u) => u.includes('PRCLID=13811110170')))
+    assert.ok(asked.some((u) => u.includes("SPATIALID='13811110170'")))
   })
 })
