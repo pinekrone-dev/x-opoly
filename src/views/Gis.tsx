@@ -35,6 +35,7 @@ import type {
   MapView,
   MarketStatus,
   ParcelQuery,
+  ParcelRecords,
   ParcelRow,
   ParcelSearch,
   Place,
@@ -5067,6 +5068,7 @@ export default function Gis({
                   linked={known?.place?.fields ?? null}
                   linkedName={known?.place?.name ?? null}
                 />
+                {server?.ready && active ? <CityRecords key={`${active}:${selected}`} market={active} id={selected} /> : null}
                 {/* The flood zone, on every parcel in a market FEMA maps,
                     whether or not the flood layer is switched on. */}
                 {floodLayer && flood && (
@@ -5615,6 +5617,102 @@ function OwnerPosition({ record, market }: { record: Record<string, unknown>; ma
           out. The roll carries no loans; a refinance since would not show here. Check title.
         </p>
       ) : null}
+    </PanelSection>
+  )
+}
+
+/*
+ * Permits and code cases, from the city's own open data, asked when the
+ * card opens. Open code cases lead, because they are the thing a buyer
+ * inherits; permits follow, newest first. Each source says how it matched
+ * the parcel, since an address match can miss a record an id match would
+ * not. Nothing shows for a market whose cities publish neither.
+ */
+function CityRecords({ market, id }: { market: string; id: string | number }) {
+  const [answer, setAnswer] = useState<ParcelRecords | null | 'failed'>(null)
+  const [openAll, setOpenAll] = useState<Record<string, boolean>>({})
+  useEffect(() => {
+    let cancelled = false
+    api.parcels
+      .records(market, id)
+      .then((result) => {
+        if (!cancelled) setAnswer(result)
+      })
+      .catch(() => {
+        if (!cancelled) setAnswer('failed')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [market, id])
+  if (answer && answer !== 'failed' && !answer.supported) return null
+  const sources = answer && answer !== 'failed' ? answer.sources : []
+  const openCases = sources.filter((s) => s.kind === 'case').reduce((sum, s) => sum + s.open, 0)
+  const permits = sources.filter((s) => s.kind === 'permit').reduce((sum, s) => sum + s.rows.length, 0)
+  const ordered = [...sources].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'case' ? -1 : 1))
+  return (
+    <PanelSection title="Permits and code cases">
+      {answer === null ? (
+        <p className="text-xs text-muted">Asking the city…</p>
+      ) : answer === 'failed' ? (
+        <p className="text-xs text-muted">The city's records could not be read just now.</p>
+      ) : (
+        <>
+          <p className={`text-xs ${openCases ? 'font-semibold text-amber-700' : 'text-body'}`}>
+            {openCases ? `${openCases} open code case${openCases === 1 ? '' : 's'}` : 'No open code cases on file'}
+            {' · '}
+            {permits ? `${permits}${permits >= 25 ? '+' : ''} permit${permits === 1 ? '' : 's'}` : 'no permits on file'}
+          </p>
+          <div className="mt-1.5 space-y-2">
+            {ordered.map((source) => {
+              const key = `${source.kind}:${source.label}`
+              const rows = [...source.rows].sort((a, b) => Number(b.open) - Number(a.open))
+              const shown = openAll[key] ? rows : rows.slice(0, 4)
+              return (
+                <div key={key}>
+                  <p className="text-[11px] font-medium text-ink">
+                    {source.label}
+                    <span className="font-normal text-faint">
+                      {' '}
+                      · {source.error ? source.error : `${source.rows.length}${source.rows.length >= 25 ? '+' : ''} found`} · by {source.by}
+                    </span>
+                  </p>
+                  {shown.length ? (
+                    <ul className="mt-0.5 space-y-1">
+                      {shown.map((row, i) => (
+                        <li key={`${row.id}-${i}`} className="text-[11px] leading-snug text-body">
+                          <span className={row.open ? 'font-semibold text-amber-700' : 'text-muted'}>
+                            {row.open ? 'Open' : row.status || 'Closed'}
+                          </span>
+                          {row.date ? <span className="text-faint"> · {row.date}</span> : null}
+                          {row.type ? <span> · {row.type}</span> : null}
+                          {row.description ? <span className="block text-muted">{row.description}</span> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {rows.length > shown.length ? (
+                    <button type="button" className="mt-0.5 text-[11px] text-accent underline" onClick={() => setOpenAll((m) => ({ ...m, [key]: true }))}>
+                      Show all {rows.length}
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-1.5 text-[11px] leading-snug text-faint">
+            From the city's open data, read live. A record filed under another address on the lot may not show; check{' '}
+            {ordered[0]?.portal ? (
+              <a href={ordered[0].portal} target="_blank" rel="noreferrer" className="underline">
+                the city's portal
+              </a>
+            ) : (
+              "the city's portal"
+            )}{' '}
+            before relying on it.
+          </p>
+        </>
+      )}
     </PanelSection>
   )
 }
