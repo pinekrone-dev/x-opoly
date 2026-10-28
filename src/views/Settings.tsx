@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import ConnectedApps from '../components/ConnectedApps'
 import InviteCollaborators from '../components/InviteCollaborators'
 import SubscriptionSettings from '../components/SubscriptionSettings'
 import WorkspaceNav from '../components/WorkspaceNav'
@@ -204,6 +205,8 @@ export default function Settings({
         </section>
 
         <InviteCollaborators />
+
+        <ConnectedApps />
 
         {billing?.configured ? (
           <SubscriptionSettings billing={billing} email={account.email} onChanged={() => onBillingChange?.()} />

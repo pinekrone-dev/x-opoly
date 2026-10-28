@@ -55,6 +55,7 @@ let claude
 let clientId
 let verifier
 let tokens
+let latest
 
 before(async () => {
   resetRateLimits()
@@ -83,6 +84,13 @@ describe('discovery', () => {
   test('a client registers itself, with https return addresses only', async () => {
     const bad = await claude('/oauth/register', json({ client_name: 'X', redirect_uris: ['http://evil.example/cb'] }))
     assert.equal(bad.status, 400)
+    // Open registration, but the code can only travel to Claude or to the
+    // person's own machine: a stranger's https callback calling itself
+    // "Claude" is refused.
+    const phish = await claude('/oauth/register', json({ client_name: 'Claude', redirect_uris: ['https://evil.example/cb'] }))
+    assert.equal(phish.status, 400)
+    const desktop = await claude('/oauth/register', json({ client_name: 'Claude Code', redirect_uris: ['http://localhost:33418/callback'] }))
+    assert.equal(desktop.status, 201)
     const made = await claude('/oauth/register', json({ client_name: 'Claude', redirect_uris: [REDIRECT] }))
     assert.equal(made.status, 201)
     assert.equal(made.body.token_endpoint_auth_method, 'none')
@@ -126,6 +134,9 @@ describe('approving', () => {
     assert.equal(page.status, 200)
     assert.match(page.body, /Connect Claude to Land Quotient\?/)
     assert.match(page.body, /kevin@example\.com/)
+    assert.match(page.body, /sends you back to <strong>claude\.ai<\/strong>/)
+    assert.doesNotMatch(page.body, /name="crm" value="1" checked/, 'the CRM is never pre-ticked')
+    assert.equal(page.headers.get('x-frame-options'), 'DENY')
 
     const decided = await owner('/oauth/authorize', form({ ...Object.fromEntries(q), decision: 'allow' }, { origin: 'http://localhost' }))
     assert.equal(decided.status, 302)
@@ -227,12 +238,36 @@ describe('the connector', () => {
     assert.equal(reused.body.error, 'invalid_grant')
     const works = await claude('/mcp', json({ jsonrpc: '2.0', id: 9, method: 'ping' }, { authorization: `Bearer ${fresh.body.access_token}` }))
     assert.deepEqual(works.body.result, {})
+    latest = fresh.body
   })
 
   test('a county the store does not hold says so, rather than failing blind', async () => {
     const res = await rpc('tools/call', { name: 'search_parcels', arguments: { market: 'charlotte-nc', assetTypes: ['Industrial'] } })
     assert.equal(res.body.result.isError, true)
     assert.match(res.body.result.content[0].text, /served from county files/)
+  })
+
+  test('a batch of more than twenty messages is refused whole', async () => {
+    const many = Array.from({ length: 21 }, (_, i) => ({ jsonrpc: '2.0', id: i, method: 'ping' }))
+    const res = await claude('/mcp', json(many, { authorization: `Bearer ${tokens.access_token}` }))
+    assert.equal(res.status, 400)
+  })
+
+  test('a market that is not a slug is refused before it nears a path', async () => {
+    const res = await rpc('tools/call', { name: 'market_layers', arguments: { market: '../secrets' } })
+    assert.equal(res.body.result.isError, true)
+  })
+
+  test('the person sees the connection in Settings and can cut it off', async () => {
+    const listed = await owner('/api/account/connections')
+    assert.ok(listed.body.connections.some((c) => c.name === 'Claude'))
+    const live = await claude('/mcp', json({ jsonrpc: '2.0', id: 1, method: 'ping' }, { authorization: `Bearer ${latest.access_token}` }))
+    assert.equal(live.status, 200)
+    const cut = await owner(`/api/account/connections/${encodeURIComponent(clientId)}`, { method: 'DELETE', headers: { 'sec-fetch-site': 'same-origin' } })
+    assert.equal(cut.status, 204)
+    forgetTokens()
+    const dead = await claude('/mcp', json({ jsonrpc: '2.0', id: 2, method: 'ping' }, { authorization: `Bearer ${latest.access_token}` }))
+    assert.equal(dead.status, 401)
   })
 
   test('a made-up token is not a session', async () => {
@@ -243,6 +278,10 @@ describe('the connector', () => {
 
 describe('changes from another site', () => {
   const view = { market: 'austin-tx', name: 'Guarded', state: { v: 1 } }
+  test('so is one from a sibling subdomain, which the Lax cookie would ride along on', async () => {
+    const res = await owner('/api/gis/views', json(view, { 'sec-fetch-site': 'same-site' }))
+    assert.equal(res.status, 403)
+  })
   test('a cookie-borne change marked cross-site by the browser is refused', async () => {
     const res = await owner('/api/gis/views', json(view, { 'sec-fetch-site': 'cross-site' }))
     assert.equal(res.status, 403)

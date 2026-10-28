@@ -400,6 +400,10 @@ export async function destroySession(db, token) {
 export async function destroyAllSessions(db, userId) {
   for (const [hash, held] of sessions) if (held.user?.id === userId) sessions.delete(hash)
   await db.run('DELETE FROM sessions WHERE user_id = ?', [userId])
+  // And every connected application: a password change is how someone
+  // takes their account back, and a connector's refresh token would
+  // otherwise outlive it. (The per-isolate token memory is a minute long.)
+  await db.run('DELETE FROM oauth_tokens WHERE user_id = ?', [userId]).catch(() => undefined)
 }
 
 /*
