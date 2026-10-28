@@ -471,10 +471,10 @@ interface Props {
   basemaps?: TileConfig[]
   /**
    * Which corner the basemap switcher sits in. Top-right by default; the
-   * parcel map puts it top-left, beside its rail, in the spot a floating
-   * market picker used to take.
+   * parcel map puts it bottom-left, beside its rail, leaving the top-left
+   * to the address bar.
    */
-  basemapPicker?: 'top-right' | 'top-left'
+  basemapPicker?: 'top-right' | 'top-left' | 'bottom-left'
   properties: Property[]
   selectedId?: string | null
   onSelect?: (id: string) => void
@@ -2694,11 +2694,11 @@ export default function MapCanvas({
 
       {options && (
         <div
-          className={`absolute top-3 z-[520] ${basemapPicker === 'top-left' ? '' : 'right-3'}`}
+          className={`absolute z-[520] ${basemapPicker === 'bottom-left' ? 'bottom-8 flex flex-col-reverse' : 'top-3'} ${basemapPicker === 'top-right' ? 'right-3' : ''}`}
           // Left of the map proper: the parcel map's rail sets the inset it
           // covers, and a map without a rail sets nothing, so the fallback
           // keeps the picker off the edge.
-          style={basemapPicker === 'top-left' ? { left: 'calc(var(--map-inset-left, 0px) + 0.75rem)' } : undefined}
+          style={basemapPicker !== 'top-right' ? { left: 'calc(var(--map-inset-left, 0px) + 0.75rem)' } : undefined}
         >
           <button
             type="button"
@@ -2714,7 +2714,7 @@ export default function MapCanvas({
           </button>
 
           {pickerOpen && (
-            <ul className="animate-fade-in mt-1 w-48 overflow-hidden rounded-lg border border-line bg-surface/95 shadow-xl backdrop-blur">
+            <ul className="animate-fade-in my-1 w-48 overflow-hidden rounded-lg border border-line bg-surface/95 shadow-xl backdrop-blur">
               {options.map((option) => (
                 <li key={option.provider}>
                   <button
