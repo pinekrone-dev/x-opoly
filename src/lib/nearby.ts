@@ -276,8 +276,11 @@ export function inGrid(grid: NearGrid, cells: Set<number>, lng: number, lat: num
  * use) is near everything. What is left is grouped by what a broker asks of
  * it: the grid a project would tie into, and the places a site sits by.
  */
-export const NEAR_GROUPS: { id: 'power' | 'places'; label: string; layers: string[] }[] = [
+export const NEAR_GROUPS: { id: 'power' | 'hazards' | 'places'; label: string; layers: string[] }[] = [
   { id: 'power', label: 'Power', layers: ['transmission', 'substations', 'power-plants'] },
+  // What a phase I environmental report would ask about first: leaking
+  // tanks, and the tank sites that could become one.
+  { id: 'hazards', label: 'Hazards', layers: ['lust', 'ust'] },
   {
     id: 'places',
     label: 'Places',
