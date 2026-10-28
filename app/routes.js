@@ -204,7 +204,8 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
-import { createCode, exchangeCode, getClient, readScope, refreshTokens, registerClient, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
+import { randomToken } from './lib/crypto.js'
+import { createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
@@ -309,6 +310,20 @@ function bindingError(error, binding) {
  */
 export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards = {} }) {
   const app = new Hono()
+
+  /*
+   * The connector calls this app's own routes as the person, and those
+   * routes key their per-address allowances on the caller's address; every
+   * connector call arrives from Anthropic's servers. So an internal call
+   * names a per-person stand-in instead, and it is believed only alongside
+   * a secret drawn when this app started, which no outside caller can send.
+   */
+  const INTERNAL_KEY = randomToken(24)
+  app.use('*', async (c, next) => {
+    const said = c.req.header('x-lq-internal')
+    if (said && said === INTERNAL_KEY) c.set('clientAddress', String(c.req.header('x-lq-address') || '').slice(0, 80))
+    return next()
+  })
 
   /*
    * Where the county lives.
@@ -594,7 +609,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
     if (!tokenFrom(c)) return next()
     const site = c.req.header('sec-fetch-site')
-    if (site === 'cross-site') return c.json({ error: 'That request came from another site.', code: 'cross_site' }, 403)
+    // Same-origin, or typed by the person (none). A sibling subdomain is
+    // "same-site" and would carry the Lax cookie, so it is refused too.
+    if (site && site !== 'same-origin' && site !== 'none') {
+      return c.json({ error: 'That request came from another site.', code: 'cross_site' }, 403)
+    }
     const origin = c.req.header('origin')
     if (!site && origin) {
       let from = null
@@ -2286,8 +2305,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // own OIDC token, the same proof the ingest door takes.
     const bearer = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
     if (bearer.startsWith('lqt_')) {
+      // The same test a cookie session passes: a connector reads the
+      // catalogue only for a workspace that may read it in the app.
       const granted = await tokenUser(db, bearer).catch(() => null)
-      return granted ? { id: granted.user.id } : null
+      if (!granted) return null
+      const user = granted.user
+      const exempt = await teamIsExempt(user.teamId, user.email).catch(() => false)
+      const paying =
+        !stripeConfigured(env) ||
+        freeAccess(env) ||
+        exempt ||
+        (await billingState(db, env, user.teamId).catch(() => ({ active: false }))).active
+      return paying ? { id: user.id, exempt } : null
     }
     if (bearer) {
       try {
@@ -3436,6 +3465,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (throttled) return throttled
     const result = await saveView(db, user.teamId, await c.req.json().catch(() => ({})), {
       userId: user.id,
+      ownOnly: Boolean(c.get('connector')),
     })
     if (result.error) return c.json({ error: result.error }, 400)
     return c.json({ view: result.view }, 201)
@@ -4462,6 +4492,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     })
   })
 
+  // The person's own list of connected applications, and the way to cut one off.
+  app.get('/api/account/connections', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    return c.json({ connections: await listConnections(db, user.id) })
+  })
+  app.delete('/api/account/connections/:clientId', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    await disconnect(db, user.id, c.req.param('clientId'))
+    return c.body(null, 204)
+  })
+  app.delete('/api/account/connections', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    await disconnect(db, user.id)
+    return c.body(null, 204)
+  })
+
   app.all('/api/*', (c) => c.json({ error: 'Unknown endpoint.' }, 404))
 
 
@@ -4520,9 +4569,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
   app.post('/oauth/register', async (c) => {
     openCors(c)
-    const throttled = limited(c, 'oauth-register', 30, 60 * 60 * 1000)
+    // Every Claude user's registration arrives from Anthropic's addresses,
+    // so this is a ceiling on a flood, not a per-person limit; the redirect
+    // allowlist is what keeps registrations harmless.
+    const throttled = limited(c, 'oauth-register', 600, 60 * 60 * 1000)
     if (throttled) return throttled
-    const made = await registerClient(db, await c.req.json().catch(() => ({})))
+    const made = await registerClient(db, await c.req.json().catch(() => ({})), env)
     if (made.error) return c.json({ error: made.error, error_description: made.description }, 400)
     return c.json(made.client, 201)
   })
@@ -4531,8 +4583,16 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
   const oauthPage = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · Land Quotient</title>
 <style>body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#f5f7fa;color:#1f2937}main{max-width:440px;margin:8vh auto;padding:28px;background:#fff;border:1px solid #e5e7eb;border-radius:14px}h1{font-size:20px;margin:0 0 12px;color:#1B3668}ul{padding-left:20px}li{margin:4px 0}.small{font-size:13px;color:#6b7280}label{display:flex;gap:8px;align-items:flex-start;margin:14px 0}.row{display:flex;gap:10px;margin-top:20px}button{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;font:inherit;cursor:pointer}button.go{background:#12AEB6;border-color:#12AEB6;color:#fff;font-weight:600}</style></head><body><main>${body}</main></body></html>`
-  const oauthError = (c, title, text, status = 400) =>
-    c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from Claude.</p>`), status)
+  // The approval page is never framed, on Node as on the Worker.
+  const unframed = (c) => {
+    c.header('X-Frame-Options', 'DENY')
+    c.header('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'")
+    c.header('Cache-Control', 'no-store')
+  }
+  const oauthError = (c, title, text, status = 400) => {
+    unframed(c)
+    return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from Claude.</p>`), status)
+  }
   const backTo = (redirectUri, values) => {
     const url = new URL(redirectUri)
     for (const [key, value] of Object.entries(values)) if (value) url.searchParams.set(key, value)
@@ -4541,7 +4601,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   // The authorize request, checked the same way on the page and on the decision.
   const checkAuthorize = async (q) => {
     const client = await getClient(db, q.client_id)
-    if (!client || !client.redirectUris.includes(q.redirect_uri)) return { fatal: 'The application asking to connect is not registered here, or its return address does not match.' }
+    if (!client || !client.redirectUris.includes(q.redirect_uri) || !goodRedirect(q.redirect_uri, env)) {
+      return { fatal: 'The application asking to connect is not registered here, or its return address does not match.' }
+    }
     if (q.response_type !== 'code') return { client, back: 'unsupported_response_type' }
     if (!q.code_challenge || q.code_challenge_method !== 'S256') return { client, back: 'invalid_request' }
     return { client }
@@ -4560,7 +4622,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const hidden = ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'response_type']
       .map((name) => `<input type="hidden" name="${name}" value="${esc(q[name])}">`)
       .join('')
-    const askedCrm = String(q.scope || '').split(/\s+/).includes('crm')
+    const destination = new URL(q.redirect_uri).host
+    unframed(c)
     return c.html(
       oauthPage(
         'Connect to Land Quotient',
@@ -4568,8 +4631,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 <p>It will act as <strong>${esc(user.email)}</strong> and be able to:</p>
 <ul><li>Search parcels and read county records, layers, permits and mortgages in your markets</li><li>Save maps to your workspace and link you to them</li></ul>
 <form method="post" action="/oauth/authorize">${hidden}
-<label><input type="checkbox" name="crm" value="1"${askedCrm ? ' checked' : ''}> <span>Also let it add parcels to your CRM</span></label>
-<p class="small">It uses your account's daily allowances, like the app does. You can disconnect it any time from Claude's connector settings.</p>
+<label><input type="checkbox" name="crm" value="1"> <span>Also let it add parcels to your CRM</span></label>
+<p class="small">Approving sends you back to <strong>${esc(destination)}</strong>. It uses your account's daily allowances, like the app does. Disconnect it any time in Land Quotient under Settings, Connected apps, or by changing your password.</p>
 <div class="row"><button type="submit" name="decision" value="deny">Cancel</button><button class="go" type="submit" name="decision" value="allow">Allow</button></div>
 </form>`,
       ),
@@ -4602,8 +4665,6 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   app.post('/oauth/token', async (c) => {
     openCors(c)
     c.header('Cache-Control', 'no-store')
-    const throttled = limited(c, 'oauth-token', 120, 10 * 60 * 1000)
-    if (throttled) return throttled
     const type = c.req.header('content-type') || ''
     const body = type.includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
     let clientId = typeof body.client_id === 'string' ? body.client_id : ''
@@ -4616,6 +4677,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         clientId = ''
       }
     }
+    // Per application, not per address: every Claude user's refreshes come
+    // from Anthropic's servers.
+    const throttled = limited(c, 'oauth-token', 1200, 10 * 60 * 1000, clientId || 'none')
+    if (throttled) return throttled
     let out
     if (body.grant_type === 'authorization_code') {
       out = await exchangeCode(db, { code: body.code, clientId, redirectUri: body.redirect_uri, verifier: body.code_verifier })
@@ -4626,6 +4691,19 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
     if (out.error) return c.json({ error: out.error }, 400)
     return c.json(out.tokens)
+  })
+
+  // RFC 7009. Always 200, known token or not, so it says nothing about tokens.
+  app.options('/oauth/revoke', (c) => {
+    openCors(c)
+    return c.body(null, 204)
+  })
+  app.post('/oauth/revoke', async (c) => {
+    openCors(c)
+    const type = c.req.header('content-type') || ''
+    const body = type.includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
+    await revokeToken(db, typeof body.token === 'string' ? body.token : '').catch(() => undefined)
+    return c.body(null, 200)
   })
 
   /*
@@ -4672,13 +4750,23 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         app.fetch(
           new Request(`${origin}${path}`, {
             ...init,
-            headers: { ...(init.headers || {}), authorization: `Bearer ${bearer}`, 'cf-connecting-ip': `connector:${granted.user.id}` },
+            headers: {
+              ...(init.headers || {}),
+              authorization: `Bearer ${bearer}`,
+              // Proof this call came from here, not from a caller who sent
+              // the header: a secret drawn when the app started.
+              'x-lq-internal': INTERNAL_KEY,
+              'x-lq-address': `connector:${granted.user.id}`,
+            },
           }),
           c.env,
           execution,
         ),
     }
     const messages = Array.isArray(payload) ? payload : [payload]
+    if (messages.length > 20) {
+      return c.json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: 'At most 20 messages a batch.' } }, 400)
+    }
     const answers = []
     for (const message of messages) {
       const answer = await handleRpc(message, context)
