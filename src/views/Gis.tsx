@@ -5674,7 +5674,10 @@ function CityRecords({ market, id }: { market: string; id: string | number }) {
   const openCases = sources.filter((s) => s.kind === 'case').reduce((sum, s) => sum + s.open, 0)
   const permits = sources.filter((s) => s.kind === 'permit').reduce((sum, s) => sum + s.rows.length, 0)
   const ordered = [...sources].sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'case' ? -1 : 1))
+  const loans = answer && answer !== 'failed' ? answer.loans ?? null : null
   return (
+    <>
+    {sources.length || answer === null || answer === 'failed' ? (
     <PanelSection title="Permits and code cases">
       {answer === null ? (
         <p className="text-xs text-muted">Asking the city…</p>
@@ -5737,6 +5740,72 @@ function CityRecords({ market, id }: { market: string; id: string | number }) {
           </p>
         </>
       )}
+    </PanelSection>
+    ) : null}
+    {loans ? <RecordedLoans loans={loans} /> : null}
+    </>
+  )
+}
+
+/*
+ * The mortgages recorded against the parcel, newest first. The borrower on
+ * a mortgage is who signed the promissory note it secures, in all but the
+ * rare case of a third party pledging the property; the note itself is
+ * never recorded. Open loans lead.
+ */
+function RecordedLoans({ loans }: { loans: NonNullable<ParcelRecords['loans']> }) {
+  const [all, setAll] = useState(false)
+  const rows = [...loans.rows].sort((a, b) => Number(a.satisfied === true) - Number(b.satisfied === true))
+  const shown = all ? rows : rows.slice(0, 3)
+  const latest = loans.rows.find((r) => r.satisfied !== true)
+  return (
+    <PanelSection title="Mortgages on record">
+      {loans.error ? (
+        <p className="text-xs text-muted">The recorder's index {loans.error}.</p>
+      ) : !rows.length ? (
+        <p className="text-xs text-body">No mortgage recorded against this parcel in the city's index.</p>
+      ) : (
+        <>
+          {latest ? (
+            <p className="text-xs text-body">
+              Latest loan signed by <span className="font-semibold text-ink">{latest.borrowers.join(', ') || 'a borrower not named in the index'}</span>
+              {latest.lenders.length ? <> with {latest.lenders.join(', ')}</> : null}
+              {latest.date ? <>, {latest.date}</> : null}.
+            </p>
+          ) : (
+            <p className="text-xs text-body">Every recorded mortgage has a matching satisfaction on record.</p>
+          )}
+          <ul className="mt-1.5 space-y-1.5">
+            {shown.map((loan) => (
+              <li key={loan.id} className="text-[11px] leading-snug text-body">
+                <span className={loan.satisfied ? 'text-muted' : 'font-semibold text-ink'}>
+                  {loan.satisfied ? `Satisfied${loan.satisfiedOn ? ` ${loan.satisfiedOn}` : ''}` : 'No satisfaction on record'}
+                </span>
+                {loan.date ? <span className="text-faint"> · {loan.date}</span> : null}
+                <span> · {loan.type}</span>
+                {loan.amount ? <span> · {money(loan.amount)}</span> : null}
+                <span className="block text-muted">
+                  Borrower: {loan.borrowers.join(', ') || 'not named'} · Lender: {loan.lenders.join(', ') || 'not named'}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {rows.length > shown.length ? (
+            <button type="button" className="mt-0.5 text-[11px] text-accent underline" onClick={() => setAll(true)}>
+              Show all {rows.length}
+            </button>
+          ) : null}
+        </>
+      )}
+      <p className="mt-1.5 text-[11px] leading-snug text-faint">
+        {loans.label}, matched by {loans.by}. The promissory note is never recorded; the borrower on the mortgage that secures
+        it is who signed it, though a personal guarantor is not shown. A loan with no satisfaction on record may still be paid
+        off: lenders file late, and a refinance can close one through a consolidation.{' '}
+        <a href={loans.portal} target="_blank" rel="noreferrer" className="underline">
+          Check the recorder
+        </a>
+        .
+      </p>
     </PanelSection>
   )
 }

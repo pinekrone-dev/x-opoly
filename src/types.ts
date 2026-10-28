@@ -704,8 +704,24 @@ export interface CityRecordSource {
   error?: string
 }
 
+/** One recorded mortgage: the instrument securing a promissory note. */
+export interface RecordedLoan {
+  id: string
+  date: string | null
+  type: string
+  amount: number | null
+  /** The mortgagor: almost always whoever signed the note. */
+  borrowers: string[]
+  lenders: string[]
+  /** True when a later satisfaction names the same lender; null when none is on record. */
+  satisfied: boolean | null
+  satisfiedOn: string | null
+}
+
 export interface ParcelRecords {
   market: string
   supported: boolean
   sources: CityRecordSource[]
+  /** Recorded mortgages, where the city publishes its recorder's index; null elsewhere. */
+  loans?: { label: string; by: string; portal: string; rows: RecordedLoan[]; error?: string } | null
 }
