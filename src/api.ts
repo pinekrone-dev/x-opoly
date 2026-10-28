@@ -350,6 +350,7 @@ export const api = {
       if (filters.flood) params.set('flood', filters.flood)
       if (filters.buildings) params.set('bld', filters.buildings)
       if (filters.coverageMax != null) params.set('cov', String(filters.coverageMax))
+      if (filters.owners?.length) params.set('own', filters.owners.join(','))
       if (filters.box) params.set('box', filters.box.join(','))
       if (page.limit != null) params.set('limit', String(page.limit))
       if (page.offset) params.set('offset', String(page.offset))

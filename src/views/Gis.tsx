@@ -22,6 +22,7 @@ import { GRID_METRICS, gridFeatures, type GridMetric, type ParcelGrid } from '..
 import { BUILDING_PART_LAYER, OVERTURE_ATTRIBUTION, OVERTURE_BUILDINGS_URL, buildingsFor, describeBuildings, type BuildingSummary } from '../lib/buildings'
 import { COASTAL_MARKETS, VESSEL_COLORS, snapView, vesselFeatures, vesselTrails, viewTooWide, type VesselAnswer } from '../lib/vessels'
 import { csvCell } from '../lib/csv'
+import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilter } from '../lib/owners'
 
 /** The widest map view, in degrees either way, a question that costs something may cover (app/lib/ask.js). */
 const AREA_MAX_SPAN = 0.35
@@ -1363,6 +1364,8 @@ export default function Gis({
   const [floodPick, setFloodPick] = useState<'in' | 'out' | null>(null)
   const [buildingPick, setBuildingPick] = useState<'vacant' | 'built' | null>(null)
   const [coverageMax, setCoverageMax] = useState<number | null>(null)
+  /** Held ten years, likely free and clear, mailing out of state: all must hold. */
+  const [ownerPicks, setOwnerPicks] = useState<Set<OwnerFilter>>(new Set())
   /** An area of the map the results are held to, from a question asked about it. */
   const [areaBox, setAreaBox] = useState<[number, number, number, number] | null>(null)
   /** Whether a question is about the map view or the whole county. */
@@ -1495,6 +1498,7 @@ export default function Gis({
     setFloodPick(null)
     setBuildingPick(null)
     setCoverageMax(null)
+    setOwnerPicks(new Set())
     setAreaBox(null)
     setQuery('')
     setOwners(null)
@@ -2500,9 +2504,10 @@ export default function Gis({
       flood: floodPick,
       buildings: buildingPick,
       coverageMax,
+      owners: [...ownerPicks].sort(),
       box: areaBox,
     }
-  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, areaBox])
+  }, [query, assets, value, acres, ownerPick, zoningKeep, zoningDrop, zoningCodes, floodPick, buildingPick, coverageMax, ownerPicks, areaBox])
 
   const queryKey = JSON.stringify(serverQuery)
 
@@ -2617,6 +2622,15 @@ export default function Gis({
    * everything" and "show these thirty thousand", and the second is a filter
    * expression the size of the county.
    */
+  /*
+   * Whether this market can answer the owner filters: served from the store,
+   * once its records have been read into the sale-year and mailing-state
+   * columns; served from the index, once the pipeline has written them in.
+   */
+  const ownerFiltersReady = server?.ready
+    ? Boolean(server.otagged)
+    : Boolean(index?.keys?.includes('sy') || index?.keys?.includes('ms'))
+
   const filtered = useMemo(() => {
     // Answered by the server where it can be. `ids` is null there for exactly
     // the same reason this returns null below: nothing is filtered, so the map
@@ -2631,10 +2645,19 @@ export default function Gis({
     const vMax = lo(value.max)
     const aMin = lo(acres.min)
     const aMax = lo(acres.max)
-    const active =
-      Boolean(needle) || assets.size > 0 || ownerPick != null ||
+    const anySet =
+      Boolean(needle) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 ||
       [vMin, vMax, aMin, aMax].some((n) => n != null && Number.isFinite(n))
-    if (!active || !rows.length) return null
+    if (!anySet || !rows.length) return null
+    // The owner filters read the sale year and mailing state the pipeline
+    // writes into the index (`sy`, `ms`), by the rules in lib/owners.
+    const thisYear = new Date().getUTCFullYear()
+    const soldBy = ownerPicks.has('freeClear')
+      ? thisYear - FREE_CLEAR_YEARS
+      : ownerPicks.has('held10')
+        ? thisYear - HELD_YEARS
+        : null
+    const home = ownerPicks.has('outOfState') ? marketState(active) : null
 
     const out: Record<string, string | number | null>[] = []
     for (const row of rows) {
@@ -2642,6 +2665,8 @@ export default function Gis({
       // point of the layer: one operator's footprint across the county.
       if (ownerPick && String(row[ownerPick.kind === 'p' ? 'po' : 'bo'] ?? '') !== ownerPick.id) continue
       if (assets.size && !assets.has(String(row.at || ''))) continue
+      if (soldBy != null && !(Number(row.sy) > 0 && Number(row.sy) <= soldBy)) continue
+      if (ownerPicks.has('outOfState') && !(home && row.ms && row.ms !== home)) continue
       const mv = Number(row.mv) || 0
       if (vMin != null && Number.isFinite(vMin) && mv < vMin) continue
       if (vMax != null && Number.isFinite(vMax) && mv > vMax) continue
@@ -2655,7 +2680,7 @@ export default function Gis({
       out.push(row)
     }
     return out
-  }, [rows, query, assets, value, acres, ownerPick, server, found])
+  }, [rows, query, assets, value, acres, ownerPick, ownerPicks, server, found, active])
 
   /*
    * What the map highlights.
@@ -3131,6 +3156,7 @@ export default function Gis({
       assets: [...assets],
       value,
       acres,
+      ownerFilters: [...ownerPicks],
     }
   }
 
@@ -3180,6 +3206,10 @@ export default function Gis({
     if (Array.isArray(st.assets)) setAssets(new Set((st.assets as unknown[]).map(String)))
     if (st.value && typeof st.value === 'object') setValue(st.value as { min: string; max: string })
     if (st.acres && typeof st.acres === 'object') setAcres(st.acres as { min: string; max: string })
+    if (Array.isArray(st.ownerFilters)) {
+      const known: OwnerFilter[] = ['held10', 'freeClear', 'outOfState']
+      setOwnerPicks(new Set((st.ownerFilters as unknown[]).filter((v): v is OwnerFilter => known.includes(v as OwnerFilter))))
+    }
 
     const centre = st.center as [number, number] | undefined
     if (Array.isArray(centre) && centre.length === 2 && centre.every(Number.isFinite)) {
@@ -4704,6 +4734,19 @@ export default function Gis({
                     }}
                   />
                 ) : null}
+                <OwnerFilterPicker
+                  available={ownerFiltersReady}
+                  picks={ownerPicks}
+                  state={marketState(active)}
+                  onToggle={(entry) =>
+                    setOwnerPicks((current) => {
+                      const next = new Set(current)
+                      if (next.has(entry)) next.delete(entry)
+                      else next.add(entry)
+                      return next
+                    })
+                  }
+                />
                 <div className="flex items-center justify-between border-t border-line pt-2">
                   <span className="text-xs text-muted">
                     {/*
@@ -4728,6 +4771,9 @@ export default function Gis({
                       setZoningDrop(new Set())
                       setZoningCodes([])
                       setFloodPick(null)
+                      setBuildingPick(null)
+                      setCoverageMax(null)
+                      setOwnerPicks(new Set())
                       setAreaBox(null)
                       setQuery('')
                     }}
@@ -5009,6 +5055,10 @@ export default function Gis({
           extra={
             parcel ? (
               <>
+                <OwnerPosition
+                  record={{ ...parcel, ...((details?.[String(selected)] as Record<string, unknown> | undefined) ?? {}) }}
+                  market={active}
+                />
                 {/* The flood zone, on every parcel in a market FEMA maps,
                     whether or not the flood layer is switched on. */}
                 {floodLayer && flood && (
@@ -5518,6 +5568,101 @@ function BuildingFilter({
         </label>
       </div>
       <p className="mt-1 text-[10px] text-faint">From Overture's mapped footprints. A small outbuilding counts as a building.</p>
+    </div>
+  )
+}
+
+/*
+ * What the record says about the owner's position, on the card: the same
+ * three readings the owner filters use, for this one parcel. Nothing shows
+ * when the county publishes neither a sale date nor a mailing ZIP.
+ */
+function OwnerPosition({ record, market }: { record: Record<string, unknown>; market: string | null }) {
+  const traits = ownerTraits(record, market)
+  if (traits.saleYear == null && traits.mailState == null) return null
+  return (
+    <PanelSection title="Owner position">
+      <dl className="space-y-1 text-xs">
+        {traits.saleYear != null ? (
+          <Row
+            label="Held"
+            value={
+              traits.heldYears === 0
+                ? `Bought this year (${traits.saleYear})`
+                : `${traits.heldYears} year${traits.heldYears === 1 ? '' : 's'}, since ${traits.saleYear}`
+            }
+          />
+        ) : null}
+        {traits.freeClear ? <Row label="Loan" value="Likely free and clear" /> : null}
+        {traits.mailState != null ? (
+          <Row
+            label="Mail goes to"
+            value={traits.outOfState ? `${traits.mailState}, out of state` : `${traits.mailState}, in state`}
+          />
+        ) : null}
+      </dl>
+      {traits.freeClear ? (
+        <p className="mt-1.5 text-[11px] leading-snug text-faint">
+          Inferred: the last sale was {FREE_CLEAR_YEARS}+ years ago, so a 30-year loan from the purchase would have run
+          out. The roll carries no loans; a refinance since would not show here. Check title.
+        </p>
+      ) : null}
+    </PanelSection>
+  )
+}
+
+/*
+ * The owner filters.
+ *
+ * Read from what the county publishes — the last sale date and the mailing
+ * address — so each says what it is made of. "Likely free and clear" in
+ * particular is an inference (no roll here carries loans), and is labelled
+ * as one rather than presented as a fact about the title.
+ */
+function OwnerFilterPicker({
+  available,
+  picks,
+  state,
+  onToggle,
+}: {
+  available: boolean
+  picks: Set<OwnerFilter>
+  state: string | null
+  onToggle: (entry: OwnerFilter) => void
+}) {
+  const year = new Date().getUTCFullYear()
+  const options: [OwnerFilter, string, string][] = [
+    ['held10', `Held ${HELD_YEARS}+ years`, `Last sale in ${year - HELD_YEARS} or earlier.`],
+    [
+      'freeClear',
+      'Likely free and clear',
+      `Last sale in ${year - FREE_CLEAR_YEARS} or earlier, so a 30-year loan from the purchase would be paid off. A refinance since would not show; check title.`,
+    ],
+    ['outOfState', 'Out-of-state owner', `Tax bill mailed outside ${state ?? 'the state'}, read from the mailing ZIP.`],
+  ]
+  return (
+    <div>
+      <p className="mb-1 text-[11px] font-medium text-body">Owner</p>
+      {available ? (
+        <ul className="space-y-1">
+          {options.map(([key, label, hint]) => (
+            <li key={key}>
+              <label className="flex cursor-pointer items-start gap-2 text-[11px] text-body">
+                <input type="checkbox" className="mt-0.5" checked={picks.has(key)} onChange={() => onToggle(key)} />
+                <span>
+                  <span className="font-medium text-ink">{label}</span>
+                  <span className="block text-[10px] text-faint">{hint}</span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[10px] text-faint">
+          Held 10+ years, likely free and clear and out-of-state owner come to this market once its sale dates and
+          mailing addresses have been read in.
+        </p>
+      )}
     </div>
   )
 }

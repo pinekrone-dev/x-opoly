@@ -1,3 +1,5 @@
+import type { OwnerFilter } from './lib/owners'
+
 /** The signed-in broker. The phone is only ever a hint, never the number. */
 /** A labelled radius circle — a non-compete, a boundary the client set. */
 export interface Zone {
@@ -552,6 +554,8 @@ export interface MarketStatus {
   tagged?: boolean
   /** Every parcel carries what stands on it, from Overture's footprints. */
   btagged?: boolean
+  /** Every parcel's sale year and owner mailing state are read, so the owner filters work. */
+  otagged?: boolean
   builtAt?: string | null
 }
 
@@ -575,6 +579,8 @@ export interface ParcelQuery {
   coverageMax?: number | null
   /** Only parcels touching this area of the map, west-south-east-north. */
   box?: [number, number, number, number] | null
+  /** Held ten years or more, likely free and clear, mailing out of state. */
+  owners?: OwnerFilter[]
 }
 
 export interface ParcelSearch {

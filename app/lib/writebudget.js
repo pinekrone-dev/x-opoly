@@ -25,6 +25,7 @@ export const ROWS_PER = {
   drop: 8, // the same entries, deleted
   tag: 4, // a tag column and the indexes it touches
   reindex: 3, // the text index's entries for one parcel
+  owner: 1, // sale year and mailing state: two unindexed columns, the row itself
 }
 
 // The ledger table lives in schema.js, created with the rest.
