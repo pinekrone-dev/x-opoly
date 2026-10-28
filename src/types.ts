@@ -583,6 +583,15 @@ export interface ParcelQuery {
   box?: [number, number, number, number] | null
   /** Held ten years or more, likely free and clear, mailing out of state. */
   owners?: OwnerFilter[]
+  /** A circle drawn in the Ask panel. */
+  circle?: AskCircle | null
+}
+
+/** A circle drawn on the map for the Ask panel: centre and radius in miles (at most 20). */
+export interface AskCircle {
+  lat: number
+  lng: number
+  miles: number
 }
 
 export interface ParcelSearch {
@@ -662,7 +671,7 @@ export interface AskAnswer {
   /** Each parcel that meets the question was rated by Jev against `plan.score`. */
   scored?: boolean
   /** The map area the question was about, when it was not the whole county. */
-  area?: { box: [number, number, number, number] } | null
+  area?: { box: [number, number, number, number]; circle?: AskCircle | null } | null
   plan: AskPlan
   explanation: string
   source: 'ai' | 'rules'
