@@ -3114,6 +3114,109 @@ export default function Gis({
   }, [])
 
   /*
+   * An address the county's records did not match as typed — "1600 W Main
+   * Street, Mesa AZ 85201", with the city, state and ZIP the roll does not
+   * carry — is looked up (the Census geocoder first, see app/lib/geocode.js)
+   * and the map flies there. The point is then matched to the parcel it
+   * falls in, by house number and street through the search index, so the
+   * map ends on the lot's own extent with its card open, in whichever
+   * market holds it.
+   */
+  const [locating, setLocating] = useState(false)
+  const pendingPoint = useRef<{ lat: number; lng: number; number: string; street: string } | null>(null)
+  const [pointTick, setPointTick] = useState(0)
+
+  async function goToAddress(text: string) {
+    const wanted = text.trim()
+    if (wanted.length < 3 || locating) return
+    setLocating(true)
+    setError(null)
+    try {
+      const { results } = await api.geocode(wanted)
+      const hit = results[0]
+      if (!hit) {
+        setError('That address could not be found.')
+        return
+      }
+      const parts = /^\s*(\d+)\s+(.*)$/.exec(hit.address ?? '')
+      const words = (parts?.[2] ?? '').toLowerCase().split(/\s+/).filter((w) => w.length > 2 && !/^(n|s|e|w|ne|nw|se|sw)$/.test(w))
+      pendingPoint.current = { lat: hit.lat, lng: hit.lng, number: parts?.[1] ?? '', street: words[0] ?? '' }
+      const inMarket = extentsRef.current.some(
+        (x) => hit.lng >= x.box[0] && hit.lng <= x.box[2] && hit.lat >= x.box[1] && hit.lat <= x.box[3],
+      )
+      if (!inMarket) {
+        pendingPoint.current = null
+        setError(`${hit.label} is outside the markets we cover. The map has moved there anyway.`)
+      }
+      // Close enough that the market under it opens; the parcel match below
+      // then fits the lot exactly.
+      setLayerView({ center: [hit.lng, hit.lat], zoom: 17, key: Date.now() })
+      setPointTick((n) => n + 1)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'The address lookup failed.')
+    } finally {
+      setLocating(false)
+    }
+  }
+
+  // Match the looked-up point to its parcel once the market holding it is open.
+  useEffect(() => {
+    const point = pendingPoint.current
+    if (!point || !active) return
+    const here = extentsRef.current.find((x) => x.slug === active)
+    if (!here || point.lng < here.box[0] || point.lng > here.box[2] || point.lat < here.box[1] || point.lat > here.box[3]) return
+    if (!(server?.ready || index)) return
+    let cancelled = false
+    const inside = (bb: number[] | null | undefined) =>
+      Array.isArray(bb) && bb.length === 4 && point.lng >= bb[0] && point.lng <= bb[2] && point.lat >= bb[1] && point.lat <= bb[3]
+    const near = (bb: number[]) => {
+      const dx = ((bb[0] + bb[2]) / 2 - point.lng) * Math.cos((point.lat * Math.PI) / 180)
+      const dy = (bb[1] + bb[3]) / 2 - point.lat
+      return dx * dx + dy * dy
+    }
+    const choose = (candidates: { id: number | string; bb: number[] }[]) => {
+      if (!candidates.length) return null
+      const holding = candidates.filter((c) => inside(c.bb)).sort((a, b) => (a.bb[2] - a.bb[0]) * (a.bb[3] - a.bb[1]) - (b.bb[2] - b.bb[0]) * (b.bb[3] - b.bb[1]))
+      if (holding.length) return holding[0].id
+      // A geocoded point sits on the street, not always inside the lot:
+      // the nearest candidate within about 150 metres is the parcel.
+      const best = [...candidates].sort((a, b) => near(a.bb) - near(b.bb))[0]
+      return near(best.bb) < (150 / 111320) ** 2 ? best.id : null
+    }
+    const finish = (id: number | string | null) => {
+      if (cancelled) return
+      pendingPoint.current = null
+      if (id != null) pickFromSearch(id)
+    }
+    const words = [point.number, point.street].filter(Boolean).join(' ')
+    if (server?.ready) {
+      if (!words) return finish(null)
+      api.parcels
+        .search(active, { query: words }, { limit: 50 })
+        .then((found) =>
+          finish(
+            choose(
+              (found.rows ?? [])
+                .filter((r) => Array.isArray(r.bb))
+                .map((r) => ({ id: r.id as number | string, bb: r.bb as number[] })),
+            ),
+          ),
+        )
+        .catch(() => finish(null))
+    } else if (index?.bb) {
+      const candidates: { id: number | string; bb: number[] }[] = []
+      rows.forEach((row, i) => {
+        const bb = index.bb.slice(i * 4, i * 4 + 4)
+        if (inside(bb) || near(bb) < (150 / 111320) ** 2) candidates.push({ id: row.id as number | string, bb })
+      })
+      finish(choose(candidates))
+    }
+    return () => {
+      cancelled = true
+    }
+  }, [pointTick, active, server?.ready, index, rows, pickFromSearch])
+
+  /*
    * An address typed in full is a parcel, not a list.
    *
    * When what was typed matches exactly one record in the whole market, that
@@ -4453,12 +4556,28 @@ export default function Gis({
               onKeyDown={(event) => {
                 // Enter goes to the best match rather than waiting for a
                 // click on it: typing an address and pressing Enter is how
-                // people expect to arrive at a parcel.
-                if (event.key !== 'Enter' || !filtered?.length) return
+                // people expect to arrive at a parcel. With no record matching
+                // as typed, the address is looked up and the map goes there.
+                if (event.key !== 'Enter') return
                 event.preventDefault()
-                pickFromSearch(filtered[0].id as number | string)
+                if (filtered?.length) pickFromSearch(filtered[0].id as number | string)
+                else void goToAddress(query)
               }}
             />
+            {query.trim().length >= 3 && !searching && !filtered?.length ? (
+              <button
+                type="button"
+                className="w-full rounded-md border border-line px-2 py-1.5 text-left text-[11px] text-body hover:border-brand/50 disabled:opacity-60"
+                disabled={locating}
+                onClick={() => void goToAddress(query)}
+              >
+                {locating ? 'Finding it…' : (
+                  <>
+                    No parcel record matches that as typed. <span className="font-medium text-brand">Find this address on the map</span>
+                  </>
+                )}
+              </button>
+            ) : null}
             {!(server?.ready || index) && (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             )}
