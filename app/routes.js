@@ -2683,6 +2683,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return c.req.query('cov') && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null
       })(),
       box: readArea((c.req.query('box') ?? '').split(',').filter(Boolean)),
+      // Whether a parcel must meet every criterion or any one of them.
+      match: c.req.query('match') === 'any' ? 'any' : 'all',
       // A circle drawn in the Ask panel: lat,lng,miles.
       circle: (() => {
         const [lat, lng, miles] = (c.req.query('circle') ?? '').split(',').map(Number)

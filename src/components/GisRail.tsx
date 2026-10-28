@@ -3,8 +3,8 @@ import { useState } from 'react'
 /*
  * The left rail.
  *
- * Ask stands first: a question in plain English, or a list of addresses,
- * answered on the map or as a file. Then four questions a broker arrives
+ * Radius stands first: a circle on the map, up to twenty miles, and the
+ * criteria inside it, all or some. Then four questions a broker arrives
  * with, in the order they get asked: what am I looking at, where is the thing I already know about, which of these are worth
  * my time, and what do I hand to someone else. Layers, Search, Filter, Report.
  *
@@ -17,10 +17,10 @@ export type RailTab = 'ask' | 'layers' | 'search' | 'filter' | 'report'
 
 const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
   {
-    // A question in plain English, or a spreadsheet of addresses, answered
-    // on the map or as a file. First, because it can stand in for the rest.
+    // The radius filter: a circle on the map and the criteria inside it,
+    // all or some. First, because it is where a site search starts.
     id: 'ask',
-    label: 'Ask',
+    label: 'Radius',
     icon: (
       <>
         <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
