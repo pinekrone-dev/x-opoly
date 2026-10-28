@@ -3962,6 +3962,9 @@ export default function Gis({
     // one is open. One variable, read by the CSS for both map engines.
     <div
       className="gis-map relative h-full w-full"
+      // Read by the phone layout: with a sheet up, the buttons that float
+      // over the map's lower corners step aside rather than sit on it.
+      data-sheet={rail !== null || sideOpen ? 'open' : undefined}
       style={{
         ['--map-inset-left' as string]: rail ? '24.25rem' : '4.25rem',
         ['--map-inset-right' as string]: sideOpen ? '24rem' : '2.5rem',
@@ -4116,12 +4119,12 @@ export default function Gis({
         </div>
       )}
       {!stale && error && (
-        <div className="absolute left-1/2 top-3 z-[600] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-body shadow-lg backdrop-blur">
+        <div className="absolute left-1/2 top-16 z-[600] w-max max-w-[calc(100%-1.5rem)] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-body shadow-lg backdrop-blur md:top-3">
           {error}
         </div>
       )}
       {!stale && !error && active && !meta && (
-        <div className="absolute left-1/2 top-3 z-[600] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-muted shadow-lg backdrop-blur">
+        <div className="absolute left-1/2 top-16 z-[600] -translate-x-1/2 rounded-lg border border-line bg-surface/97 px-3 py-2 text-xs text-muted shadow-lg backdrop-blur md:top-3">
           Loading the county…
         </div>
       )}
@@ -6212,7 +6215,7 @@ function AddressBar({
   }
 
   return (
-    <div className="relative w-72 max-w-[calc(100vw-5rem)]">
+    <div className="relative w-full md:w-72">
       <form
         role="search"
         className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1.5 shadow-md"

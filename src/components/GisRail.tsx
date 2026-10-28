@@ -60,11 +60,18 @@ export default function GisRail({
   badge?: Partial<Record<RailTab, string>>
   children: React.ReactNode
 }) {
+  /*
+   * Two shapes from one tree. On a desktop the rail is a spine down the
+   * map's left edge with its drawer beside it. On a phone the same tabs are a
+   * bar along the bottom, like an app's, and the drawer is a sheet that rises
+   * over the lower part of the map, leaving the top of the map to look at.
+   * The panels are rendered once either way, so nothing typed into a filter
+   * is lost turning the phone.
+   */
   return (
-    <div className="pointer-events-none absolute left-0 top-0 z-[500] flex h-full">
-      {/* The spine is always visible; the panel slides out beside it. */}
+    <div className="pointer-events-none absolute inset-0 z-[500] md:inset-auto md:left-0 md:top-0 md:flex md:h-full">
       <nav
-        className="pointer-events-auto flex w-14 shrink-0 flex-col items-center gap-1 border-r border-line bg-surface py-2"
+        className="gis-tabbar pointer-events-auto absolute inset-x-0 bottom-0 flex items-stretch justify-around border-t border-line bg-surface md:static md:w-14 md:shrink-0 md:flex-col md:items-center md:justify-start md:gap-1 md:border-r md:border-t-0 md:py-2"
         aria-label="Map tools"
         data-tour="rail"
       >
@@ -74,7 +81,7 @@ export default function GisRail({
             <button
               key={entry.id}
               type="button"
-              className={`relative flex w-11 flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] ${
+              className={`relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] md:w-11 md:flex-none ${
                 active ? 'bg-sunken font-semibold text-brand' : 'text-muted hover:text-body'
               }`}
               aria-pressed={active}
@@ -85,7 +92,7 @@ export default function GisRail({
               </svg>
               {entry.label}
               {badge?.[entry.id] && (
-                <span className="absolute right-0 top-0 rounded-full bg-brand px-1 text-[9px] font-semibold text-white">
+                <span className="absolute right-1 top-0 rounded-full bg-brand px-1 text-[9px] font-semibold text-white md:right-0">
                   {badge[entry.id]}
                 </span>
               )}
@@ -95,19 +102,25 @@ export default function GisRail({
       </nav>
 
       {open && (
-        <section className="pointer-events-auto flex w-80 flex-col border-r border-line bg-surface">
+        <section className="gis-sheet pointer-events-auto absolute inset-x-0 flex max-h-[58%] flex-col rounded-t-2xl border-t border-line bg-surface shadow-2xl md:static md:max-h-none md:w-80 md:rounded-none md:border-r md:border-t-0 md:shadow-none">
+          {/* A handle, on a phone: the sheet reads as something lifted over the map. */}
+          <div className="flex justify-center pt-1.5 md:hidden" aria-hidden>
+            <span className="h-1 w-10 rounded-full bg-line" />
+          </div>
           <header className="flex items-center justify-between border-b border-line px-3 py-2">
             <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
               {TABS.find((entry) => entry.id === tab)?.label}
             </h2>
-            <button type="button" className="text-muted hover:text-ink" aria-label="Close panel" onClick={() => onTab(null)}>
+            <button type="button" className="px-1 text-lg leading-none text-muted hover:text-ink" aria-label="Close panel" onClick={() => onTab(null)}>
               ×
             </button>
           </header>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">{children}</div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">{children}</div>
         </section>
       )}
-      {floating ? <div className="pointer-events-auto ml-3 mt-3 self-start">{floating}</div> : null}
+      {floating ? (
+        <div className="pointer-events-auto absolute inset-x-3 top-3 md:static md:ml-3 md:mt-3 md:self-start">{floating}</div>
+      ) : null}
     </div>
   )
 }

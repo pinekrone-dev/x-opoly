@@ -1,0 +1,22 @@
+{
+  "name": "Land Quotient",
+  "short_name": "Land Quotient",
+  "description": "Parcels, owners, zoning and deals on one map.",
+  "id": "/gis",
+  "start_url": "/gis",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#ffffff",
+  "theme_color": "#1B3668",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Map", "url": "/gis" },
+    { "name": "Deals", "url": "/deals" },
+    { "name": "Surveys", "url": "/surveys" }
+  ]
+}
