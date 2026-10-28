@@ -7,8 +7,10 @@ import { api } from '../api'
 import { navigate } from '../lib/router'
 import { useCanEdit } from '../lib/access'
 import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
+import { countyCounts, describeMismatch, listingCounts, mismatches } from '../lib/listingCheck'
+import type { PanelGroup } from '../components/ParcelPanel'
 import type { DetailField } from '../lib/crm'
-import type { CrmRecord, Deal, DealParty, RecordField, RecordType, Survey } from '../types'
+import type { CrmRecord, Deal, DealParty, Place, RecordField, RecordType, Survey } from '../types'
 
 /**
  * One CRM record, and everything attached to it.
@@ -170,6 +172,8 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           </p>
         )}
 
+        {recordType === 'place' ? <CountyCheck place={record as Place} fields={fields} /> : null}
+
         {deal ? <DealEconomics deal={deal} canEdit={canEdit} onSaved={(updated) => setRecord(updated)} /> : null}
 
         {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
@@ -191,6 +195,60 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
         </fieldset>
       </main>
     </div>
+  )
+}
+
+const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
+
+/**
+ * A place saved from the map, against the county's own record of it.
+ *
+ * When the place's custom fields carry a unit or bedroom count ("Units",
+ * "Beds") and the county publishes one, the two are compared and a
+ * disagreement is said at the top of the record, where it is seen before an
+ * offer rather than after. Places not linked to a parcel show nothing.
+ */
+function CountyCheck({ place, fields }: { place: Place; fields: RecordField[] }) {
+  const [county, setCounty] = useState<{ panel: PanelGroup[]; record: Record<string, unknown> } | null>(null)
+  const market = place.market ?? null
+  const parcelId = place.parcelId ?? null
+  useEffect(() => {
+    if (!market || !parcelId) return undefined
+    let cancelled = false
+    Promise.all([
+      fetch(`${CATALOG}/${market}/meta.json`).then((r) => (r.ok ? r.json() : null)),
+      api.parcels.one(market, parcelId).then((res) => res.parcel).catch(() => null),
+    ])
+      .then(([meta, parcel]) => {
+        if (!cancelled && meta && parcel) setCounty({ panel: meta.panel ?? [], record: parcel as Record<string, unknown> })
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [market, parcelId])
+  if (!county) return null
+  const recorded = countyCounts(county.panel, county.record)
+  if (recorded.units == null && recorded.bedrooms == null) return null
+  const found = mismatches(listingCounts(fields), recorded)
+  const said = [
+    recorded.units != null ? `${recorded.units} ${recorded.units === 1 ? 'unit' : 'units'}` : null,
+    recorded.bedrooms != null ? `${recorded.bedrooms} ${recorded.bedrooms === 1 ? 'bedroom' : 'bedrooms'}` : null,
+  ]
+    .filter(Boolean)
+    .join(' and ')
+  return found.length ? (
+    <div role="alert" className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700">
+      <p className="font-semibold">Doesn't match county records</p>
+      {found.map((m) => (
+        <p key={m.field}>{describeMismatch(m)}</p>
+      ))}
+      <p className="mt-1 opacity-80">Worth asking about before an offer: an unpermitted conversion, a combined lot, or a listing typo.</p>
+    </div>
+  ) : (
+    <p className="mt-4 text-xs text-muted">
+      County records {said}. Add a Units or Beds field below and it is checked against the county.
+    </p>
   )
 }
 
