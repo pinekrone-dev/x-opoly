@@ -13,14 +13,15 @@ import { useState } from 'react'
  * apart — the count in Report is the same set the map is drawing.
  */
 
-export type RailTab = 'ask' | 'layers' | 'search' | 'filter' | 'report'
+export type RailTab = 'layers' | 'search' | 'filter' | 'report'
 
 const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
   {
-    // The radius filter: a circle on the map and the criteria inside it,
-    // all or some. First, because it is where a site search starts.
-    id: 'ask',
-    label: 'Radius',
+    // The query: every criterion, in categories, all or some, within a
+    // radius when one is switched on. First, because it is where a site
+    // search starts.
+    id: 'filter',
+    label: 'Query',
     icon: (
       <>
         <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
@@ -35,7 +36,6 @@ const TABS: { id: RailTab; label: string; icon: JSX.Element }[] = [
     icon: <path d="m12 3 9 5-9 5-9-5 9-5ZM3 13l9 5 9-5M3 17l9 5 9-5" />,
   },
   { id: 'search', label: 'Search', icon: <><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></> },
-  { id: 'filter', label: 'Filter', icon: <path d="M3 5h18l-7 8v6l-4 2v-8L3 5Z" /> },
   {
     id: 'report',
     label: 'Report',
