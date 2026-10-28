@@ -103,6 +103,24 @@ export async function geocode(query, { env = {}, fetchImpl = fetch, timeout = 10
   const search = String(query || '').trim()
   if (search.length < 3) throw new GeocodeError('Enter at least three characters to search.')
 
+  /*
+   * A street address goes to the Census geocoder first. It is built for US
+   * addresses, resolves to the house number's range, needs no key, and does
+   * not refuse a cloud server the way Nominatim's public instance does; it
+   * was only the fallback until the search bar started flying the map to
+   * whatever is typed. Nominatim stays first for everything else (a place,
+   * a landmark, a city), which the Census geocoder cannot find at all, and
+   * second for an address the Census does not match.
+   */
+  if (asksForHouseNumber(search) && !env.GEOCODER_URL) {
+    try {
+      const first = await censusGeocode(search, { fetchImpl, timeout, signal })
+      if (first.length > 0) return first
+    } catch {
+      // Fall through to Nominatim, then the Census again as before.
+    }
+  }
+
   let primaryError = null
   let imprecise = []
   try {
