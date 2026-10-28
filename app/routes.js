@@ -198,6 +198,7 @@ import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './l
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
+import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
@@ -2810,6 +2811,42 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const spent = await chargeRows(c, 1)
     if (spent) return spent
     return c.json({ parcel: found })
+  })
+
+  /*
+   * A parcel's permits and code cases, asked of the city that keeps them
+   * (lib/records.js). Live rather than stored — cities update these daily
+   * and nothing here is written — and kept at the edge for six hours, so a
+   * parcel opened twice in an afternoon asks the city once.
+   */
+  app.get('/api/gis/records', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    if (!recordsSupported(market)) return c.json({ market, supported: false, sources: [] })
+    const id = (c.req.query('id') ?? '').trim()
+    if (!id) return c.json({ error: 'id is required.' }, 400)
+    const throttled = limited(c, 'records', 120, 10 * 60 * 1000)
+    if (throttled) return throttled
+    return edgeCached(
+      c,
+      'records',
+      6 * 60 * 60,
+      async () => {
+        const parcel = await getParcel(parcelsFor(market), market, id).catch(() => null)
+        if (!parcel) return notFound(c, 'No such parcel in that market.')
+        const answer = await parcelRecords(market, parcel)
+        const complete = answer.sources.every((source) => !source.error)
+        return c.json(answer, 200, { 'x-records-complete': complete ? '1' : '0' })
+      },
+      {
+        params: { market, id },
+        // An answer with a city that did not reply is not kept: the next
+        // open should ask that city again rather than wait six hours.
+        cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-records-complete') === '1',
+      },
+    )
   })
 
   /*
