@@ -1397,9 +1397,26 @@ export default function Gis({
    */
   const [askCircle, setAskCircle] = useState<AskCircle | null>(null)
   const [askMiles, setAskMiles] = useState(1)
-  const [drawing, setDrawing] = useState(false)
   const [areaCircle, setAreaCircle] = useState<AskCircle | null>(null)
   const [tableOpen, setTableOpen] = useState(false)
+  /*
+   * With the Ask tab open the map is the circle's: it is there from the
+   * moment the tab opens, centred on the view, and a click moves it. No
+   * button to arm first. Leaving the tab gives clicks back to the parcels.
+   */
+  const drawing = rail === 'ask'
+  useEffect(() => {
+    if (rail !== 'ask' || askCircle) return
+    const box = viewRef.current
+    if (!box) return
+    setAskCircle({
+      lat: Math.round(((box[1] + box[3]) / 2) * 1e5) / 1e5,
+      lng: Math.round(((box[0] + box[2]) / 2) * 1e5) / 1e5,
+      miles: askMiles,
+    })
+    // askMiles is read once, when the circle first appears.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rail, askCircle, active])
 
   // The brain panel: a circle drawn on the map and a question about it.
   const [askText, setAskText] = useState('')
@@ -1529,7 +1546,6 @@ export default function Gis({
     setAreaBox(null)
     setAreaCircle(null)
     setAskCircle(null)
-    setDrawing(false)
     setQuery('')
     setOwners(null)
     setOwnerPick(null)
@@ -3776,24 +3792,17 @@ export default function Gis({
             drawing
               ? (lat: number, lng: number) => {
                   setAskCircle({ lat: Math.round(lat * 1e5) / 1e5, lng: Math.round(lng * 1e5) / 1e5, miles: askMiles })
-                  setDrawing(false)
                 }
               : undefined
           }
-          zones={
-            askCircle || areaCircle
-              ? [
-                  {
-                    id: 'ask-circle',
-                    label: `${(askCircle ?? areaCircle)!.miles} mi`,
-                    lat: (askCircle ?? areaCircle)!.lat,
-                    lng: (askCircle ?? areaCircle)!.lng,
-                    radiusMiles: (askCircle ?? areaCircle)!.miles,
-                    color: '#d6336c',
-                  },
-                ]
+          zones={(() => {
+            // The circle being set while Ask is open; otherwise the one an
+            // answer is still holding the filters to, if any.
+            const circle = (drawing ? askCircle : null) ?? areaCircle
+            return circle
+              ? [{ id: 'ask-circle', label: `${circle.miles} mi`, lat: circle.lat, lng: circle.lng, radiusMiles: circle.miles, color: '#d6336c' }]
               : null
-          }
+          })()}
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.
@@ -3908,32 +3917,8 @@ export default function Gis({
                 — a submarket, never a county — so every answer is local and
                 the parcel-by-parcel checks stay bounded. */}
             <div>
-              <p className="mb-1 text-[11px] font-medium text-body">1. Draw your area</p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  className={`flex-1 rounded-md border px-2 py-1.5 text-xs font-medium ${
-                    drawing ? 'border-brand bg-brand/10 text-brand' : 'border-line text-ink hover:border-brand/50'
-                  }`}
-                  onClick={() => setDrawing((on) => !on)}
-                  aria-pressed={drawing}
-                >
-                  {drawing ? 'Click the map to place the centre…' : askCircle ? 'Move the centre' : 'Place a circle on the map'}
-                </button>
-                {askCircle ? (
-                  <button
-                    type="button"
-                    className="text-[11px] text-muted underline hover:text-ink"
-                    onClick={() => {
-                      setAskCircle(null)
-                      setDrawing(false)
-                    }}
-                  >
-                    Clear
-                  </button>
-                ) : null}
-              </div>
-              <label className="mt-2 flex items-center gap-2 text-[11px] text-body">
+              <p className="text-[11px] text-muted">Click the map to move the circle. Only parcels inside it are searched.</p>
+              <label className="mt-1.5 flex items-center gap-2 text-[11px] text-body">
                 Radius
                 <input
                   type="range"
@@ -3949,15 +3934,13 @@ export default function Gis({
                   className="flex-1"
                   aria-label="Circle radius in miles"
                 />
-                <span className="w-14 text-right font-medium tabular-nums text-ink">
-                  {askMiles} mi
-                </span>
+                <span className="w-14 text-right font-medium tabular-nums text-ink">{askMiles} mi</span>
               </label>
             </div>
 
             <div>
               <label className="mb-1 block text-[11px] font-medium text-body" htmlFor="gis-ask">
-                2. Ask in plain English
+                Ask in plain English
               </label>
               <textarea
                 id="gis-ask"
@@ -3982,9 +3965,6 @@ export default function Gis({
               >
                 {askBusy ? 'Working it out…' : askCircle ? `Ask about this ${askCircle.miles}-mile circle` : 'Draw a circle first'}
               </button>
-              <p className="mt-1 text-[11px] leading-snug text-faint">
-                Only parcels inside the circle are searched. Up to a 20-mile radius.
-              </p>
             </div>
 
             {askError ? <p className="text-[11px] leading-snug text-amber-600">{askError}</p> : null}
