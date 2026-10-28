@@ -1434,13 +1434,19 @@ export default function Gis({
   useEffect(() => {
     if (radiusOn && askCircle) setAreaCircle(askCircle)
   }, [radiusOn, askCircle])
+  // Where the circle starts: over the selected parcel when there is one,
+  // which is usually the point of drawing it; otherwise the middle of the
+  // view. Read through a ref, because the parcel's centre is worked out
+  // further down.
+  const startAt = useRef<{ lat: number; lng: number } | null>(null)
   useEffect(() => {
     if (!radiusOn || askCircle) return
     const box = viewRef.current
-    if (!box) return
+    const at = startAt.current ?? (box ? { lat: (box[1] + box[3]) / 2, lng: (box[0] + box[2]) / 2 } : null)
+    if (!at) return
     setAskCircle({
-      lat: Math.round(((box[1] + box[3]) / 2) * 1e5) / 1e5,
-      lng: Math.round(((box[0] + box[2]) / 2) * 1e5) / 1e5,
+      lat: Math.round(at.lat * 1e5) / 1e5,
+      lng: Math.round(at.lng * 1e5) / 1e5,
       miles: askMiles,
     })
     // askMiles is read once, when the circle first appears.
@@ -3189,6 +3195,20 @@ export default function Gis({
     const [w, s, e, n] = selectedBox
     return { lat: (s + n) / 2, lng: (w + e) / 2 }
   }, [selectedBox])
+  startAt.current = selected != null ? centre : null
+
+  /*
+   * The query's circle as the map draws it: the one being set while Query
+   * is open, otherwise the one the criteria are still held to. Memoised, so
+   * the map keeps the same handle between renders and a drag is never cut
+   * off by a redraw.
+   */
+  const queryZones = useMemo(() => {
+    const circle = (drawing ? askCircle : null) ?? areaCircle
+    return circle
+      ? [{ id: 'ask-circle', label: 'Radius', lat: circle.lat, lng: circle.lng, radiusMiles: circle.miles, color: '#d6336c' }]
+      : null
+  }, [drawing, askCircle, areaCircle])
 
   /*
    * Go to a parcel chosen from the search.
@@ -4072,14 +4092,16 @@ export default function Gis({
                 }
               : undefined
           }
-          zones={(() => {
-            // The circle being set while Ask is open; otherwise the one an
-            // answer is still holding the filters to, if any.
-            const circle = (drawing ? askCircle : null) ?? areaCircle
-            return circle
-              ? [{ id: 'ask-circle', label: `${circle.miles} mi`, lat: circle.lat, lng: circle.lng, radiusMiles: circle.miles, color: '#d6336c' }]
-              : null
-          })()}
+          zones={queryZones}
+          // The query's circle is dragged by its label, panel open or shut.
+          onZoneMove={
+            radiusOn
+              ? (_id, lat, lng) => {
+                  setAskCircle((current) => (current ? { ...current, lat, lng } : current))
+                  setAreaCircle((current) => (current ? { ...current, lat, lng } : current))
+                }
+              : undefined
+          }
           // Kept in a ref rather than state: this fires on every settle, and
           // re-rendering the map on each pan to store a number the map itself
           // already knows would be a waste for a value only saving reads.
@@ -4702,7 +4724,7 @@ export default function Gis({
                   </label>
                   {radiusOn ? (
                     <>
-                      <p className="text-[10px] text-muted">Click the map to move the circle. Only parcels inside it count.</p>
+                      <p className="text-[10px] text-muted">Drag the circle by its label, or click the map to move it. Only parcels inside it count.</p>
                       <label className="flex items-center gap-2 text-[11px] text-body">
                         Radius
                         <input

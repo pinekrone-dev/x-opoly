@@ -538,6 +538,11 @@ interface Props {
   /** Labelled radius circles — non-competes, boundaries. */
   zones?: { id: string; label: string; lat: number; lng: number; radiusMiles: number; color: string }[] | null
   /**
+   * Given, each zone's centre label becomes a handle: dragged, the circle
+   * follows it live, and the new centre is reported when it is let go.
+   */
+  onZoneMove?: (id: string, lat: number, lng: number) => void
+  /**
    * Named places drawn as labels while the map is zoomed out, and hidden
    * past `placesUntilZoom`: the parcel map's cities, so the map itself is
    * the way from one market to the next. A click hands the id back.
@@ -731,6 +736,7 @@ export default function MapCanvas({
   stages,
   anchors = null,
   zones = null,
+  onZoneMove,
   neighbours = null,
   onNeighbourParcel,
   places = null,
@@ -1970,6 +1976,10 @@ export default function MapCanvas({
     if (anchors.end) flag(anchors.end, 'end')
   }, [loaded, anchors])
 
+  const zoneMove = useRef(onZoneMove)
+  zoneMove.current = onZoneMove
+  const movable = Boolean(onZoneMove)
+
   // Non-compete circles and other labelled zones.
   useEffect(() => {
     const instance = map.current
@@ -1983,14 +1993,16 @@ export default function MapCanvas({
       return
     }
 
-    const features: GeoJSON.Feature[] = zones.map((zone) => ({
-      type: 'Feature',
-      properties: { color: zone.color },
-      geometry: {
-        type: 'Polygon',
-        coordinates: [circlePolygon(zone.lat, zone.lng, zone.radiusMiles * METERS_PER_MILE)],
-      },
-    }))
+    const featuresAt = (centres: { lat: number; lng: number }[]): GeoJSON.Feature[] =>
+      zones.map((zone, i) => ({
+        type: 'Feature',
+        properties: { color: zone.color },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [circlePolygon(centres[i].lat, centres[i].lng, zone.radiusMiles * METERS_PER_MILE)],
+        },
+      }))
+    const features = featuresAt(zones)
 
     upsert('zones', { type: 'FeatureCollection', features }, [
       {
@@ -2014,16 +2026,36 @@ export default function MapCanvas({
     // The label rides at the centre of the circle, always visible: an
     // unlabelled dashed ring reads as a bug, a labelled one reads as a
     // boundary.
-    for (const zone of zones) {
-      zoneLabels.current.push(
-        new maplibregl.Marker({
-          element: labelElement(`${zone.label} · ${zone.radiusMiles} mi`, 'zone-label'),
-        })
-          .setLngLat([zone.lng, zone.lat])
-          .addTo(instance),
+    //
+    // Movable, the label is the handle: the circle's inside stays the map's,
+    // so a twenty-mile circle that fills the screen does not stop the map
+    // from panning. The ring is redrawn as the label moves, and the parent
+    // hears the new centre once, when it is let go.
+    const centres = zones.map((zone) => ({ lat: zone.lat, lng: zone.lng }))
+    zones.forEach((zone, i) => {
+      const element = labelElement(
+        movable ? `✥ ${zone.label} · ${zone.radiusMiles} mi` : `${zone.label} · ${zone.radiusMiles} mi`,
+        movable ? 'zone-label zone-handle' : 'zone-label',
       )
-    }
-  }, [loaded, zones])
+      if (movable) element.title = 'Drag to move the circle'
+      const marker = new maplibregl.Marker({ element, draggable: movable })
+        .setLngLat([zone.lng, zone.lat])
+        .addTo(instance)
+      if (movable) {
+        marker.on('drag', () => {
+          const at = marker.getLngLat()
+          centres[i] = { lat: at.lat, lng: at.lng }
+          const source = instance.getSource('zones') as maplibregl.GeoJSONSource | undefined
+          source?.setData({ type: 'FeatureCollection', features: featuresAt(centres) })
+        })
+        marker.on('dragend', () => {
+          const at = marker.getLngLat()
+          zoneMove.current?.(zone.id, Math.round(at.lat * 1e5) / 1e5, Math.round(at.lng * 1e5) / 1e5)
+        })
+      }
+      zoneLabels.current.push(marker)
+    })
+  }, [loaded, zones, movable])
 
   // Radius rings around the site being scoped. Never interactive: they are
   // scale, not something to click.
