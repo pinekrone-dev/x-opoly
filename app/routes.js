@@ -577,6 +577,41 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return anyUsers
   }
 
+  /*
+   * A change asked for from another site is refused.
+   *
+   * The session cookie is SameSite=Lax, which already keeps it off most
+   * cross-site POSTs, but not all: browsers have let a cookie set in the
+   * last two minutes ride along, and a sibling subdomain counts as the same
+   * site. So a request that would change something and carries the session
+   * cookie must also come from this site, by the browser's own account of
+   * where it came from (Sec-Fetch-Site), or by its Origin where an older
+   * browser sends no such header. Requests without the cookie (the Stripe
+   * webhook, the pipeline, a connector's bearer token) are not cookie-borne
+   * and are judged by their own credentials instead.
+   */
+  app.use('/api/*', async (c, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
+    if (!tokenFrom(c)) return next()
+    const site = c.req.header('sec-fetch-site')
+    if (site === 'cross-site') return c.json({ error: 'That request came from another site.', code: 'cross_site' }, 403)
+    const origin = c.req.header('origin')
+    if (!site && origin) {
+      let from = null
+      try {
+        from = new URL(origin)
+      } catch {
+        from = null
+      }
+      const here = new URL(c.req.url)
+      const local = (host) => host === 'localhost' || host === '127.0.0.1'
+      if (!from || (from.host !== here.host && !(local(from.hostname) && local(here.hostname)))) {
+        return c.json({ error: 'That request came from another site.', code: 'cross_site' }, 403)
+      }
+    }
+    return next()
+  })
+
   app.use('/api/*', async (c, next) => {
     const path = new URL(c.req.url).pathname
     if (PUBLIC_PATHS.some((pattern) => pattern.test(path))) return next()
@@ -4653,7 +4688,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return c.json(Array.isArray(payload) ? answers : answers[0])
   })
 
-  app.onError((error, c) => c.json({ error: error?.message || 'Unexpected server error.' }, 500))
+  // An unexpected failure is logged here and described to the caller only
+  // generally: its message can carry a query, a path or a provider's reply.
+  app.onError((error, c) => {
+    console.error('unhandled', c.req.method, new URL(c.req.url).pathname, error?.stack || error)
+    return c.json({ error: 'Unexpected server error.' }, 500)
+  })
 
   return app
 }

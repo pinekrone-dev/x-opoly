@@ -240,3 +240,20 @@ describe('the connector', () => {
     assert.equal(res.status, 401)
   })
 })
+
+describe('changes from another site', () => {
+  const view = { market: 'austin-tx', name: 'Guarded', state: { v: 1 } }
+  test('a cookie-borne change marked cross-site by the browser is refused', async () => {
+    const res = await owner('/api/gis/views', json(view, { 'sec-fetch-site': 'cross-site' }))
+    assert.equal(res.status, 403)
+    assert.equal(res.body.code, 'cross_site')
+  })
+  test('and one from another origin, from a browser that sends no Sec-Fetch-Site', async () => {
+    const res = await owner('/api/gis/views', json(view, { origin: 'https://evil.example' }))
+    assert.equal(res.status, 403)
+  })
+  test('the app itself is unaffected', async () => {
+    assert.equal((await owner('/api/gis/views', json(view, { 'sec-fetch-site': 'same-origin' }))).status, 201)
+    assert.equal((await owner('/api/gis/views', json(view, { origin: 'http://localhost' }))).status, 201)
+  })
+})

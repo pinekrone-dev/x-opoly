@@ -8,6 +8,7 @@
  * Orange County no owner name at all. A hardcoded panel would invent rows for
  * the counties that have none and hide the ones that are actually there.
  */
+import { safeHtml } from '../lib/safeHtml'
 
 export interface PanelRow {
   k: string
@@ -190,7 +191,7 @@ export default function ParcelPanel({
         {note && (
           <p
             className="border-t border-line pt-2 text-[11px] leading-snug text-faint [&_a]:text-brand [&_a]:underline"
-            dangerouslySetInnerHTML={{ __html: note }}
+            dangerouslySetInnerHTML={{ __html: safeHtml(note) }}
           />
         )}
       </div>
