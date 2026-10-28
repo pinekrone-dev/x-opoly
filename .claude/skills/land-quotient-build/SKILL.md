@@ -114,6 +114,12 @@ run with the GitHub Actions tools rather than polling.
 - Search filters: `zc`, `znot`, `zn`, `flood=in|out` query params. "Anything but X" (`zoningNot`) requires a mapped district. Ask answers zoning/flood questions as whole-county filters once `tagged`; before that it checks parcel by parcel (CHECK_LIMIT).
 - UI: Filter tab zoning chips cycle any → only → anything but; flood Any/Outside/Inside. "Open as a table" (Report tab and Ask) shows the current search 200 rows a page with CSV export.
 
+### Owner filters (held 10+ years, likely free and clear, out of state)
+Rules live once in `src/lib/owners.ts` (mirrored in prospector `pipeline/owner_traits.py`): sale year from `sd` then `dd`, only when date-shaped; mailing state from the ZIP the `ma` address ends on (ZIP3 table), never the state letters; free and clear = last sale 30+ years ago, labelled an inference. Store markets filter on unindexed columns `sy`/`ms`, filled by `tagOwners` via ingest `action=owner-tag` (prospector `tag_parcels.py --owners`, workflow input `owners`), about one written row per parcel with a value, charged to the cap; the filters appear once `parcel_markets.otagged = 1`. Do not filter on `json_extract(rest)` live: Las Vegas took 8.5 s, and D1 refuses LIKE/GLOB patterns over ~50 chars. File-served markets read `sy`/`ms` from `index.json` (make_tiles).
+
+### Listing check and city records
+`src/lib/listingCheck.ts` finds the county's unit and bedroom counts by panel label, not key (Detroit `un` = buildings, Jersey `bd` = description). `app/lib/records.js` reads permits and code cases live from city open data per parcel (`GET /api/gis/records`, edge-cached 6 h, no storage): NYC by BBL, Philadelphia by OPA, LA by APN, Boston by parcel id, Austin by TCAD id, Chicago by house number inside the parcel box (`within_box`; a street filter takes 13-30 s), Dallas by address. Add a city by adding a source there.
+
 ### Buildings (Overture footprints)
 
 - `src/lib/buildings.ts`: `OVERTURE_BUILDINGS_URL` (Overture's own public PMTiles, CORS `*`, z0-14, layer `building`, ODbL; pin the release in `OVERTURE_RELEASE`), `buildingsFor(boxes, readTile)` → `{count, area m², tallest m}` per box (null = a tile could not be read, which is unknown, not vacant). A building goes to the smallest box holding its centre; clipped copies in a neighbour tile's buffer are skipped.
