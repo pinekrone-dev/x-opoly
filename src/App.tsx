@@ -52,6 +52,16 @@ interface Session {
   billing: BillingConfig
 }
 
+/*
+ * Where to go after signing in, when the approval page for a connector sent
+ * the person here. Only that page: a `next` naming anywhere else is ignored,
+ * so a link cannot use the sign-in form to bounce someone to another site.
+ */
+function connectorReturn(): string | null {
+  const next = new URLSearchParams(window.location.search).get('next')
+  return next && /^\/oauth\/authorize\?/.test(next) ? next : null
+}
+
 export default function App() {
   const path = usePath()
   const route = matchRoute(path)
@@ -61,7 +71,9 @@ export default function App() {
   useEffect(() => setAccess(session?.user), [session?.user])
 
   // What the signed-out visitor is looking at: the landing page, or a form.
-  const [door, setDoor] = useState<'landing' | 'signIn' | 'signUp'>('landing')
+  // Sent here to sign in on the way to approving a connector: straight to
+  // the form, skipping the landing page.
+  const [door, setDoor] = useState<'landing' | 'signIn' | 'signUp'>(() => (connectorReturn() ? 'signIn' : 'landing'))
 
   // The team's subscription, checked once signed in on a billing-enabled
   // instance. `null` while unknown; bumping `billingVersion` re-checks.
@@ -104,6 +116,12 @@ export default function App() {
 
   const signedIn = useCallback(
     (user: Account) => {
+      // Signing in to approve a connector: back to the approval page.
+      const back = connectorReturn()
+      if (back) {
+        window.location.assign(back)
+        return
+      }
       setSession((current) => (current ? { ...current, user, setupRequired: false } : current))
       setBillingVersion((version) => version + 1)
     },

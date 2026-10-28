@@ -204,6 +204,8 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
+import { createCode, exchangeCode, getClient, readScope, refreshTokens, registerClient, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
+import { handleRpc } from './lib/mcp.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
@@ -584,10 +586,36 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       return next()
     }
 
+    // A connector's access token (Sign in with Land Quotient) stands for
+    // the person who approved it, with the scope they granted.
+    const bearer = (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
+    if (bearer.startsWith('lqt_')) {
+      const granted = await tokenUser(db, bearer)
+      if (!granted) return c.json({ error: 'That connection has expired. Reconnect Land Quotient.' }, 401)
+      c.set('user', granted.user)
+      c.set('connector', granted)
+      return next()
+    }
+
     const user = await sessionUser(db, tokenFrom(c))
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     c.set('user', user)
     return next()
+  })
+
+  /*
+   * What a connector may change. Reading is everything the person can read;
+   * writing is two things only: saving a map, always, and adding a place to
+   * the CRM, when they ticked that box on approving. Anything else that is
+   * not a read is refused, whatever the person's own role allows.
+   */
+  app.use('/api/*', async (c, next) => {
+    const granted = c.get('connector')
+    if (!granted || ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
+    const path = new URL(c.req.url).pathname
+    if (c.req.method === 'POST' && path === '/api/gis/views' && granted.scope.includes('maps')) return next()
+    if (c.req.method === 'POST' && path === '/api/crm/places' && granted.scope.includes('crm')) return next()
+    return c.json({ error: 'This connection may not make that change.', code: 'connector_scope' }, 403)
   })
 
   /*
@@ -720,7 +748,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const user = c.get('user')
     // Opportunistic housekeeping: there is no cron here, and one row per
     // workspace per kind per day is not urgent but should not grow forever.
-    if (Math.random() < 0.005) await sweepUsage(db).catch(() => {})
+    if (Math.random() < 0.005) {
+      await sweepUsage(db).catch(() => {})
+      await sweepOauth(db).catch(() => {})
+    }
     const verdict = await spend(db, { teamId: user?.teamId ?? null, kind, env })
     if (verdict.allowed) return null
     c.header('Retry-After', String(verdict.retryAfterSeconds))
@@ -2219,6 +2250,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // archive headers) from GitHub Actions, proving itself with the run's
     // own OIDC token, the same proof the ingest door takes.
     const bearer = (c.req.header('authorization') || '').replace(/^Bearer[ ]+/i, '')
+    if (bearer.startsWith('lqt_')) {
+      const granted = await tokenUser(db, bearer).catch(() => null)
+      return granted ? { id: granted.user.id } : null
+    }
     if (bearer) {
       try {
         await verifyActionsToken(bearer, { audience: INGEST_AUDIENCE, repositories: INGEST_REPOS, refs: INGEST_REFS, fetchImpl: env.JWKS_FETCH })
@@ -4393,6 +4428,230 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   app.all('/api/*', (c) => c.json({ error: 'Unknown endpoint.' }, 404))
+
+
+  /* ---------------------------------------------------------------------- */
+  /* Sign in with Land Quotient, and the Claude connector at /mcp            */
+  /* ---------------------------------------------------------------------- */
+
+  const originOf = (c) => {
+    const url = new URL(c.req.url)
+    const proto = (c.req.header('x-forwarded-proto') || url.protocol.replace(':', '')).split(',')[0].trim()
+    return `${proto}://${url.host}`
+  }
+  // Bearer tokens and no cookies, so any origin may call these: the MCP
+  // inspector and other browser-based clients need it, and nothing here
+  // reads a cookie a page could ride on.
+  const openCors = (c) => {
+    c.header('Access-Control-Allow-Origin', '*')
+    c.header('Access-Control-Allow-Headers', 'authorization, content-type, mcp-protocol-version, mcp-session-id')
+    c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+    c.header('Access-Control-Expose-Headers', 'WWW-Authenticate, Mcp-Session-Id')
+  }
+  for (const path of ['/mcp', '/oauth/token', '/oauth/register', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
+    app.options(path, (c) => {
+      openCors(c)
+      return c.body(null, 204)
+    })
+  }
+
+  const protectedResource = (c) => {
+    openCors(c)
+    return c.json({
+      resource: `${originOf(c)}/mcp`,
+      authorization_servers: [originOf(c)],
+      scopes_supported: SCOPES,
+      bearer_methods_supported: ['header'],
+      resource_name: 'Land Quotient',
+    })
+  }
+  app.get('/.well-known/oauth-protected-resource', protectedResource)
+  app.get('/.well-known/oauth-protected-resource/mcp', protectedResource)
+  app.get('/.well-known/oauth-authorization-server', (c) => {
+    openCors(c)
+    const origin = originOf(c)
+    return c.json({
+      issuer: origin,
+      authorization_endpoint: `${origin}/oauth/authorize`,
+      token_endpoint: `${origin}/oauth/token`,
+      registration_endpoint: `${origin}/oauth/register`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+      token_endpoint_auth_methods_supported: ['none'],
+      scopes_supported: SCOPES,
+    })
+  })
+
+  app.post('/oauth/register', async (c) => {
+    openCors(c)
+    const throttled = limited(c, 'oauth-register', 30, 60 * 60 * 1000)
+    if (throttled) return throttled
+    const made = await registerClient(db, await c.req.json().catch(() => ({})))
+    if (made.error) return c.json({ error: made.error, error_description: made.description }, 400)
+    return c.json(made.client, 201)
+  })
+
+  const esc = (value) =>
+    String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch])
+  const oauthPage = (title, body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)} · Land Quotient</title>
+<style>body{margin:0;font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;background:#f5f7fa;color:#1f2937}main{max-width:440px;margin:8vh auto;padding:28px;background:#fff;border:1px solid #e5e7eb;border-radius:14px}h1{font-size:20px;margin:0 0 12px;color:#1B3668}ul{padding-left:20px}li{margin:4px 0}.small{font-size:13px;color:#6b7280}label{display:flex;gap:8px;align-items:flex-start;margin:14px 0}.row{display:flex;gap:10px;margin-top:20px}button{flex:1;padding:10px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;font:inherit;cursor:pointer}button.go{background:#12AEB6;border-color:#12AEB6;color:#fff;font-weight:600}</style></head><body><main>${body}</main></body></html>`
+  const oauthError = (c, title, text, status = 400) =>
+    c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from Claude.</p>`), status)
+  const backTo = (redirectUri, values) => {
+    const url = new URL(redirectUri)
+    for (const [key, value] of Object.entries(values)) if (value) url.searchParams.set(key, value)
+    return url.toString()
+  }
+  // The authorize request, checked the same way on the page and on the decision.
+  const checkAuthorize = async (q) => {
+    const client = await getClient(db, q.client_id)
+    if (!client || !client.redirectUris.includes(q.redirect_uri)) return { fatal: 'The application asking to connect is not registered here, or its return address does not match.' }
+    if (q.response_type !== 'code') return { client, back: 'unsupported_response_type' }
+    if (!q.code_challenge || q.code_challenge_method !== 'S256') return { client, back: 'invalid_request' }
+    return { client }
+  }
+
+  app.get('/oauth/authorize', async (c) => {
+    const q = c.req.query()
+    const checked = await checkAuthorize(q)
+    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal)
+    if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) {
+      const here = new URL(c.req.url)
+      return c.redirect(`/?next=${encodeURIComponent(here.pathname + here.search)}`)
+    }
+    const hidden = ['client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'response_type']
+      .map((name) => `<input type="hidden" name="${name}" value="${esc(q[name])}">`)
+      .join('')
+    const askedCrm = String(q.scope || '').split(/\s+/).includes('crm')
+    return c.html(
+      oauthPage(
+        'Connect to Land Quotient',
+        `<h1>Connect ${esc(checked.client.name)} to Land Quotient?</h1>
+<p>It will act as <strong>${esc(user.email)}</strong> and be able to:</p>
+<ul><li>Search parcels and read county records, layers, permits and mortgages in your markets</li><li>Save maps to your workspace and link you to them</li></ul>
+<form method="post" action="/oauth/authorize">${hidden}
+<label><input type="checkbox" name="crm" value="1"${askedCrm ? ' checked' : ''}> <span>Also let it add parcels to your CRM</span></label>
+<p class="small">It uses your account's daily allowances, like the app does. You can disconnect it any time from Claude's connector settings.</p>
+<div class="row"><button type="submit" name="decision" value="deny">Cancel</button><button class="go" type="submit" name="decision" value="allow">Allow</button></div>
+</form>`,
+      ),
+    )
+  })
+
+  app.post('/oauth/authorize', async (c) => {
+    // The decision comes from our own page: a form posted from anywhere else
+    // is refused, on top of the session cookie being SameSite=Lax.
+    const from = c.req.header('origin')
+    if (from && from !== originOf(c)) return oauthError(c, 'Not allowed', 'That approval did not come from Land Quotient.', 403)
+    const form = await c.req.parseBody()
+    const q = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, typeof value === 'string' ? value : '']))
+    const checked = await checkAuthorize(q)
+    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal)
+    if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
+    const user = await sessionUser(db, tokenFrom(c))
+    if (!user) return oauthError(c, 'Signed out', 'Sign in to Land Quotient and start the connection again.', 401)
+    if (q.decision !== 'allow') return c.redirect(backTo(q.redirect_uri, { error: 'access_denied', state: q.state }))
+    const code = await createCode(db, {
+      clientId: checked.client.id,
+      userId: user.id,
+      redirectUri: q.redirect_uri,
+      challenge: q.code_challenge,
+      scope: readScope('', { withCrm: q.crm === '1' }),
+    })
+    return c.redirect(backTo(q.redirect_uri, { code, state: q.state }))
+  })
+
+  app.post('/oauth/token', async (c) => {
+    openCors(c)
+    c.header('Cache-Control', 'no-store')
+    const throttled = limited(c, 'oauth-token', 120, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const type = c.req.header('content-type') || ''
+    const body = type.includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
+    let clientId = typeof body.client_id === 'string' ? body.client_id : ''
+    // Some clients send a public client's id as Basic auth with no secret.
+    const basic = (c.req.header('authorization') || '').match(/^Basic\s+(.+)$/i)
+    if (!clientId && basic) {
+      try {
+        clientId = decodeURIComponent(atob(basic[1]).split(':')[0])
+      } catch {
+        clientId = ''
+      }
+    }
+    let out
+    if (body.grant_type === 'authorization_code') {
+      out = await exchangeCode(db, { code: body.code, clientId, redirectUri: body.redirect_uri, verifier: body.code_verifier })
+    } else if (body.grant_type === 'refresh_token') {
+      out = await refreshTokens(db, { refreshToken: body.refresh_token, clientId })
+    } else {
+      return c.json({ error: 'unsupported_grant_type' }, 400)
+    }
+    if (out.error) return c.json({ error: out.error }, 400)
+    return c.json(out.tokens)
+  })
+
+  /*
+   * The connector. Stateless streamable HTTP: each POST carries one JSON-RPC
+   * message (or a batch) and is answered in the response, no stream held.
+   * Tools call this app's own routes as the person, with their token and a
+   * per-person stand-in for the network address: every call from Claude
+   * arrives from Anthropic's servers, and per-address allowances would
+   * otherwise be one allowance shared by everyone who connected.
+   */
+  const unauthorizedConnector = (c) => {
+    openCors(c)
+    c.header('WWW-Authenticate', `Bearer resource_metadata="${originOf(c)}/.well-known/oauth-protected-resource"`)
+    return c.json({ error: 'unauthorized', error_description: 'Connect Land Quotient to use this.' }, 401)
+  }
+  app.get('/mcp', (c) => {
+    openCors(c)
+    return c.json({ error: 'This server answers JSON-RPC over POST and keeps no stream open.' }, 405)
+  })
+  app.post('/mcp', async (c) => {
+    openCors(c)
+    const bearer = (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
+    const granted = await tokenUser(db, bearer)
+    if (!granted) return unauthorizedConnector(c)
+    const throttled = limited(c, 'mcp', 600, 10 * 60 * 1000, granted.user.id)
+    if (throttled) return throttled
+    let payload
+    try {
+      payload = await c.req.json()
+    } catch {
+      return c.json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }, 400)
+    }
+    const origin = originOf(c)
+    let execution
+    try {
+      execution = c.executionCtx
+    } catch {
+      execution = undefined
+    }
+    const context = {
+      origin,
+      scope: granted.scope,
+      call: (path, init = {}) =>
+        app.fetch(
+          new Request(`${origin}${path}`, {
+            ...init,
+            headers: { ...(init.headers || {}), authorization: `Bearer ${bearer}`, 'cf-connecting-ip': `connector:${granted.user.id}` },
+          }),
+          c.env,
+          execution,
+        ),
+    }
+    const messages = Array.isArray(payload) ? payload : [payload]
+    const answers = []
+    for (const message of messages) {
+      const answer = await handleRpc(message, context)
+      if (answer) answers.push(answer)
+    }
+    if (!answers.length) return c.body(null, 202)
+    return c.json(Array.isArray(payload) ? answers : answers[0])
+  })
 
   app.onError((error, c) => c.json({ error: error?.message || 'Unexpected server error.' }, 500))
 

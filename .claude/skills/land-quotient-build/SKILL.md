@@ -220,3 +220,13 @@ Try the Hub, the city's Portal server, Socrata, the county, the MPO (MAG for Pho
 ## Check-ins and reporting
 
 Long runs (a market build, a layer refresh, a deploy) are read by a scheduled check-in, never a sleep loop. Each check-in's prompt names the run id, what to verify, what to fix if red, and what to tell the user. Report outcomes plainly: what published, what was skipped and why, what request went out, and that the map needs a reload.
+
+## The Claude connector (MCP) and Sign in with Land Quotient
+
+- `https://landquotient.com/mcp` is a stateless MCP server (JSON-RPC over POST, `app/lib/mcp.js`). Tools: list_markets, search_parcels, get_parcel, market_layers, geocode, make_map, add_to_crm. Each tool calls the app's own routes as the signed-in person (`app.fetch` with their bearer token), so every allowance and permission applies; the network address is replaced by `connector:<userId>` so per-address allowances are per person, not shared by everyone behind Anthropic's servers.
+- OAuth 2.1 in `app/lib/oauth.js`, tables `oauth_clients`, `oauth_codes`, `oauth_tokens` in the main DB (digests only). Dynamic client registration at `/oauth/register`, PKCE S256 required, public clients, access tokens `lqt_` for an hour, refresh tokens `lqr_` rotate (30 days). Discovery: `/.well-known/oauth-protected-resource` and `/.well-known/oauth-authorization-server`. The approval page is server-rendered at `/oauth/authorize`; signed out it sends to `/?next=/oauth/authorize?...` and the SPA returns there after sign-in (only that path is honoured as `next`).
+- Scopes: `read` and `maps` always; `crm` only when the person ticks the box. A connector token may only POST `/api/gis/views` (maps) and `/api/crm/places` (crm); every other non-GET is 403 `connector_scope`.
+- `worker/index.js` routes `/mcp`, `/oauth/*` and `/.well-known/oauth-*` to the app; anything new under those must stay in that list.
+- make_map links are `/gis/<market>?view=<id>`; the map applies the view once the county's own frame is set, then drops the parameter. Saved views now carry zoning, flood, buildings, near, match and the circle.
+- Tests: test/connector.test.js walks the whole dance.
+
