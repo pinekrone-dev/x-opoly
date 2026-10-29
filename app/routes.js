@@ -83,6 +83,7 @@ import {
 import {
   EmailError,
   emailConfigured,
+  emailProvider,
   cancellationEmail,
   passwordResetEmail,
   sendEmail,
@@ -1067,7 +1068,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const user = c.get('user') ?? (await sessionUser(db, tokenFrom(c)))
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     if (!(await canMintCodes(user))) return c.json({ error: 'Only the instance owner can run this check.' }, 403)
-    const provider = env.SENDGRID_API_KEY ? 'sendgrid' : env.RESEND_API_KEY ? 'resend' : 'none'
+    const provider = emailProvider(env)
     if (provider === 'none') return c.json({ ok: false, provider, error: 'Email sending is not configured on this server.' }, 400)
     const sentAt = new Date().toISOString()
     try {
