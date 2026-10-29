@@ -761,6 +761,21 @@ try {
     else tiles.bad.push(`${response.status()} ${response.url().split('/').pop()}`)
   })
 
+  // Every parcel search the map makes, with its status and how long it took,
+  // so a county whose count never appears says whether the search failed,
+  // was slow, or was never asked.
+  const searches = []
+  page.on('requestfinished', async (request) => {
+    if (!request.url().includes('/api/gis/parcels?')) return
+    const market = new URL(request.url()).searchParams.get('market')
+    const status = (await request.response().catch(() => null))?.status() ?? 0
+    searches.push({ market, status, ms: Math.round(request.timing().responseEnd) })
+  })
+  page.on('requestfailed', (request) => {
+    if (!request.url().includes('/api/gis/parcels?')) return
+    searches.push({ market: new URL(request.url()).searchParams.get('market'), status: 0, ms: -1 })
+  })
+
   const gis = await page.goto(`${BASE}/gis`, { waitUntil: 'domcontentloaded', timeout: 45000 })
   check('GET /gis serves the app', gis?.status() === 200, `status ${gis?.status()}`)
 
@@ -921,10 +936,27 @@ try {
         }
         await page.waitForTimeout(4000)
         const reached = await zoomOf()
-        const text = ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
+        /*
+         * The count is waited for, not sampled once. A county-wide count on a
+         * Worker that has just deployed can take longer than the fixed wait,
+         * and one late answer among five counties failed the gate twice with
+         * nothing to say why. Up to twenty more seconds, then the Report
+         * panel's own words and this county's searches go in the detail.
+         */
+        const bodyText = async () => ((await page.textContent('body')) ?? '').replace(/\s+/g, ' ')
+        let text = await bodyText()
+        for (let waited = 0; !/Parcels\s*[\d,]{4,}/.test(text) && waited < 20000; waited += 1000) {
+          await page.waitForTimeout(1000)
+          text = await bodyText()
+        }
         const count = text.match(/Parcels\s*([\d,]{4,})/)
+        const panel = /(Loading the market's records…|Counting…|Every parcel in this market\.|The parcels matching).{0,160}/.exec(text)
+        const asked = searches
+          .filter((s) => s.market === slug)
+          .map((s) => `${s.status} ${s.ms}ms`)
+          .join(', ')
         check(`${slug}: the panel states a parcel count`, count != null,
-          count ? count[1] : text.slice(0, 240))
+          count ? count[1] : `panel: ${panel ? panel[0] : 'no Report panel'} | searches: ${asked || 'none'}`)
         check(`${slug}: nothing on the panel reports a failure`,
           !/Could not load that market|Could not reach the parcel catalogue|Loading parcels…/.test(text),
           text.slice(0, 240))
