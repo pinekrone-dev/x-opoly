@@ -117,6 +117,15 @@ database_id = "7cae5cbf-7d2d-4f4e-9555-5be9c8490336"
 binding = "PROSPECTOR_DATA"
 bucket_name = "prospector-data"
 
+# Cloudflare Email Service: the verification, reset and trial mail. Sends
+# only once landquotient.com is onboarded under Email Service > Email
+# Sending, which writes the domain's SPF and DKIM records itself; until then
+# a send fails with E_SENDER_NOT_VERIFIED and the signup records it. When
+# present it is used ahead of SENDGRID_API_KEY and RESEND_API_KEY. Not given
+# to staging, so staging signups never mail real people.
+[[send_email]]
+name = "EMAIL"
+
 [vars]
 # Which further parcel store each market lives in, "slug=BINDING" pairs
 # separated by commas. Empty until a market is published to a second store.
