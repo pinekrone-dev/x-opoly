@@ -99,6 +99,56 @@ describe('Resend', () => {
   })
 })
 
+describe('Cloudflare Email Service', () => {
+  function binding(outcome = { messageId: 'cf_1' }) {
+    const calls = []
+    return {
+      calls,
+      async send(message) {
+        calls.push(message)
+        if (outcome instanceof Error) throw outcome
+        return outcome
+      },
+    }
+  }
+
+  test('the EMAIL binding sends, with the sender as a named address', async () => {
+    const EMAIL = binding()
+    const fetchImpl = stubFetch()
+    const id = await sendEmail({ ...ON_EXAMPLE, EMAIL, EMAIL_FROM: 'Land Quotient <noreply@example.com>' }, MESSAGE, { fetchImpl })
+    assert.equal(id, 'cf_1')
+    assert.deepEqual(EMAIL.calls[0], {
+      from: { name: 'Land Quotient', email: 'noreply@example.com' },
+      to: 'broker@example.com',
+      subject: 'Hello',
+      html: '<p>Hi</p>',
+      text: 'Hi',
+    })
+    assert.equal(fetchImpl.calls.length, 0)
+  })
+
+  test('the binding wins over both provider keys', async () => {
+    const EMAIL = binding()
+    const fetchImpl = stubFetch({ status: 202 })
+    await sendEmail({ EMAIL, SENDGRID_API_KEY: 'SG.test', RESEND_API_KEY: 're_test' }, MESSAGE, { fetchImpl })
+    assert.equal(EMAIL.calls.length, 1)
+    assert.equal(fetchImpl.calls.length, 0)
+  })
+
+  test("the binding's error code is kept in the message", async () => {
+    const refused = Object.assign(new Error('Sender domain is not verified.'), { code: 'E_SENDER_NOT_VERIFIED' })
+    await assert.rejects(
+      sendEmail({ EMAIL: binding(refused) }, MESSAGE),
+      (error) => error instanceof EmailError && /^E_SENDER_NOT_VERIFIED: Sender domain/.test(error.message),
+    )
+  })
+
+  test('the binding alone opens self-serve signup', () => {
+    assert.equal(emailConfigured({ EMAIL: binding() }), true)
+    assert.equal(emailConfigured({ EMAIL: {} }), false)
+  })
+})
+
 describe('failure shapes', () => {
   test('a network failure is an EmailError, never a crash', async () => {
     const failing = async () => {

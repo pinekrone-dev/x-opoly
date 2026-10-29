@@ -1,15 +1,27 @@
 /**
- * Outbound email, over plain HTTP — SendGrid or Resend, whichever key the
+ * Outbound email: Cloudflare Email Service where the Worker has its EMAIL
+ * binding, else SendGrid or Resend over plain HTTP, whichever key the
  * deployment holds.
  *
- * No SDK — one fetch — so it runs unchanged on Cloudflare Workers. The only
- * mail this app sends is the signup verification link, and self-serve signup
- * stays closed unless sending is configured: an account that could never
- * receive its verification link should never get created.
+ * Cloudflare comes first because it is where the domain's DNS lives:
+ * onboarding landquotient.com in Email Sending writes its own SPF, DKIM and
+ * bounce records, so the mail passes the domain's strict DMARC without a
+ * hand-copied record. The HTTP providers stay for the Node server and for a
+ * deployment without the binding. Self-serve signup stays closed unless one
+ * of them is configured: an account that could never receive its
+ * verification link should never get created.
  */
 
+/** Which service sends this deployment's mail: cloudflare, sendgrid, resend or none. */
+export function emailProvider(env = {}) {
+  if (env.EMAIL && typeof env.EMAIL.send === 'function') return 'cloudflare'
+  if (env.SENDGRID_API_KEY) return 'sendgrid'
+  if (env.RESEND_API_KEY) return 'resend'
+  return 'none'
+}
+
 export function emailConfigured(env = {}) {
-  return Boolean(env.SENDGRID_API_KEY || env.RESEND_API_KEY)
+  return emailProvider(env) !== 'none'
 }
 
 export class EmailError extends Error {
@@ -37,7 +49,8 @@ export class EmailError extends Error {
  *
  * EMAIL_DOMAIN overrides the domain for a deployment that sends from
  * somewhere else. Whatever it is, the provider must have it authenticated —
- * a SendGrid authenticated domain or a Resend verified domain — or the send
+ * a domain onboarded in Cloudflare Email Sending, a SendGrid authenticated
+ * domain or a Resend verified domain — or the send
  * bounces at the provider.
  */
 export const DEFAULT_SENDER = 'noreply@landquotient.com'
@@ -134,9 +147,27 @@ async function viaResend(env, { to, subject, html, text }, fetchImpl) {
   return body?.id ?? null
 }
 
+/*
+ * The binding throws an Error with a string code (E_SENDER_NOT_VERIFIED when
+ * the domain is not onboarded yet). The code goes into the message so it is
+ * what verify_error records.
+ */
+async function viaCloudflare(env, { to, subject, html, text }) {
+  const from = sender(env)
+  try {
+    const result = await env.EMAIL.send({ from, to, subject, html, text })
+    return result?.messageId ?? 'sent'
+  } catch (err) {
+    const code = err?.code ? `${err.code}: ` : ''
+    throw new EmailError(`${code}${err?.message || 'Cloudflare Email Service refused the message.'}`)
+  }
+}
+
 export async function sendEmail(env, message, { fetchImpl = fetch } = {}) {
-  if (env.SENDGRID_API_KEY) return viaSendgrid(env, message, fetchImpl)
-  if (env.RESEND_API_KEY) return viaResend(env, message, fetchImpl)
+  const provider = emailProvider(env)
+  if (provider === 'cloudflare') return viaCloudflare(env, message)
+  if (provider === 'sendgrid') return viaSendgrid(env, message, fetchImpl)
+  if (provider === 'resend') return viaResend(env, message, fetchImpl)
   throw new EmailError('Email sending is not configured on this server.')
 }
 
