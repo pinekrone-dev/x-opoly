@@ -57,6 +57,12 @@ custom_domain = true
 directory = "./dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+# With single-page-application, a browser's page load (Sec-Fetch-Mode:
+# navigate) of any path that is not a file is answered with index.html by
+# the asset layer before this Worker runs. The connector's sign-in page is
+# loaded exactly that way, so Claude's "Connect" showed the landing page and
+# never reached the approval. These paths always run the Worker first.
+run_worker_first = ["/oauth/*", "/.well-known/*", "/mcp"]
 
 # Once a day, 16:07 UTC (morning in the US): the trial reminders. See
 # `scheduled` in worker/index.js. One D1 query on a day with nothing due.
