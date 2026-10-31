@@ -475,6 +475,14 @@ interface Props {
    * to the address bar.
    */
   basemapPicker?: 'top-right' | 'top-left' | 'bottom-left'
+  /**
+   * A basemap a saved map asks for (a provider id such as 'satellite'). Each
+   * new request object is applied once, when the switcher offers it; the
+   * viewer's own remembered choice is left alone.
+   */
+  basemap?: { id: string } | null
+  /** Told the basemap in use, so a saved map can record it. */
+  onBasemapChange?: (id: string) => void
   properties: Property[]
   selectedId?: string | null
   onSelect?: (id: string) => void
@@ -722,6 +730,8 @@ export default function MapCanvas({
   tiles,
   basemaps,
   basemapPicker = 'top-right',
+  basemap = null,
+  onBasemapChange,
   properties,
   selectedId,
   onSelect,
@@ -850,6 +860,17 @@ export default function MapCanvas({
 
   const options = basemaps && basemaps.length > 1 ? basemaps : null
   const active = pickBasemap({ activeId, options, fallback: tiles, broken: brokenIds })
+
+  // A saved map's basemap, once per request; not written to storage, so
+  // opening someone's satellite map does not change the viewer's default.
+  useEffect(() => {
+    if (basemap && options?.some((entry) => entry.provider === basemap.id)) setActiveId(basemap.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basemap])
+
+  useEffect(() => {
+    onBasemapChange?.(active.provider)
+  }, [active.provider, onBasemapChange])
 
   // When every host is failing there is nothing left to switch to, and
   // "switched to another" would be a lie. This is what a content blocker

@@ -57,6 +57,9 @@ const CRITERIA = {
   match: { type: 'string', enum: ['all', 'any'], description: 'Whether a parcel must meet every criterion (default) or any one.' },
 }
 
+/** The connector's basemap names, as the app's basemap ids (app/lib/tiles.js). */
+const BASEMAPS = { streets: 'osm', satellite: 'satellite', topographic: 'esri-topo', light: 'esri-gray', dark: 'esri-dark' }
+
 export const TOOLS = [
   {
     name: 'list_markets',
@@ -115,6 +118,11 @@ export const TOOLS = [
         ...CRITERIA,
         center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } }, required: ['lat', 'lng'] },
         zoom: { type: 'number', minimum: 3, maximum: 19 },
+        basemap: {
+          type: 'string',
+          enum: Object.keys(BASEMAPS),
+          description: 'The map underneath: streets (default), satellite, topographic, light or dark.',
+        },
       },
       required: ['market', 'name'],
     },
@@ -181,6 +189,7 @@ export function viewState(input = {}) {
     near: Array.isArray(input.near) ? input.near.slice(0, 4).map((n) => ({ layer: String(n.layer), miles: Number(n.miles) })) : [],
     match: input.match === 'any' ? 'any' : 'all',
   }
+  if (BASEMAPS[input.basemap]) state.basemap = BASEMAPS[input.basemap]
   const c = input.circle
   if (c && [c.lat, c.lng, c.miles].every((v) => Number.isFinite(Number(v)))) {
     state.circle = { lat: Number(c.lat), lng: Number(c.lng), miles: Math.min(20, Number(c.miles)) }
