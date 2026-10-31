@@ -3486,6 +3486,13 @@ export default function Gis({
    * the map has not reported yet the market's own centre stands in, so a view
    * saved in the first second is still a usable view.
    */
+  // The basemap a saved view asked for, and the one on screen now.
+  const [viewBasemap, setViewBasemap] = useState<{ id: string } | null>(null)
+  const basemapNow = useRef<string | null>(null)
+  const noteBasemap = useCallback((id: string) => {
+    basemapNow.current = id
+  }, [])
+
   function captureView(): Record<string, unknown> {
     return {
       v: 1,
@@ -3523,6 +3530,7 @@ export default function Gis({
       near: nearPicks,
       match: matchMode,
       circle: areaCircle,
+      basemap: basemapNow.current,
     }
   }
 
@@ -3591,6 +3599,8 @@ export default function Gis({
       )
     }
     if (st.match === 'all' || st.match === 'any') setMatchMode(st.match)
+    // A fresh request each time, so reopening the same view re-applies it.
+    if (typeof st.basemap === 'string' && st.basemap) setViewBasemap({ id: st.basemap })
     const ring = st.circle as { lat?: unknown; lng?: unknown; miles?: unknown } | null | undefined
     if (ring && [ring.lat, ring.lng, ring.miles].every((v) => Number.isFinite(Number(v)))) {
       const circle = { lat: Number(ring.lat), lng: Number(ring.lng), miles: Math.min(20, Number(ring.miles)) }
@@ -4105,6 +4115,8 @@ export default function Gis({
           tiles={tiles}
           basemaps={basemaps}
           basemapPicker="bottom-left"
+          basemap={viewBasemap}
+          onBasemapChange={noteBasemap}
           properties={[]}
           parcels={
             meta?.tiles && meta.heavyBase
