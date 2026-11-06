@@ -3138,9 +3138,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * to its LAMC section, from the lot facts the pipeline measured (lot
    * type, width, depth, prevailing front yard, Hillside and Coastal Zone)
    * and the rules in lib/zoning. A Hillside lot's slope bands are read from
-   * USGS lidar on first open, with the outline the card already holds, and
-   * kept at the edge for a month.
+   * USGS lidar on first open, over the lot's outline from the City's parcel
+   * layer, and kept at the edge for a month.
    */
+  const LA_PARCELS = 'https://maps.lacity.org/lahub/rest/services/Landbase_Information/MapServer/5/query'
+  async function lotSlope(apn, areaSf) {
+    const q = new URLSearchParams({ where: `BPP='${apn}'`, outFields: 'BPP', outSR: '4326', f: 'geojson' })
+    const answer = await fetch(`${LA_PARCELS}?${q}`, { headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' } })
+    if (!answer.ok) return null
+    const features = (await answer.json())?.features || []
+    // The largest outline under this APN; checked against the lot's own area
+    // so a stray shape cannot stand in for it.
+    const geometry = features.map((f) => f.geometry).filter(Boolean)
+      .sort((a, b) => areaSqft(b) - areaSqft(a))[0]
+    if (!geometry) return null
+    const drawn = areaSqft(geometry)
+    if (areaSf && Math.abs(drawn - areaSf) / areaSf > 0.25) return null
+    return slopeBands(geometry)
+  }
+
   app.post('/api/gis/zoning-report', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
@@ -3161,18 +3177,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const spent = await chargeRows(c, 1)
     if (spent) return spent
     let slope = null
-    if (lot.hillside && body.geometry) {
-      // The card's outline is used only when it is this lot: its area must
-      // agree with the City's lot within a quarter, so a stray shape cannot
-      // be kept at the edge under this parcel's number.
-      const drawn = areaSqft(body.geometry)
-      if (drawn > 0 && lot.area_sf && Math.abs(drawn - lot.area_sf) / lot.area_sf <= 0.25) {
-        const res = await edgeCached(c, 'zoning-slope', 30 * 24 * 3600, async () => {
-          const s = await slopeBands(body.geometry).catch(() => null)
-          return new Response(JSON.stringify(s), { status: s ? 200 : 503, headers: { 'content-type': 'application/json' } })
-        }, { params: { apn } })
-        if (res.ok) slope = await res.json().catch(() => null)
-      }
+    if (lot.hillside) {
+      // The lot's outline from the City's own parcel layer, by APN, and its
+      // slope bands from USGS lidar; both kept at the edge for a month.
+      const res = await edgeCached(c, 'zoning-slope', 30 * 24 * 3600, async () => {
+        const s = await lotSlope(apn, lot.area_sf).catch(() => null)
+        return new Response(JSON.stringify(s), { status: s ? 200 : 503, headers: { 'content-type': 'application/json' } })
+      }, { params: { apn } })
+      if (res.ok) slope = await res.json().catch(() => null)
     }
     const zone = parseZone(lot.zone)
     const report = laReport(zone, { ...lot, slope })

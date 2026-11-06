@@ -1,4 +1,4 @@
-import type { AskCircle, ParcelRecords, BookStyle,
+import type { AskCircle, ParcelRecords, ZoningReport, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -380,6 +380,10 @@ export const api = {
       if (Array.isArray(parcel?.bb) && parcel.bb.length === 4) params.set('bb', parcel.bb.join(','))
       return request<ParcelRecords>(`/api/gis/records?${params.toString()}`)
     },
+
+    /** What the zoning code allows on a City of Los Angeles lot, each line cited. */
+    zoning: (market: string, apn: string) =>
+      request<ZoningReport>('/api/gis/zoning-report', json({ market, apn })),
 
     /** One parcel, whole, for the card. */
     one: (market: string, id: string | number) =>

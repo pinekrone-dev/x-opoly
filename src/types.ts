@@ -738,3 +738,42 @@ export interface ParcelRecords {
   /** Recorded mortgages, where the city publishes its recorder's index; null elsewhere. */
   loans?: { label: string; by: string; portal: string; rows: RecordedLoan[]; error?: string } | null
 }
+
+
+/** One line of the City of Los Angeles zoning report, with its citation. */
+export interface ZoningLine {
+  topic: 'front' | 'side' | 'rear' | 'height' | 'floor' | 'coverage' | 'density' | string
+  label: string
+  value: number | null
+  unit: string | null
+  status: 'computed' | 'estimate' | 'review'
+  cite: { section: string }
+  basis: string
+  bands?: { band: string; sf: number; rfar: number; rfa: number }[]
+}
+
+export interface ZoningReport {
+  apn?: string
+  zone?: string
+  covered: boolean
+  lot?: {
+    type?: string
+    why?: string
+    streets?: Record<string, number>
+    front_street?: string
+    width_ft?: number
+    depth_ft?: number
+    area_sf?: number
+    hillside?: boolean
+    coastal?: boolean
+    face?: { street?: string; prevailing_ft?: number; share?: number; lots_on_face?: number; range_ft?: number[] } | null
+    building_line?: { setback_ft?: number; ordinance?: string; case?: string }[] | null
+    existing_front_yard_ft?: number | null
+  }
+  slope?: { mean_slope_pct: number; relief_ft: number } | null
+  lines?: ZoningLine[]
+  flags: string[]
+  as_of?: string
+  sources?: string[]
+  note?: string
+}
