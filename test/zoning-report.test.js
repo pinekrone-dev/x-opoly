@@ -7,6 +7,7 @@ import test, { after, before, describe } from 'node:test'
 
 import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
+import { runTool } from '../app/lib/mcp.js'
 
 const temp = useTempData()
 const realFetch = globalThis.fetch
@@ -78,5 +79,14 @@ describe('the zoning report', () => {
   test('a lot outside the City, and a market outside Los Angeles', async () => {
     assert.equal((await call('/api/gis/zoning-report', { market: 'los-angeles-ca', apn: '9999999999' })).body.covered, false)
     assert.equal((await call('/api/gis/zoning-report', { market: 'austin-tx', apn: '1' })).body.covered, false)
+  })
+
+  test('the connector tool answers with cited lines', async () => {
+    const callApp = (path, init = {}) => app.fetch(new Request(`http://localhost${path}`, {
+      ...init, headers: { ...(init.headers || {}), ...(cookie ? { cookie } : {}) } }))
+    const out = await runTool('zoning_report', { apn: '4214014023' }, { call: callApp, origin: 'http://localhost' })
+    const text = JSON.parse(out.content[0].text)
+    assert.equal(text.zone, 'R1-1')
+    assert.ok(text.lines.some((l) => l.code === 'LAMC 12.08 C.5(a)' && l.value === 2340))
   })
 })
