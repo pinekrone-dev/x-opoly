@@ -190,6 +190,9 @@ import {
   ftsQuery,
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
+import { parseZone } from './lib/zoning/la-zone.js'
+import { laReport } from './lib/zoning/la-rules.js'
+import { slopeBands, areaSqft } from './lib/zoning/slope.js'
 import { liveMarkets, marketPage, sitemapXml } from './lib/marketPages.js'
 import { overCount, scrapeLimit, spend, spendCount, spendRows, sweepUsage, usageToday } from './lib/aibudget.js'
 import { DemographicsUnavailable, demographicsFor } from './lib/demographics.js'
@@ -2216,6 +2219,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   const INGEST_TILE_FILE = /^[a-z0-9-]{1,40}\.pmtiles$/
 
+  /*
+   * Lot facts for the zoning report, one file per assessor book
+   * (lotfacts-4214.json): lot type, front line, width, depth, the block
+   * face's prevailing front yard, Hillside and Coastal Zone flags. Read by
+   * the Worker one book at a time; never served whole to a browser.
+   */
+  const INGEST_LOTFACTS_FILE = /^lotfacts-\d{4}\.json$/
+
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
 
@@ -2679,11 +2690,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       if (!/^[a-z0-9-]{2,40}$/.test(market)) {
         return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
       }
-      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file) && !INGEST_TILE_FILE.test(file)) {
+      if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file) && !INGEST_TILE_FILE.test(file) &&
+          !INGEST_LOTFACTS_FILE.test(file)) {
         return c.json(
           {
             error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, ` +
-              'a layer-<name>.geojson, or a <name>.pmtiles.',
+              'a layer-<name>.geojson, a <name>.pmtiles, or a lotfacts-<book>.json.',
           },
           400,
         )
@@ -2691,7 +2703,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       key = `${market}/${file}`
       contentType =
         INGEST_FILES[file] ??
-        (INGEST_TILE_FILE.test(file) ? 'application/octet-stream' : 'application/geo+json')
+        (INGEST_TILE_FILE.test(file) ? 'application/octet-stream'
+          : INGEST_LOTFACTS_FILE.test(file) ? 'application/json' : 'application/geo+json')
     }
     const action = String(c.req.query('action') || 'put')
 
@@ -3119,6 +3132,68 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * and nothing here is written — and kept at the edge for six hours, so a
    * parcel opened twice in an afternoon asks the city once.
    */
+  /*
+   * The zoning report for one City of Los Angeles lot: what the code allows
+   * on it (setbacks, height, floor area, coverage, density), each line cited
+   * to its LAMC section, from the lot facts the pipeline measured (lot
+   * type, width, depth, prevailing front yard, Hillside and Coastal Zone)
+   * and the rules in lib/zoning. A Hillside lot's slope bands are read from
+   * USGS lidar on first open, with the outline the card already holds, and
+   * kept at the edge for a month.
+   */
+  app.post('/api/gis/zoning-report', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    let body = {}
+    try { body = await c.req.json() } catch { body = {} }
+    const market = String(body.market || '')
+    if (market !== 'los-angeles-ca') {
+      return c.json({ covered: false, flags: ['The zoning report covers the City of Los Angeles so far.'] })
+    }
+    const apn = String(body.apn || '').replace(/\D/g, '')
+    if (apn.length !== 10) return c.json({ error: 'apn must be the ten-digit assessor parcel number.' }, 400)
+    const shard = await catalogJson(`${market}/lotfacts-${apn.slice(0, 4)}.json`).catch(() => null)
+    const lot = shard?.lots?.[apn]
+    if (!lot) {
+      return c.json({ apn, covered: false,
+        flags: ['Not a City of Los Angeles lot, or not yet measured: the report covers lots inside the City.'] })
+    }
+    const spent = await chargeRows(c, 1)
+    if (spent) return spent
+    let slope = null
+    if (lot.hillside && body.geometry) {
+      // The card's outline is used only when it is this lot: its area must
+      // agree with the City's lot within a quarter, so a stray shape cannot
+      // be kept at the edge under this parcel's number.
+      const drawn = areaSqft(body.geometry)
+      if (drawn > 0 && lot.area_sf && Math.abs(drawn - lot.area_sf) / lot.area_sf <= 0.25) {
+        const res = await edgeCached(c, 'zoning-slope', 30 * 24 * 3600, async () => {
+          const s = await slopeBands(body.geometry).catch(() => null)
+          return new Response(JSON.stringify(s), { status: s ? 200 : 503, headers: { 'content-type': 'application/json' } })
+        }, { params: { apn } })
+        if (res.ok) slope = await res.json().catch(() => null)
+      }
+    }
+    const zone = parseZone(lot.zone)
+    const report = laReport(zone, { ...lot, slope })
+    return c.json({
+      apn, zone: lot.zone, parsed: zone, covered: report.covered,
+      lot: { type: lot.type, why: lot.why, streets: lot.streets, front_street: lot.front_street,
+        width_ft: lot.width_ft, depth_ft: lot.depth_ft, area_sf: lot.area_sf, hillside: lot.hillside,
+        coastal: lot.coastal, face: lot.face || null, building_line: lot.building_line || null,
+        existing_front_yard_ft: lot.existing_front_yard_ft ?? null },
+      slope, lines: report.lines, flags: report.flags,
+      as_of: shard.as_of,
+      sources: [
+        'Los Angeles Municipal Code, Chapter 1 (text via government code index; cross-checked with City Planning\'s Generalized Summary of Zoning Regulations, Jan 2026)',
+        `City of Los Angeles landbase, BOE street centrelines and LARIAC building footprints, as of ${shard.as_of}`,
+        'California Coastal Commission, Coastal Zone Boundary',
+        ...(slope ? ['USGS 3DEP lidar (bare earth, ~1 m)'] : []),
+      ],
+      note: 'Figures are estimates from public data and the code text; they are not a zoning determination. Q, D and T conditions, specific plans and overlays can change them.',
+    })
+  })
+
   app.get('/api/gis/records', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
