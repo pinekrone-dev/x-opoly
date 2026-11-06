@@ -91,6 +91,19 @@ export const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'zoning_report',
+    title: 'Zoning report (City of Los Angeles)',
+    description: 'What the zoning code allows on one City of Los Angeles lot: front, side and rear setbacks (prevailing front yards and corner, key, through and flag lots included), height, maximum floor area, lot coverage and density, each cited to its Los Angeles Municipal Code section, with the lot facts behind it. Lines marked review are ones the code text does not yet settle; Q, D and T conditions and overlays are flagged. The single-family zones (RA, RE, RS, R1 and its variations) are covered first.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        apn: { type: 'string', description: 'The ten-digit Los Angeles County assessor parcel number (the parcel id from search_parcels in los-angeles-ca).' },
+      },
+      required: ['apn'],
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'market_layers',
     title: 'Market layers',
     description: 'The layers a market publishes (zoning, permits, power lines, fuel tanks...), with ids for search_parcels near and make_map.',
@@ -313,6 +326,24 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
       }
       out.link = `${origin}/gis/${encodeURIComponent(input.market)}`
       return result(out)
+    }
+
+    case 'zoning_report': {
+      const apn = String(input.apn || '').replace(/\D/g, '').padStart(10, '0')
+      if (apn.length !== 10) return failure('apn must be the ten-digit assessor parcel number.')
+      const answer = await ask('/api/gis/zoning-report', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ market: 'los-angeles-ca', apn }),
+      })
+      if (answer.status !== 200) return failure(refusal(answer))
+      const b = answer.body
+      return result({
+        apn, zone: b.zone, covered: b.covered, lot: b.lot,
+        lines: (b.lines || []).map((l) => ({ item: l.label, value: l.value, unit: l.unit, status: l.status, code: l.cite?.section, basis: l.basis })),
+        flags: b.flags, asOf: b.as_of, sources: b.sources, note: b.note,
+        link: `${origin}/gis/los-angeles-ca`,
+      })
     }
 
     case 'market_layers': {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
+import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import LayerFilter, { type PivotCity } from '../components/LayerFilter'
@@ -5369,6 +5370,9 @@ export default function Gis({
                   linked={known?.place?.fields ?? null}
                   linkedName={known?.place?.name ?? null}
                 />
+                {active === 'los-angeles-ca' ? (
+                  <ZoningReport key={`zoning:${selected}`} market={active} apn={String(selected).padStart(10, '0')} />
+                ) : null}
                 {active && RECORD_MARKETS.has(active) ? (
                   <CityRecords
                     key={`${active}:${selected}`}
