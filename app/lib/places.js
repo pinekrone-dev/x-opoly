@@ -111,6 +111,8 @@ export function parseElements(elements, origin) {
         category: categoryOf(element.tags),
         address: addressOf(element.tags),
         brand: element.tags.brand || null,
+        // The brand's Wikidata id, which is how its logo is found (logos.js).
+        brandWikidata: element.tags['brand:wikidata'] || null,
         website: element.tags.website || element.tags['contact:website'] || null,
         lat,
         lng,

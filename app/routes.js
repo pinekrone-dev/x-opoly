@@ -204,6 +204,7 @@ import {
   toPropertyInput,
 } from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
+import { withLogos } from './lib/logos.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
@@ -2103,10 +2104,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       keyword: c.req.query('keyword') || null,
       radiusMiles: Number(c.req.query('radius')) || 5,
     }
+    // logos=1 adds each business's brand logo (or its site's favicon).
+    const logos = c.req.query('logos') === '1'
     try {
-      const search = () => nearbyBusinesses({ ...query, env })
+      const search = async () => {
+        const found = await nearbyBusinesses({ ...query, env })
+        return logos ? { ...found, results: await withLogos(found.results) } : found
+      }
       const cacheable = Number.isFinite(query.lat) && Number.isFinite(query.lng)
-      const key = `${coordinateKey(query.lat, query.lng)}|${query.category ?? ''}|${(query.keyword ?? '').trim().toLowerCase()}|${query.radiusMiles}`
+      const key = `${coordinateKey(query.lat, query.lng)}|${query.category ?? ''}|${(query.keyword ?? '').trim().toLowerCase()}|${query.radiusMiles}|${logos ? 'logos' : ''}`
       return c.json(cacheable ? await lookups.places.remember(key, search) : await search())
     } catch (error) {
       if (error instanceof PlacesUnavailable) return c.json({ error: error.message }, 503)
