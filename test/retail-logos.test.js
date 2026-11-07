@@ -246,3 +246,18 @@ test('the tools are listed', () => {
   assert.ok(names.includes('nearby_retail'))
   assert.ok(TOOLS.find((t) => t.name === 'make_map').inputSchema.properties.pins)
 })
+
+test('an Overpass remark is a failure, and the next instance is asked', async () => {
+  const { nearbyBusinesses } = await import('../app/lib/places.js')
+  const asked = []
+  const fetchImpl = async (url) => {
+    asked.push(url)
+    if (asked.length === 1) return Response.json({ elements: [], remark: 'runtime error: Query timed out in "query" at line 1 after 25 seconds.' })
+    return Response.json({ elements: [{ type: 'node', id: 1, lat: 30, lon: -97, tags: { name: 'Target', shop: 'department_store', 'brand:wikidata': 'Q1046951' } }] })
+  }
+  const out = await nearbyBusinesses({ lat: 30, lng: -97, category: 'chains', radiusMiles: 1, fetchImpl })
+  assert.equal(asked.length, 2)
+  assert.equal(out.results[0].name, 'Target')
+  const never = async () => Response.json({ elements: [], remark: 'runtime error: open64: 0 Success /osm3s_osm_base Dispatcher_Client::request_read_and_idx::rate_limited' })
+  await assert.rejects(nearbyBusinesses({ lat: 30, lng: -97, category: 'chains', radiusMiles: 1, fetchImpl: never }), /did not finish/)
+})
