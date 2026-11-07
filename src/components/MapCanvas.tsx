@@ -465,6 +465,27 @@ function escapeHtml(text: string): string {
     .replace(/"/g, '&quot;')
 }
 
+export interface MapPin {
+  lat: number
+  lng: number
+  label: string
+  detail?: string
+  logo?: string
+}
+
+/** Hosts a pin's logo may load from, as app/lib/logos.js LOGO_HOSTS. A saved map is a teammate's data. */
+const LOGO_HOSTS = ['upload.wikimedia.org', 'thumb.wikimedia.org', 'icons.duckduckgo.com']
+
+function pinLogo(url: string | undefined): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'https:' && LOGO_HOSTS.includes(parsed.hostname) ? parsed.toString() : null
+  } catch {
+    return null
+  }
+}
+
 interface Props {
   tiles: TileConfig
   /** Basemaps the viewer may switch between. Omit to hide the switcher. */
@@ -567,6 +588,12 @@ interface Props {
   onNeighbourParcel?: (slug: string, id: string | number) => void
   places?: { id: string; label: string; detail?: string; lat: number; lng: number }[] | null
   placesUntilZoom?: number
+  /**
+   * Pins a saved map carries (nearby retail from the Claude connector, say):
+   * a round badge with the brand's logo, or the name's initial where there
+   * is none, and the name and detail on a click.
+   */
+  pins?: MapPin[] | null
   onPlace?: (id: string) => void
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
@@ -751,6 +778,7 @@ export default function MapCanvas({
   onNeighbourParcel,
   places = null,
   placesUntilZoom = 8,
+  pins = null,
   onPlace,
   routeIds,
   routeGeometry,
@@ -1476,6 +1504,68 @@ export default function MapCanvas({
       for (const marker of made) marker.remove()
     }
   }, [loaded, places, placesUntilZoom])
+
+  /*
+   * Saved pins, as HTML markers for the same reason as the places: the
+   * raster basemaps carry no glyphs, and a logo is an image anyway. Built
+   * with the DOM, never HTML, since a pin's label came from a directory
+   * anyone can edit. A logo that fails to load falls back to the initial.
+   */
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !pins?.length) return undefined
+    let open: maplibregl.Popup | null = null
+    const made = pins.map((pin) => {
+      const element = document.createElement('button')
+      element.type = 'button'
+      element.className = 'lq-pin'
+      element.title = pin.label
+      element.setAttribute('aria-label', pin.label)
+      element.style.cssText =
+        'width:30px;height:30px;border-radius:9999px;background:#fff;border:2px solid #0f172a;box-shadow:0 1px 4px rgba(0,0,0,.35);padding:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden'
+      const initial = () => {
+        element.replaceChildren()
+        element.style.background = '#0f172a'
+        const letter = document.createElement('span')
+        letter.style.cssText = 'color:#fff;font-size:12px;font-weight:700;line-height:1'
+        letter.textContent = (pin.label.trim()[0] || '•').toUpperCase()
+        element.appendChild(letter)
+      }
+      const logo = pinLogo(pin.logo)
+      if (logo) {
+        const img = document.createElement('img')
+        img.src = logo
+        img.alt = ''
+        img.referrerPolicy = 'no-referrer'
+        img.loading = 'lazy'
+        img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain'
+        img.addEventListener('error', initial, { once: true })
+        element.appendChild(img)
+      } else {
+        initial()
+      }
+      element.addEventListener('click', (event) => {
+        event.stopPropagation()
+        open?.remove()
+        const body = document.createElement('div')
+        const name = document.createElement('strong')
+        name.textContent = pin.label
+        body.appendChild(name)
+        if (pin.detail) {
+          const detail = document.createElement('div')
+          detail.style.cssText = 'color:#5c6377;font-size:11px'
+          detail.textContent = pin.detail
+          body.appendChild(detail)
+        }
+        open = new maplibregl.Popup({ offset: 18, closeButton: true }).setLngLat([pin.lng, pin.lat]).setDOMContent(body).addTo(instance)
+      })
+      return new maplibregl.Marker({ element }).setLngLat([pin.lng, pin.lat]).addTo(instance)
+    })
+    return () => {
+      open?.remove()
+      for (const marker of made) marker.remove()
+    }
+  }, [loaded, pins])
 
   // Draw the tour line.
   useEffect(() => {
