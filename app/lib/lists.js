@@ -155,3 +155,32 @@ export async function removeFromList(db, teamId, id, placeId) {
 export async function forgetPlace(db, teamId, placeId) {
   await db.run('DELETE FROM list_items WHERE team_id = ? AND place_id = ?', [teamId, String(placeId)])
 }
+
+/**
+ * The places on some of the team's lists (all of them when `ids` is empty),
+ * one row per place with the lists it is on, for pins on the map.
+ */
+export async function listPins(db, teamId, ids = []) {
+  const wanted = [...new Set((ids || []).map(String).filter(Boolean))].slice(0, 100)
+  const filter = wanted.length ? ` AND i.list_id IN (${wanted.map(() => '?').join(', ')})` : ''
+  const rows = await db.all(
+    `SELECT i.list_id, p.id, p.name, p.address, p.lat, p.lng, p.acreage, p.market, p.parcel_id
+       FROM list_items i JOIN places p ON p.id = i.place_id AND p.team_id = i.team_id
+      WHERE i.team_id = ?${filter}
+      LIMIT 5000`,
+    [teamId, ...wanted],
+  )
+  const byPlace = new Map()
+  for (const r of rows) {
+    const held = byPlace.get(r.id)
+    if (held) held.lists.push(r.list_id)
+    else {
+      byPlace.set(r.id, {
+        id: r.id, name: r.name, address: r.address, lat: r.lat, lng: r.lng,
+        acreage: r.acreage, market: r.market, parcelId: r.parcel_id, lists: [r.list_id],
+      })
+    }
+  }
+  return [...byPlace.values()]
+}
+

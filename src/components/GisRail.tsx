@@ -228,6 +228,8 @@ export interface LayerCard {
   busy?: boolean
   state: LayerState
   icon: JSX.Element
+  /** A small control in the card's top corner (which lists, say). */
+  corner?: React.ReactNode
 }
 
 export function LayerGrid({
@@ -242,13 +244,13 @@ export function LayerGrid({
       {cards.map((card) => {
         const live = card.state === 'on' || card.state === 'off'
         return (
+          <div key={card.id} className="relative">
           <button
-            key={card.id}
             type="button"
             disabled={!live}
             title={card.note}
             onClick={() => live && onToggle(card.id)}
-            className={`flex flex-col items-start gap-1.5 rounded-lg border p-2 text-left transition ${
+            className={`flex h-full w-full flex-col items-start gap-1.5 rounded-lg border p-2 text-left transition ${
               card.state === 'on'
                 ? 'border-brand bg-brand/5'
                 : live
@@ -282,6 +284,8 @@ export function LayerGrid({
               <span className="text-[10px] leading-tight text-faint">{card.note}</span>
             ) : null}
           </button>
+          {card.corner ? <div className="absolute right-1.5 top-1.5">{card.corner}</div> : null}
+          </div>
         )
       })}
     </div>
@@ -310,6 +314,8 @@ export const LAYER_ICONS = {
   tank: <><path d="M2 9h20" /><rect x="5" y="12" width="14" height="7" rx="3.5" /><path d="M12 9v3" /></>,
   // A drop, for what leaked from one.
   leak: <><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z" /><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5" /></>,
+  // A list: three lines with bullets, for the team's lists of places.
+  lists: <><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1" /><circle cx="4.5" cy="12" r="1" /><circle cx="4.5" cy="18" r="1" /></>,
   // A road with its centre line, for traffic counts.
   traffic: <><path d="M8 3L5 21M16 3l3 18" /><path d="M12 4v3M12 10.5v3M12 17v3" /></>,
 }

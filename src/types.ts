@@ -544,6 +544,19 @@ export interface PlaceList {
   has?: boolean
 }
 
+/** A place on one or more lists, for a pin. */
+export interface ListPin {
+  id: string
+  name: string | null
+  address: string | null
+  lat: number | null
+  lng: number | null
+  acreage: number | null
+  market: string | null
+  parcelId: string | null
+  lists: string[]
+}
+
 export interface PlaceListDetail extends PlaceList {
   places: Place[]
 }
