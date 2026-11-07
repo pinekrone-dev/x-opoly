@@ -2104,6 +2104,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       keyword: c.req.query('keyword') || null,
       radiusMiles: Number(c.req.query('radius')) || 5,
     }
+    // brands=Target|Zaxby's: several chains at once (with category=chains).
+    const brands = String(c.req.query('brands') ?? '').split('|').map((b) => b.trim().slice(0, 60)).filter(Boolean).slice(0, 25)
+    if (brands.length) query.keyword = brands
     // logos=1 adds each business's brand logo (or its site's favicon).
     const logos = c.req.query('logos') === '1'
     try {
@@ -2112,7 +2115,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return logos ? { ...found, results: await withLogos(found.results) } : found
       }
       const cacheable = Number.isFinite(query.lat) && Number.isFinite(query.lng)
-      const key = `${coordinateKey(query.lat, query.lng)}|${query.category ?? ''}|${(query.keyword ?? '').trim().toLowerCase()}|${query.radiusMiles}|${logos ? 'logos' : ''}`
+      const key = `${coordinateKey(query.lat, query.lng)}|${query.category ?? ''}|${[query.keyword ?? ''].flat().join('|').trim().toLowerCase()}|${query.radiusMiles}|${logos ? 'logos' : ''}`
       return c.json(cacheable ? await lookups.places.remember(key, search) : await search())
     } catch (error) {
       if (error instanceof PlacesUnavailable) return c.json({ error: error.message }, 503)
