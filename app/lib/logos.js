@@ -107,7 +107,28 @@ export async function brandLogos(qids, { fetchImpl = fetch, timeout = 8000, widt
   }
 
   // The logo files' thumbnails, from Commons.
-  const files = [...new Set([...facts.values()].map((f) => f.file).filter(Boolean))]
+  const thumbs = await commonsThumbs([...facts.values()].map((f) => f.file), { fetchImpl, timeout, width })
+
+  for (const q of missing) {
+    const f = facts.get(q)
+    // A brand Wikidata did not answer for is not remembered, so a refusal
+    // under load is asked again next time rather than cached as "no logo".
+    if (!f) continue
+    const entry = { logo: f.file ? thumbs.get(f.file) ?? null : null, website: f.website ?? null, file: f.file ?? null }
+    out.set(q, entry)
+    if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value)
+    memo.set(q, entry)
+  }
+  return out
+}
+
+/**
+ * Thumbnails for Wikimedia Commons files, fifty to a request. Returns
+ * Map(file name as given → thumbnail URL); a file Commons does not answer
+ * for is simply absent.
+ */
+export async function commonsThumbs(fileNames, { fetchImpl = fetch, timeout = 8000, width = 128 } = {}) {
+  const files = [...new Set((fileNames || []).filter(Boolean).map((f) => String(f).replace(/^File:/i, '')))]
   const thumbs = new Map()
   const pages = await Promise.all(chunks(files, BATCH).map((group) => {
     const titles = group.map((f) => `File:${f}`).join('|')
@@ -125,18 +146,7 @@ export async function brandLogos(qids, { fetchImpl = fetch, timeout = 8000, widt
       if (src) thumbs.set(String(asked).replace(/^File:/, ''), src)
     }
   }
-
-  for (const q of missing) {
-    const f = facts.get(q)
-    // A brand Wikidata did not answer for is not remembered, so a refusal
-    // under load is asked again next time rather than cached as "no logo".
-    if (!f) continue
-    const entry = { logo: f.file ? thumbs.get(f.file) ?? null : null, website: f.website ?? null, file: f.file ?? null }
-    out.set(q, entry)
-    if (memo.size >= MEMO_MAX) memo.delete(memo.keys().next().value)
-    memo.set(q, entry)
-  }
-  return out
+  return thumbs
 }
 
 /** Commons adds campaign parameters to thumbnail links; they are not part of the image. */

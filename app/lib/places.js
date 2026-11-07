@@ -16,7 +16,7 @@ import { googleNearby, hasGoogleKey } from './google.js'
 const DEFAULT_OVERPASS = 'https://overpass-api.de/api/interpreter'
 
 /** Other public Overpass instances, asked in turn when the first is busy. */
-export const OVERPASS_MIRRORS = ['https://overpass.private.coffee/api/interpreter', 'https://maps.mail.ru/osm/tools/overpass/api/interpreter']
+export const OVERPASS_MIRRORS = ['https://maps.mail.ru/osm/tools/overpass/api/interpreter', 'https://overpass.private.coffee/api/interpreter']
 
 /** The rings drawn around a site, in miles. */
 export const RING_MILES = [1, 3, 5]
@@ -217,6 +217,7 @@ export async function nearbyBusinesses({
   env = {},
   fetchImpl = fetch,
   timeout = 25000,
+  hedgeMs = 4000,
 } = {}) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
     throw new PlacesUnavailable('This site needs a location on the map before you can scope the competition around it.')
@@ -264,59 +265,78 @@ export async function nearbyBusinesses({
   }
 
   const query = buildQuery({ lat, lng, radiusMeters: Math.round(radius * 1609.344), category, keyword })
-  // The public Overpass instances share the load between them: when one is
-  // busy (429, 5xx, a timeout, or a 200 whose remark says the query did not
-  // run) the next is asked. OVERPASS_URL, when set, is asked first.
+  // The public instances are unevenly reachable and unevenly busy (from a
+  // runner: one unreachable, one hanging a minute, one answering in 13 s).
+  // So the search is hedged: the first is asked, and if it has not answered
+  // in a few seconds, or has failed, the next is asked too; the first good
+  // answer wins and the rest are cancelled. OVERPASS_URL, when set, leads.
   const endpoints = [...new Set([env.OVERPASS_URL, DEFAULT_OVERPASS, ...OVERPASS_MIRRORS].filter(Boolean))]
-  const each = Math.max(5000, Math.floor(timeout / Math.min(endpoints.length, 3)))
-  let reason = null
-  for (const endpoint of endpoints.slice(0, 3)) {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), each)
-    try {
-      const response = await fetchImpl(endpoint, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          'user-agent': env.PLACES_UA || 'LandQuotient/1.0 (https://landquotient.com; nearby businesses)',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-      })
-      if (response.status === 401 || response.status === 403) {
-        reason = 'This server is not allowed to reach the business directory. Check its outbound network access, or set OVERPASS_URL to an instance it can reach.'
-        continue
-      }
-      if (response.status === 429) {
-        reason = 'The business directory is rate limiting us. Wait a moment and try again.'
-        continue
-      }
-      if (!response.ok) {
-        reason = `The business directory returned HTTP ${response.status}.`
-        continue
-      }
-      const body = await response.json()
-      // Overpass reports a query it gave up on (timeout, memory, too busy)
-      // as a 200 with a remark and no elements. That is not "nothing here",
-      // and an empty list would say exactly that to a broker.
-      if (body?.remark && /error|timed out|timeout|too busy|rate_limited/i.test(body.remark) && !(body.elements || []).length) {
-        reason = `The business directory did not finish the search (${String(body.remark).slice(0, 160)}).`
-        continue
-      }
-      const results = parseElements(body.elements, { lat, lng })
-      return {
-        results,
-        rings: summarize(results),
-        radiusMiles: radius,
-        source: 'OpenStreetMap via Overpass',
-      }
-    } catch (error) {
-      reason = error?.name === 'AbortError'
-        ? 'The business search timed out. Try a smaller radius.'
-        : `The business directory could not be reached (${error.message}).`
-    } finally {
-      clearTimeout(timer)
+  const controllers = endpoints.map(() => new AbortController())
+  const reasons = []
+  const ask = async (endpoint, controller) => {
+    const response = await fetchImpl(endpoint, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'user-agent': env.PLACES_UA || 'LandQuotient/1.0 (https://landquotient.com; nearby businesses)',
+      },
+      body: `data=${encodeURIComponent(query)}`,
+    })
+    if (response.status === 401 || response.status === 403) {
+      throw new PlacesUnavailable('This server is not allowed to reach the business directory. Check its outbound network access, or set OVERPASS_URL to an instance it can reach.')
     }
+    if (response.status === 429) throw new PlacesUnavailable('The business directory is rate limiting us. Wait a moment and try again.')
+    if (!response.ok) throw new PlacesUnavailable(`The business directory returned HTTP ${response.status}.`)
+    const body = await response.json()
+    // Overpass reports a query it gave up on (timeout, memory, too busy)
+    // as a 200 with a remark and no elements. That is not "nothing here",
+    // and an empty list would say exactly that to a broker.
+    if (body?.remark && /error|timed out|timeout|too busy|rate_limited/i.test(body.remark) && !(body.elements || []).length) {
+      throw new PlacesUnavailable(`The business directory did not finish the search (${String(body.remark).slice(0, 160)}).`)
+    }
+    return body
   }
-  throw new PlacesUnavailable(reason || 'The business directory could not be reached.')
+
+  const body = await new Promise((resolve, reject) => {
+    let settled = false
+    let next = 0
+    let failed = 0
+    let hedge = null
+    const deadline = setTimeout(() => finish(null, new PlacesUnavailable('The business search timed out. Try a smaller radius.')), timeout)
+    function finish(value, error) {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      clearTimeout(hedge)
+      for (const c of controllers) c.abort()
+      if (error) reject(error)
+      else resolve(value)
+    }
+    function launch() {
+      if (settled || next >= endpoints.length) return
+      const i = next++
+      clearTimeout(hedge)
+      if (next < endpoints.length) hedge = setTimeout(launch, hedgeMs)
+      ask(endpoints[i], controllers[i]).then(
+        (value) => finish(value),
+        (error) => {
+          if (settled) return
+          reasons.push(error instanceof PlacesUnavailable ? error.message : error?.name === 'AbortError' ? 'The business search timed out.' : `The business directory could not be reached (${error?.message}).`)
+          failed += 1
+          if (failed >= endpoints.length) finish(null, new PlacesUnavailable(reasons[reasons.length - 1]))
+          else launch()
+        },
+      )
+    }
+    launch()
+  })
+
+  const results = parseElements(body.elements, { lat, lng })
+  return {
+    results,
+    rings: summarize(results),
+    radiusMiles: radius,
+    source: 'OpenStreetMap via Overpass',
+  }
 }

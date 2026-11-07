@@ -270,3 +270,23 @@ test('object and array arguments sent as JSON strings are read back', async () =
   assert.equal(out.circle, 'not json')
   assert.equal(out.name, 'y')
 })
+
+test('a hanging instance is hedged: the next is asked and the first answer wins', async () => {
+  const { nearbyBusinesses } = await import('../app/lib/places.js')
+  const asked = []
+  let aborted = 0
+  const fetchImpl = (url, init) => {
+    asked.push(url)
+    if (asked.length === 1) {
+      // Hangs until cancelled.
+      return new Promise((_, reject) => init.signal.addEventListener('abort', () => { aborted += 1; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })) }))
+    }
+    return Promise.resolve(Response.json({ elements: [{ type: 'node', id: 2, lat: 30, lon: -97, tags: { name: "Zaxby's", amenity: 'fast_food', 'brand:wikidata': 'Q8067525' } }] }))
+  }
+  const started = Date.now()
+  const out = await nearbyBusinesses({ lat: 30, lng: -97, category: 'chains', radiusMiles: 1, fetchImpl, hedgeMs: 20, timeout: 5000 })
+  assert.equal(out.results[0].name, "Zaxby's")
+  assert.equal(out.results[0].sector, 'Quick service')
+  assert.ok(Date.now() - started < 1000)
+  assert.equal(aborted, 1, 'the hanging request is cancelled')
+})

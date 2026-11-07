@@ -17,7 +17,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. make_map saves a map (layers, criteria, a circle, pins with brand logos) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files and cannot be searched here yet; the tool says so.`
 
@@ -76,6 +76,19 @@ const NEARBY = {
   },
   keyword: { type: 'string', maxLength: 60, description: 'A name to look for among every business of the category, e.g. "Dollar".' },
   radiusMiles: { type: 'number', minimum: 0.25, maximum: 10, description: 'How far from the point (default 1 mile).' },
+}
+
+/** The landmark kinds, as app/lib/landmarks.js names them. */
+const LANDMARK_IDS = ['colleges', 'hospitals', 'stadiums', 'airports', 'malls', 'attractions', 'convention', 'military', 'headquarters']
+
+const LANDMARKS = {
+  kinds: {
+    type: 'array',
+    items: { type: 'string', enum: LANDMARK_IDS },
+    description: 'Which kinds (default all): colleges, hospitals, stadiums (and arenas), airports (commercial), malls, attractions (theme parks, zoos, aquariums), convention (centres), military (bases), headquarters (of major employers).',
+  },
+  radiusMiles: { type: 'number', minimum: 0.5, maximum: 15, description: 'How far from the point (default 5 miles).' },
+  minEmployees: { type: 'integer', minimum: 100, description: 'Smallest headquarters to count, by employees (default 1,000).' },
 }
 
 /** As many pins as one map carries: a saved map holds settings, not data. */
@@ -170,6 +183,22 @@ export const TOOLS = [
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
   {
+    name: 'nearby_landmarks',
+    title: 'Nearby landmarks and demand drivers',
+    description: 'The landmarks that sell a site, around a point: colleges and universities (with enrolment), hospitals (beds), stadiums and arenas (seats and home teams), commercial airports (passengers), malls, theme parks, zoos and aquariums, convention centres, military bases, and the headquarters of major employers (employees, industry). Each with its distance and a logo or photo, the largest first. From Wikidata, so notable places only. Give lat and lng, or an address. Use make_map landmarks to pin them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lat: { type: 'number' },
+        lng: { type: 'number' },
+        address: { type: 'string', description: 'Used when lat and lng are not given.' },
+        ...LANDMARKS,
+        perKind: { type: 'integer', minimum: 1, maximum: 40, description: 'How many of each kind to list, largest first (default 10).' },
+      },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
     name: 'make_map',
     title: 'Make a map',
     description: 'Save a map in Land Quotient (layers switched on, the search criteria, an optional circle, pins with logos, where it opens) and return a link that opens it. Saved under the name given; the same name replaces the earlier map.',
@@ -189,6 +218,11 @@ export const TOOLS = [
           description: 'The map underneath: streets (default), satellite, topographic, light or dark.',
         },
         pins: { type: 'array', maxItems: MAX_PINS, items: PIN, description: 'Points to pin on the map, each with a label and optionally a logo (from nearby_retail).' },
+        landmarks: {
+          type: 'object',
+          properties: LANDMARKS,
+          description: 'Pin the landmarks around the centre or circle (colleges, hospitals, stadiums, airports, malls, attractions, headquarters...) with their logos, found as nearby_landmarks finds them.',
+        },
         nearby: {
           type: 'object',
           properties: NEARBY,
@@ -312,6 +346,44 @@ export function businessPin(b) {
   }
 }
 
+const KIND_LABELS = {
+  colleges: 'College', hospitals: 'Hospital', stadiums: 'Stadium', airports: 'Airport', malls: 'Mall',
+  attractions: 'Attraction', convention: 'Convention centre', military: 'Military base', headquarters: 'HQ',
+}
+const fmt = (n) => Number(n).toLocaleString('en-US')
+
+/** One line on how big a landmark is. */
+export function landmarkFigure(l) {
+  if (l.students) return `${fmt(l.students)} students`
+  if (l.capacity) return `${fmt(l.capacity)} seats${l.teams?.length ? ` · ${l.teams.slice(0, 2).join(', ')}` : ''}`
+  if (l.passengers) return `${fmt(l.passengers)} passengers a year`
+  if (l.beds) return `${fmt(l.beds)} beds`
+  if (l.employees) return `${fmt(l.employees)} employees${l.located && l.located !== 'exact' ? ' (HQ city)' : ''}`
+  return l.teams?.length ? l.teams.slice(0, 2).join(', ') : ''
+}
+
+/** A landmark as a pin. */
+export function landmarkPin(l) {
+  return {
+    lat: l.lat,
+    lng: l.lng,
+    label: l.name,
+    detail: [KIND_LABELS[l.kind], landmarkFigure(l), l.miles != null ? `${l.miles} mi` : null].filter(Boolean).join(' · '),
+    logo: l.logo ?? undefined,
+  }
+}
+
+/** Query string for /api/places/landmarks. */
+function landmarksQuery(lat, lng, options = {}) {
+  const p = new URLSearchParams({ lat: String(lat), lng: String(lng) })
+  const miles = Number(options.radiusMiles)
+  p.set('radius', String(Number.isFinite(miles) ? Math.min(15, Math.max(0.5, miles)) : 5))
+  const kinds = (Array.isArray(options.kinds) ? options.kinds : []).filter((k) => LANDMARK_IDS.includes(k))
+  if (kinds.length) p.set('kinds', kinds.join(','))
+  if (Number.isFinite(Number(options.minEmployees))) p.set('minEmployees', String(Math.round(Number(options.minEmployees))))
+  return p
+}
+
 /** The brands asked for, cleaned. */
 function brandList(value) {
   return (Array.isArray(value) ? value : []).map((b) => String(b).replace(/\|/g, ' ').trim().slice(0, 60)).filter((b) => squeeze(b)).slice(0, 25)
@@ -415,6 +487,19 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
     return failure('market must be a slug from list_markets, like austin-tx.')
   }
 
+  // A point from lat and lng, or from an address.
+  const locate = async (args) => {
+    const lat = Number(args.lat)
+    const lng = Number(args.lng)
+    if (args.lat != null && args.lng != null && Number.isFinite(lat) && Number.isFinite(lng)) return { lat, lng, place: null }
+    if (!args.address) return { error: 'Give lat and lng, or an address.' }
+    const found = await ask(`/api/geocode?q=${encodeURIComponent(String(args.address).slice(0, 200))}`)
+    const top = found.body?.results?.[0]
+    if (found.status !== 200 || !top) return { error: found.status === 200 ? `No location found for "${args.address}".` : refusal(found) }
+    const at = { lat: Number(top.lat), lng: Number(top.lng ?? top.lon), place: top.label ?? top.name ?? top.address ?? String(args.address) }
+    return Number.isFinite(at.lat) && Number.isFinite(at.lng) ? at : { error: `No location found for "${args.address}".` }
+  }
+
   switch (name) {
     case 'list_markets': {
       const answer = await ask('/catalog/markets.json')
@@ -499,20 +584,41 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       return result({ results: (answer.body?.results ?? []).slice(0, 5) })
     }
 
-    case 'nearby_retail': {
-      let lat = Number(input.lat)
-      let lng = Number(input.lng)
-      let place = null
-      if (input.lat == null || input.lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-        if (!input.address) return failure('Give lat and lng, or an address.')
-        const found = await ask(`/api/geocode?q=${encodeURIComponent(String(input.address).slice(0, 200))}`)
-        const top = found.body?.results?.[0]
-        if (found.status !== 200 || !top) return failure(found.status === 200 ? `No location found for "${input.address}".` : refusal(found))
-        lat = Number(top.lat)
-        lng = Number(top.lng ?? top.lon)
-        place = top.label ?? top.name ?? top.address ?? String(input.address)
-        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return failure(`No location found for "${input.address}".`)
+    case 'nearby_landmarks': {
+      const point = await locate(input)
+      if (point.error) return failure(point.error)
+      const { lat, lng, place } = point
+      const answer = await ask(`/api/places/landmarks?${landmarksQuery(lat, lng, input)}`)
+      if (answer.status !== 200) return failure(refusal(answer))
+      const b = answer.body || {}
+      const perKind = Math.min(40, Math.max(1, Number(input.perKind) || 10))
+      const groups = {}
+      for (const l of b.landmarks || []) {
+        const list = (groups[l.kind] ??= [])
+        if (list.length >= perKind) continue
+        list.push({
+          name: l.name,
+          miles: l.miles,
+          figure: landmarkFigure(l) || undefined,
+          students: l.students, seats: l.capacity, teams: l.teams, passengers: l.passengers, beds: l.beds, iata: l.iata,
+          employees: l.employees, industries: l.industries,
+          located: l.kind === 'headquarters' ? (l.located === 'exact' ? 'headquarters address' : `${l.located.replace(/^city: /, '')} (city only; distance is to the city centre)`) : undefined,
+          lat: l.lat, lng: l.lng, logo: l.logo, website: l.website, wikidata: l.wikidata,
+        })
       }
+      return result({
+        center: { lat, lng, ...(place ? { place } : {}) },
+        radiusMiles: b.radiusMiles,
+        found: b.byKind,
+        landmarks: groups,
+        source: 'Wikidata (community-edited; notable places only, figures as Wikidata records them, some years old)',
+      })
+    }
+
+    case 'nearby_retail': {
+      const point = await locate(input)
+      if (point.error) return failure(point.error)
+      const { lat, lng, place } = point
       const answer = await ask(`/api/places/nearby?${nearbyQuery(lat, lng, input)}`)
       if (answer.status !== 200) return failure(refusal(answer))
       const b = answer.body || {}
@@ -588,6 +694,19 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
         if (pins.length) state.pins = pins
         if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 1)
       }
+      let landmarksPinned
+      if (input.landmarks && typeof input.landmarks === 'object') {
+        const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
+        if (!at) return failure('landmarks needs a center or a circle to search around.')
+        const options = { ...input.landmarks, radiusMiles: input.landmarks.radiusMiles ?? state.circle?.miles ?? 5 }
+        const found = await ask(`/api/places/landmarks?${landmarksQuery(at.lat, at.lng, options)}`)
+        if (found.status !== 200) return failure(refusal(found))
+        const before = state.pins?.length ?? 0
+        const pins = pinList([...(state.pins ?? []), ...(found.body?.landmarks ?? []).map(landmarkPin)])
+        landmarksPinned = pins.length - before
+        if (pins.length) state.pins = pins
+        if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 5)
+      }
       const answer = await ask('/api/gis/views', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -601,6 +720,7 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
         nearbyPinned: input.nearby ? pinned : undefined,
         nearbyFound: input.nearby ? foundCount : undefined,
         nearbySource: input.nearby ? foundSource : undefined,
+        landmarksPinned,
         link: `${origin}/gis/${encodeURIComponent(input.market)}?view=${encodeURIComponent(id)}`,
       })
     }
