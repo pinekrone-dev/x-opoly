@@ -29,6 +29,9 @@ interface Handoff {
   address: string
   center: { lat: number; lng: number } | null
   rows: { group: string; rows: OmRow[] }[]
+  /** Layers switched on in the map when the memo was made, and their colours there. */
+  layers?: string[]
+  layerColors?: Record<string, string>
 }
 
 interface Broker {
@@ -90,7 +93,8 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
   const [broker, setBroker] = useState<Broker>(() => ({ name: '', email: '', phone: '', company: '', ...readBroker() }))
   // The market's layers that can go on the maps, and the ones switched on.
   const [available, setAvailable] = useState<DocLayer[]>([])
-  const [layerIds, setLayerIds] = useState<string[]>([])
+  // Starts with what was on in the map; changed here, it is the memo's own.
+  const [layerIds, setLayerIds] = useState<string[]>(() => readHandoff(market, id)?.layers ?? [])
   useEffect(() => {
     let cancelled = false
     fetch(`${CATALOG}/${encodeURIComponent(market)}/layers.json`)
@@ -104,7 +108,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
               id: l.id,
               label: l.label,
               kind: l.kind as DocLayer['kind'],
-              color: l.color || '#7048e8',
+              color: readHandoff(market, id)?.layerColors?.[l.id] || l.color || '#7048e8',
               url: /^https:/.test(String(l.tiles)) ? String(l.tiles) : `${CATALOG}/${encodeURIComponent(market)}/${l.tiles}`,
               sourceLayer: l.sourceLayer ?? l.id,
             })),
@@ -114,7 +118,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     return () => {
       cancelled = true
     }
-  }, [market])
+  }, [market, id])
   const layers = useMemo(() => available.filter((l) => layerIds.includes(l.id)), [available, layerIds])
 
   const [pages, setPages] = useState<HTMLCanvasElement[]>([])
