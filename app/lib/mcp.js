@@ -369,12 +369,36 @@ const result = (value, extra = {}) => ({ content: [text(value)], structuredConte
 const failure = (message) => ({ content: [text(message)], isError: true })
 
 /**
+ * Arguments as the tool's schema declares them. Some clients send an object
+ * or array argument as a JSON string (a client holding an older copy of the
+ * tool list does, for an argument it has not heard of); those are read back
+ * into what they say. Anything that will not parse is left as sent.
+ */
+export function parsedArguments(name, input) {
+  if (!input || typeof input !== 'object') return input || {}
+  const properties = TOOLS.find((t) => t.name === name)?.inputSchema?.properties ?? {}
+  const out = { ...input }
+  for (const [key, value] of Object.entries(out)) {
+    const type = properties[key]?.type
+    if (typeof value !== 'string' || (type !== 'object' && type !== 'array')) continue
+    try {
+      const parsed = JSON.parse(value)
+      if (type === 'array' ? Array.isArray(parsed) : parsed && typeof parsed === 'object' && !Array.isArray(parsed)) out[key] = parsed
+    } catch {
+      // Not JSON: left as it came.
+    }
+  }
+  return out
+}
+
+/**
  * Runs one tool.
  *
  * `call(path, init)` answers with the app's own JSON, as the signed-in
  * person; `origin` makes links; `scope` is what the token was granted.
  */
-export async function runTool(name, input = {}, { call, origin, scope = [] }) {
+export async function runTool(name, rawInput = {}, { call, origin, scope = [] }) {
+  const input = parsedArguments(name, rawInput)
   const ask = async (path, init) => {
     const response = await call(path, init)
     let body = null
