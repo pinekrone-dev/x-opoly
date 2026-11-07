@@ -2,7 +2,7 @@
   "name": "sitesurvey-cre",
   "private": true,
   "version": "1.0.0",
-  "description": "Site survey and deal mapping for tenant rep brokers \u2014 map candidate properties, track deal stages, plan tours, and share a branded client link.",
+  "description": "Site survey and deal mapping for tenant rep brokers — map candidate properties, track deal stages, plan tours, and share a branded client link.",
   "type": "module",
   "engines": {
     "node": "22.x"
@@ -16,7 +16,7 @@
     "preview": "npm run build && npm start",
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "migrations": "node --input-type=module -e \"import('./app/lib/schema.js').then(async (m)=>{const fs=await import('node:fs');fs.writeFileSync('migrations/0001_init.sql','-- Generated from app/lib/schema.js \u2014 edit that file, then re-run: npm run migrations\\n\\n'+m.SCHEMA_STATEMENTS.map(s=>s.trim()+';').join('\\n\\n')+'\\n')})\"",
+    "migrations": "node --input-type=module -e \"import('./app/lib/schema.js').then(async (m)=>{const fs=await import('node:fs');fs.writeFileSync('migrations/0001_init.sql','-- Generated from app/lib/schema.js — edit that file, then re-run: npm run migrations\\n\\n'+m.SCHEMA_STATEMENTS.map(s=>s.trim()+';').join('\\n\\n')+'\\n')})\"",
     "deploy": "npm run build && wrangler deploy",
     "cf:migrate": "wrangler d1 migrations apply sitesurvey-cre --remote"
   },
@@ -34,6 +34,7 @@
     "pbf": "^5.1.2",
     "pdfjs-dist": "^6.2.108",
     "pmtiles": "^4.5.0",
+    "pptxgenjs": "^4.0.1",
     "qrcode": "^1.5.4",
     "zod": "^4.4.3"
   },

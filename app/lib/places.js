@@ -75,9 +75,14 @@ export function sectorOf(tags = {}) {
   if (tags.leisure === 'fitness_centre' || tags.leisure === 'sports_centre') return 'Fitness'
   if (shop === 'hairdresser' || shop === 'beauty' || shop === 'cosmetics' || shop === 'massage') return 'Beauty'
   if (tags.healthcare || amenity === 'clinic' || amenity === 'doctors' || amenity === 'dentist' || amenity === 'veterinary') return 'Medical'
+  if (tags.tourism === 'hotel' || tags.tourism === 'motel' || tags.tourism === 'hostel' || tags.tourism === 'guest_house') return 'Hotels'
+  if (amenity === 'cinema' || amenity === 'theatre' || amenity === 'nightclub' || tags.leisure === 'bowling_alley' || tags.leisure === 'amusement_arcade') return 'Entertainment'
   if (shop === 'pet' || shop === 'books' || shop === 'sports' || shop === 'toys' || shop === 'craft' || shop === 'furniture' || shop === 'beds') return 'Specialty retail'
   if (shop) return 'Other retail'
-  if (tags.office || amenity) return 'Services'
+  // Offices (a consultancy, a bank's back office, a co-working floor) are
+  // employers, not storefronts a shopper walks into.
+  if (tags.office && !amenity) return 'Offices'
+  if (amenity) return 'Services'
   return 'Other'
 }
 

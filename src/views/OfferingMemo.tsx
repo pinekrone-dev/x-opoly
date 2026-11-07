@@ -15,8 +15,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api'
 import type { Demographics, Landmark, NearbyBusiness } from '../types'
 import { panelRows, type PanelGroup } from '../components/ParcelPanel'
-import { omPdf, renderOm, type OmData, type OmRow } from '../lib/omPages'
+import { omPdf, renderOm, type OmData, type OmMaps, type OmRow } from '../lib/omPages'
+import { omPptx } from '../lib/omPptx'
 import { fullAddress, zipPlaces } from '../lib/address'
+import { numberAmenities } from '../lib/amenityGroups'
 
 interface Handoff {
   market: string
@@ -35,12 +37,6 @@ interface Broker {
   company: string
 }
 
-const SECTOR_ORDER = [
-  'Department & big box', 'Grocery & club', 'Discount & dollar', 'Home improvement', 'Pharmacy', 'Quick service', 'Coffee',
-  'Restaurants', 'Apparel', 'Phones & electronics', 'Specialty retail', 'Beauty', 'Fitness', 'Banks', 'Convenience & fuel',
-  'Auto', 'Medical', 'Other retail', 'Services', 'Other',
-]
-
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US')
 
 function readHandoff(market: string, id: string): Handoff | null {
@@ -58,26 +54,6 @@ function readBroker(): Partial<Broker> {
   } catch {
     return {}
   }
-}
-
-/** The chains to number: one per brand (the nearest), within a mile, grouped by kind. */
-export function numberAmenities(results: NearbyBusiness[], limit = 48) {
-  const nearest = new Map<string, NearbyBusiness>()
-  for (const r of results) {
-    if (r.miles > 1.05) continue
-    const key = (r.brand || r.name).toLowerCase()
-    const held = nearest.get(key)
-    if (!held || r.miles < held.miles) nearest.set(key, r)
-  }
-  const rank = (s?: string) => {
-    const i = SECTOR_ORDER.indexOf(s ?? 'Other')
-    return i < 0 ? SECTOR_ORDER.length : i
-  }
-  return [...nearest.values()]
-    .sort((a, b) => a.miles - b.miles)
-    .slice(0, limit)
-    .sort((a, b) => rank(a.sector) - rank(b.sector) || a.miles - b.miles)
-    .map((r, i) => ({ ...r, n: i + 1 }))
 }
 
 /** The cover's highlights from the record and the card's rows. */
@@ -103,12 +79,14 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
   const [demographics, setDemographics] = useState<Demographics | null>(null)
   const [chains, setChains] = useState<NearbyBusiness[] | null>(null)
   const [chainsNote, setChainsNote] = useState<string | null>(null)
+  const [chainsTry, setChainsTry] = useState(0)
   const [landmarks, setLandmarks] = useState<Landmark[] | null>(null)
   const [headline, setHeadline] = useState('')
   const [price, setPrice] = useState('Contact broker')
   const [description, setDescription] = useState<string | null>(null)
   const [broker, setBroker] = useState<Broker>(() => ({ name: '', email: '', phone: '', company: '', ...readBroker() }))
   const [pages, setPages] = useState<HTMLCanvasElement[]>([])
+  const [maps, setMaps] = useState<OmMaps | null>(null)
   const [drawing, setDrawing] = useState(false)
   const [busy, setBusy] = useState(false)
 
@@ -156,6 +134,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     if (!center) return
     let cancelled = false
     api.demographics(center.lat, center.lng).then((d) => !cancelled && setDemographics(d)).catch(() => undefined)
+    setChainsNote(null)
     api.nearby({ lat: center.lat, lng: center.lng, category: 'chains', radius: 1, logos: true })
       .then((r) => !cancelled && setChains(r.results))
       .catch((error) => {
@@ -169,7 +148,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     return () => {
       cancelled = true
     }
-  }, [center?.lat, center?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [center?.lat, center?.lng, chainsTry]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // The town comes from the ZIP table, which loads on its own.
   const [fullLine, setFullLine] = useState<string | null>(null)
@@ -222,6 +201,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
       broker,
       record: handoff.rows,
       amenities,
+      amenitiesFailed: Boolean(chainsNote),
       landmarks: landmarks ?? [],
       demographics,
       sources: [
@@ -232,7 +212,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
         'Maps: Esri, Maxar, Earthstar Geographics and the GIS user community.',
       ],
     }
-  }, [handoff, center, headline, price, description, draft, street, cityLine, broker, amenities, landmarks, demographics])
+  }, [handoff, center, headline, price, description, draft, street, cityLine, broker, amenities, chainsNote, landmarks, demographics])
 
   // Redrawn a moment after the last edit, not on every keystroke.
   const ready = Boolean(data && chains !== null && landmarks !== null)
@@ -243,7 +223,10 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     timer.current = window.setTimeout(() => {
       setDrawing(true)
       renderOm(data)
-        .then(setPages)
+        .then((made) => {
+          setPages(made.pages)
+          setMaps(made.maps)
+        })
         .finally(() => setDrawing(false))
     }, 500)
     return () => window.clearTimeout(timer.current)
@@ -257,7 +240,18 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     }
   }, [broker])
 
-  const filename = `${street || 'Offering memorandum'} — OM`.replace(/[\\/:*?"<>|]/g, '')
+  // Plain ASCII separators: Chrome drops a download name with an em dash in
+  // it and saves the file as "download".
+  const filename = `${street || 'Offering memorandum'} - OM`.replace(/[\\/:*?"<>|]/g, '').replace(/[^\x20-\x7e]/g, '-')
+  const downloadPptx = async () => {
+    if (!data || !maps) return
+    setBusy(true)
+    try {
+      await omPptx(data, maps, `${filename}.pptx`)
+    } finally {
+      setBusy(false)
+    }
+  }
   const downloadPdf = async () => {
     setBusy(true)
     try {
@@ -269,7 +263,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
   const downloadPng = (i: number) => {
     const a = document.createElement('a')
     a.href = pages[i].toDataURL('image/png')
-    a.download = `${filename} — page ${i + 1}.png`
+    a.download = `${filename} - page ${i + 1}.png`
     a.click()
   }
 
@@ -287,8 +281,11 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
             {!ready ? 'Gathering the record, retailers, landmarks and demographics…' : drawing ? 'Drawing the pages…' : `${pages.length} pages`}
           </p>
         </div>
-        <button type="button" className="btn-primary text-xs" disabled={!pages.length || busy || drawing} onClick={() => void downloadPdf()}>
-          {busy ? 'Making the PDF…' : 'Download PDF'}
+        <button type="button" className="btn-ghost text-xs" disabled={!pages.length || busy || drawing} onClick={() => void downloadPdf()}>
+          PDF
+        </button>
+        <button type="button" className="btn-primary text-xs" disabled={!maps || busy || drawing} onClick={() => void downloadPptx()}>
+          {busy ? 'Building…' : 'Download PowerPoint'}
         </button>
       </header>
 
@@ -317,7 +314,21 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
               <input key={key} className={field} placeholder={key[0].toUpperCase() + key.slice(1)} value={broker[key]} onChange={(e) => setBroker({ ...broker, [key]: e.target.value })} />
             ))}
           </fieldset>
-          {chainsNote && <p className="text-[11px] text-amber-700">Retailers: {chainsNote}</p>}
+          {chainsNote && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-[11px] text-amber-800">
+              The store directory did not answer ({chainsNote}), so page 3 has no retailers yet.{' '}
+              <button
+                type="button"
+                className="font-semibold underline"
+                onClick={() => {
+                  setChains(null)
+                  setChainsTry((n) => n + 1)
+                }}
+              >
+                Try again
+              </button>
+            </div>
+          )}
           <p className="text-[11px] leading-snug text-faint">
             Everything else is filled in from the county record, OpenStreetMap, Wikidata and the Census, with the sources on the last page. Check it before it goes out.
           </p>
