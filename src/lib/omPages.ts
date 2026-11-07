@@ -14,6 +14,7 @@
 import type { Demographics, Landmark } from '../types'
 import { staticMap, type StaticMap } from './staticMap'
 import { amenityGroups, placeMarkers, tenantMix, type NumberedAmenity } from './amenityGroups'
+import { drawLayerKey, drawLayers, type DocLayer } from './mapLayers'
 
 /** Letter, landscape, in points. */
 export const PAGE = { width: 792, height: 612 }
@@ -47,6 +48,8 @@ export interface OmData {
   record: { group: string; rows: OmRow[] }[]
   /** Chains near the site, already numbered in the order they print. */
   amenities: NumberedAmenity[]
+  /** The market's layers to draw on every map (zoning, flood zones...). */
+  layers?: DocLayer[]
   /** The store directory did not answer: say so, never "no stores". */
   amenitiesFailed?: boolean
   landmarks: Landmark[]
@@ -264,29 +267,32 @@ export interface OmMaps {
   amenity: MapPicture
 }
 
-function surface(map: StaticMap) {
+/** The basemap with the chosen layers on it, ready for pins and labels. */
+async function surface(map: StaticMap, layers: DocLayer[] = []) {
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(map.width * SCALE)
   canvas.height = Math.round(map.height * SCALE)
   const ctx = canvas.getContext('2d') as Ctx
   ctx.scale(SCALE, SCALE)
   mapImage(ctx, map, 0, 0)
+  await drawLayers(ctx, map, layers)
   return { canvas, ctx }
 }
 
 async function coverMap(data: OmData): Promise<MapPicture> {
   // The aerial, close enough to read the lot.
   const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 320, width: 500, height: 330, basemap: 'imagery', labels: true })
-  const { canvas, ctx } = surface(map)
+  const { canvas, ctx } = await surface(map, data.layers)
   const [px, py] = map.project(data.lat, data.lng)
   pin(ctx, px, py)
+  drawLayerKey(ctx, map, data.layers ?? [])
   return { canvas, width: map.width, height: map.height }
 }
 
 async function locationMap(data: OmData): Promise<MapPicture & { shown: Landmark[] }> {
   // Tall enough for the two-mile ring with a little room, as wide as the page.
   const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 2.3 * 2 * MILE * (744 / 444), width: 744, height: 444, basemap: 'imagery', labels: false })
-  const { canvas, ctx } = surface(map)
+  const { canvas, ctx } = await surface(map, data.layers)
   const [cx, cy] = map.project(data.lat, data.lng)
   ring(ctx, map, 0, 0, 1, cx, cy)
   ring(ctx, map, 0, 0, 2, cx, cy)
@@ -312,6 +318,7 @@ async function locationMap(data: OmData): Promise<MapPicture & { shown: Landmark
     if (shown.length >= 14) break
   }
   pin(ctx, cx, cy, 'Subject Property')
+  drawLayerKey(ctx, map, data.layers ?? [])
   return { canvas, width: map.width, height: map.height, shown }
 }
 
@@ -321,7 +328,7 @@ async function amenityMap(data: OmData): Promise<MapPicture> {
   // Close in where the stores are close: a downtown block, not a mile of it.
   const far = Math.max(0.3, ...list.map((a) => a.miles)) * 1.2
   const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: far * 2 * MILE, width: 400, height: 500, basemap: 'light', labels: true })
-  const { canvas, ctx } = surface(map)
+  const { canvas, ctx } = await surface(map, data.layers)
   ctx.strokeStyle = RULE
   ctx.strokeRect(0, 0, map.width, map.height)
 
@@ -354,6 +361,7 @@ async function amenityMap(data: OmData): Promise<MapPicture> {
   })
   pin(ctx, cx, cy)
   spots.forEach((spot, i) => marker(ctx, label(groups[i]), spot.x, spot.y, wants[i].w))
+  drawLayerKey(ctx, map, data.layers ?? [])
   return { canvas, width: map.width, height: map.height }
 }
 

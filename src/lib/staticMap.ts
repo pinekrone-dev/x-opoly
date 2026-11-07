@@ -2,16 +2,17 @@
  * A map as a picture, for documents: an offering memorandum's aerial, its
  * location map, its amenity map.
  *
- * The live map is WebGL and lives in one place on the page; a document needs
- * several fixed pictures it can put in a PDF. So the basemap is asked of
- * Esri's export service for an exact extent (the same imagery and grey
- * canvas the map's basemap switcher offers), drawn into a canvas, and handed
- * back with the projection, so pins, rings and labels can be drawn on top in
- * the right places. Esri answers cross-origin, so the canvas stays readable
- * and can go into a PDF.
+ * Built from the same Esri tiles the live map's basemap switcher loads,
+ * stitched onto a canvas for an exact extent and handed back with the
+ * projection, so pins, rings, labels and the market's layers can be drawn
+ * on top in the right places. Tiles are cached and always there; Esri's
+ * export service, used before, refused high-resolution requests over small
+ * areas ("Error: bytes") and left covers blank. Esri answers cross-origin,
+ * so the canvas stays readable and can go into a PDF or a deck.
  */
 
 const R = 6378137
+const HALF = Math.PI * R
 const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services'
 
 /** Web Mercator metres for a point. */
@@ -21,11 +22,15 @@ export function mercator(lat: number, lng: number): [number, number] {
 
 export type Basemap = 'imagery' | 'light'
 
-const LAYERS: Record<Basemap, { base: string; labels: string; format: 'jpg' | 'png' }> = {
-  // Aerial photography, with the roads and place names over it.
-  imagery: { base: 'World_Imagery', labels: 'Reference/World_Transportation', format: 'jpg' },
-  // A quiet grey canvas that pins read well on, with its own street names.
-  light: { base: 'Canvas/World_Light_Gray_Base', labels: 'Canvas/World_Light_Gray_Reference', format: 'jpg' },
+/*
+ * Each basemap's tile layers and how deep they go. The grey canvas has
+ * nothing past zoom 16 (deeper tiles are a "no data" placeholder), so the
+ * light map is the street map, washed to grey here: as quiet, and sharp
+ * on a downtown block.
+ */
+const LAYERS: Record<Basemap, { base: string; baseMax: number; labels: string | null; labelsMax: number; wash: boolean }> = {
+  imagery: { base: 'World_Imagery', baseMax: 19, labels: 'Reference/World_Transportation', labelsMax: 19, wash: false },
+  light: { base: 'World_Street_Map', baseMax: 19, labels: null, labelsMax: 0, wash: true },
 }
 
 export interface StaticMap {
@@ -34,8 +39,14 @@ export interface StaticMap {
   height: number
   /** Where a point falls, in the same units, from the map's top left. */
   project: (lat: number, lng: number) => [number, number]
+  /** The same, from Web Mercator metres. */
+  projectMercator: (mx: number, my: number) => [number, number]
   /** How many drawing units a distance on the ground spans here. */
   unitsForMeters: (meters: number) => number
+  /** The extent in Web Mercator metres: west, south, east, north. */
+  bbox: [number, number, number, number]
+  /** Mercator metres per drawing unit, for picking a tile zoom. */
+  metersPerUnit: number
   /** The basemap at the requested scale, or null when it could not be fetched. */
   image: HTMLCanvasElement | null
 }
@@ -50,13 +61,76 @@ function load(url: string): Promise<HTMLImageElement> {
   })
 }
 
+/** Tiles of one Esri layer, stitched over the extent; true when any arrived. */
+async function stitch(
+  ctx: CanvasRenderingContext2D,
+  service: string,
+  maxZoom: number,
+  bbox: [number, number, number, number],
+  px: number,
+  py: number,
+): Promise<boolean> {
+  const [x0, y0, x1, y1] = bbox
+  // The zoom whose pixels are at least as fine as the canvas's, within reach.
+  const metersPerPixel = (x1 - x0) / px
+  let z = Math.min(maxZoom, Math.max(0, Math.ceil(Math.log2((2 * HALF) / 256 / metersPerPixel))))
+  const span = (zoom: number) => {
+    const world = 256 * 2 ** zoom
+    const left = ((x0 + HALF) / (2 * HALF)) * world
+    const right = ((x1 + HALF) / (2 * HALF)) * world
+    const top = ((HALF - y1) / (2 * HALF)) * world
+    const bottom = ((HALF - y0) / (2 * HALF)) * world
+    return { left, right, top, bottom }
+  }
+  // Never more than a hundred tiles for one picture.
+  while (z > 0) {
+    const s = span(z)
+    const count = (Math.floor(s.right / 256) - Math.floor(s.left / 256) + 1) * (Math.floor(s.bottom / 256) - Math.floor(s.top / 256) + 1)
+    if (count <= 100) break
+    z -= 1
+  }
+  const s = span(z)
+  const k = px / (s.right - s.left)
+  const jobs: Promise<boolean>[] = []
+  for (let tx = Math.floor(s.left / 256); tx <= Math.floor((s.right - 1e-9) / 256); tx += 1) {
+    for (let ty = Math.floor(s.top / 256); ty <= Math.floor((s.bottom - 1e-9) / 256); ty += 1) {
+      const url = `${ESRI}/${service}/MapServer/tile/${z}/${ty}/${tx}`
+      jobs.push(
+        load(url).then(
+          (img) => {
+            // A hair of overlap, so seams between tiles do not show.
+            ctx.drawImage(img, (tx * 256 - s.left) * k, (ty * 256 - s.top) * k, 256 * k + 0.6, 256 * k + 0.6)
+            return true
+          },
+          () => false,
+        ),
+      )
+    }
+  }
+  return (await Promise.all(jobs)).some(Boolean)
+}
+
+/** Greys and lightens a street map in place, so pins read over it. */
+function wash(ctx: CanvasRenderingContext2D, px: number, py: number) {
+  const pixels = ctx.getImageData(0, 0, px, py)
+  const d = pixels.data
+  for (let i = 0; i < d.length; i += 4) {
+    const grey = 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]
+    const v = 255 - (255 - grey) * 0.62
+    d[i] = v
+    d[i + 1] = v
+    d[i + 2] = v + 3
+  }
+  ctx.putImageData(pixels, 0, 0)
+}
+
 // The same picture asked twice (a re-render after editing a headline) is
 // fetched once.
 const made = new Map<string, Promise<StaticMap>>()
 
 /**
  * A basemap of `metersAcross` ground metres across, centred on a point, at
- * `width` × `height` drawing units, fetched at `scale` pixels per unit.
+ * `width` × `height` drawing units, drawn at `scale` pixels per unit.
  */
 export function staticMap(options: Parameters<typeof drawStaticMap>[0]): Promise<StaticMap> {
   const key = JSON.stringify(options)
@@ -95,53 +169,33 @@ async function drawStaticMap({
   const spanX = metersAcross * stretch
   const spanY = (spanX * height) / width
   const [cx, cy] = mercator(lat, lng)
-  const [x0, y0, x1, y1] = [cx - spanX / 2, cy - spanY / 2, cx + spanX / 2, cy + spanY / 2]
+  const bbox: [number, number, number, number] = [cx - spanX / 2, cy - spanY / 2, cx + spanX / 2, cy + spanY / 2]
   const px = Math.round(width * scale)
   const py = Math.round(height * scale)
   const unitsPerMeter = width / spanX
 
-  const project = (pLat: number, pLng: number): [number, number] => {
-    const [mx, my] = mercator(pLat, pLng)
-    return [(mx - x0) * unitsPerMeter, (y1 - my) * unitsPerMeter]
-  }
+  const projectMercator = (mx: number, my: number): [number, number] => [(mx - bbox[0]) * unitsPerMeter, (bbox[3] - my) * unitsPerMeter]
+  const project = (pLat: number, pLng: number): [number, number] => projectMercator(...mercator(pLat, pLng))
   const unitsForMeters = (meters: number) => meters * stretch * unitsPerMeter
 
   const layer = LAYERS[basemap]
-  const exportUrl = (service: string, format: string, transparent: boolean) =>
-    `${ESRI}/${service}/MapServer/export?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=${px},${py}&format=${format}${transparent ? '&transparent=true' : ''}&f=image`
-
-  // The grey canvas has no detail past its last cached level, and asked for
-  // more pixels than that over a small area it answers an error; so each
-  // layer is asked again at a lower resolution, drawn up to size.
-  const fetchLayer = async (service: string, format: string, transparent: boolean) => {
-    for (const factor of [1, 0.66, 0.5, 0.33]) {
-      const w = Math.round(px * factor)
-      const h = Math.round(py * factor)
+  let image: HTMLCanvasElement | null = document.createElement('canvas')
+  image.width = px
+  image.height = py
+  const ctx = image.getContext('2d', { willReadFrequently: layer.wash }) as CanvasRenderingContext2D
+  ctx.fillStyle = '#e5e7eb'
+  ctx.fillRect(0, 0, px, py)
+  const got = await stitch(ctx, layer.base, layer.baseMax, bbox, px, py)
+  if (!got) image = null
+  else {
+    if (layer.wash) {
       try {
-        return await load(exportUrl(service, format, transparent).replace(`size=${px},${py}`, `size=${w},${h}`))
+        wash(ctx, px, py)
       } catch {
-        // Try smaller.
+        // A canvas the browser will not let us read stays in colour.
       }
     }
-    throw new Error(`No picture from ${service}`)
+    if (labels && layer.labels) await stitch(ctx, layer.labels, layer.labelsMax, bbox, px, py)
   }
-
-  let image: HTMLCanvasElement | null = null
-  try {
-    const [base, overlay] = await Promise.all([
-      fetchLayer(layer.base, layer.format, false),
-      labels ? fetchLayer(layer.labels, 'png32', true).catch(() => null) : Promise.resolve(null),
-    ])
-    image = document.createElement('canvas')
-    image.width = px
-    image.height = py
-    const ctx = image.getContext('2d')
-    if (ctx) {
-      ctx.drawImage(base, 0, 0, px, py)
-      if (overlay) ctx.drawImage(overlay, 0, 0, px, py)
-    }
-  } catch {
-    image = null
-  }
-  return { width, height, project, unitsForMeters, image }
+  return { width, height, project, projectMercator, unitsForMeters, bbox, metersPerUnit: spanX / width, image }
 }

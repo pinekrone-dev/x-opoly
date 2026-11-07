@@ -19,6 +19,7 @@ import { omPdf, renderOm, type OmData, type OmMaps, type OmRow } from '../lib/om
 import { omPptx } from '../lib/omPptx'
 import { fullAddress, zipPlaces } from '../lib/address'
 import { numberAmenities } from '../lib/amenityGroups'
+import type { DocLayer } from '../lib/mapLayers'
 
 interface Handoff {
   market: string
@@ -36,6 +37,8 @@ interface Broker {
   phone: string
   company: string
 }
+
+const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
 
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US')
 
@@ -85,6 +88,35 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
   const [price, setPrice] = useState('Contact broker')
   const [description, setDescription] = useState<string | null>(null)
   const [broker, setBroker] = useState<Broker>(() => ({ name: '', email: '', phone: '', company: '', ...readBroker() }))
+  // The market's layers that can go on the maps, and the ones switched on.
+  const [available, setAvailable] = useState<DocLayer[]>([])
+  const [layerIds, setLayerIds] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${CATALOG}/${encodeURIComponent(market)}/layers.json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((body: { layers?: { id: string; label: string; kind: string; color?: string; tiles?: string; sourceLayer?: string }[] } | null) => {
+        if (cancelled || !body?.layers) return
+        setAvailable(
+          body.layers
+            .filter((l) => l.tiles && (l.kind === 'polygon' || l.kind === 'line' || l.kind === 'point'))
+            .map((l) => ({
+              id: l.id,
+              label: l.label,
+              kind: l.kind as DocLayer['kind'],
+              color: l.color || '#7048e8',
+              url: /^https:/.test(String(l.tiles)) ? String(l.tiles) : `${CATALOG}/${encodeURIComponent(market)}/${l.tiles}`,
+              sourceLayer: l.sourceLayer ?? l.id,
+            })),
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [market])
+  const layers = useMemo(() => available.filter((l) => layerIds.includes(l.id)), [available, layerIds])
+
   const [pages, setPages] = useState<HTMLCanvasElement[]>([])
   const [maps, setMaps] = useState<OmMaps | null>(null)
   const [drawing, setDrawing] = useState(false)
@@ -96,7 +128,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
     let cancelled = false
     Promise.all([
       api.parcels.one(market, id),
-      fetch(`/catalog/${encodeURIComponent(market)}/meta.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      fetch(`${CATALOG}/${encodeURIComponent(market)}/meta.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ])
       .then(([{ parcel }, meta]) => {
         if (cancelled) return
@@ -202,6 +234,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
       record: handoff.rows,
       amenities,
       amenitiesFailed: Boolean(chainsNote),
+      layers,
       landmarks: landmarks ?? [],
       demographics,
       sources: [
@@ -212,7 +245,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
         'Maps: Esri, Maxar, Earthstar Geographics and the GIS user community.',
       ],
     }
-  }, [handoff, center, headline, price, description, draft, street, cityLine, broker, amenities, chainsNote, landmarks, demographics])
+  }, [handoff, center, headline, price, description, draft, street, cityLine, broker, amenities, chainsNote, layers, landmarks, demographics])
 
   // Redrawn a moment after the last edit, not on every keystroke.
   const ready = Boolean(data && chains !== null && landmarks !== null)
@@ -308,6 +341,23 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
               </button>
             )}
           </label>
+          {available.length > 0 && (
+            <fieldset className="space-y-1 border-t border-line pt-3">
+              <legend className="text-xs font-semibold text-ink">Map layers</legend>
+              <p className="text-[11px] text-faint">Drawn on every map in the OM, with a key.</p>
+              {available.map((l) => (
+                <label key={l.id} className="flex items-center gap-2 text-xs text-body">
+                  <input
+                    type="checkbox"
+                    checked={layerIds.includes(l.id)}
+                    onChange={(e) => setLayerIds((ids) => (e.target.checked ? [...ids, l.id] : ids.filter((id) => id !== l.id)))}
+                  />
+                  <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: l.color }} />
+                  {l.label}
+                </label>
+              ))}
+            </fieldset>
+          )}
           <fieldset className="space-y-2 border-t border-line pt-3">
             <legend className="text-xs font-semibold text-ink">Prepared by</legend>
             {(['name', 'company', 'phone', 'email'] as const).map((key) => (
