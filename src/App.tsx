@@ -389,6 +389,7 @@ export default function App() {
         smsConfigured={session.smsConfigured}
         billing={billing}
         tab={route.tab ?? 'deals'}
+        listId={route.tab === 'lists' ? route.id : undefined}
         onAccountChange={(user) => setSession({ ...session, user })}
         onSignedOut={() => {
           setSession({ ...session, user: null, setupRequired: false })

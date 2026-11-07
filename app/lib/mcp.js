@@ -17,7 +17,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files and cannot be searched here yet; the tool says so.`
 
@@ -232,6 +232,37 @@ export const TOOLS = [
       required: ['market', 'name'],
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'my_lists',
+    title: 'My lists',
+    description: "The team's lists of places (prospect lists, client shortlists), each with its client, tags and size; filter by client or tag. Give a list's id to read the places on it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client: { type: 'string', description: 'Only lists for this client (any part of the name).' },
+        tag: { type: 'string', description: 'Only lists with this tag.' },
+        id: { type: 'string', description: 'A list id: returns its places.' },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'add_to_list',
+    title: 'Add parcels to a list',
+    description: 'Files parcels on a named list for a client, making the list (with its client and tags) if it does not exist, and saving each parcel as a CRM place if it is not one yet. Needs the CRM permission granted when the connector was approved.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        list: { type: 'string', maxLength: 120, description: 'The list name, e.g. "Acme industrial targets". An existing list of that name is used.' },
+        client: { type: 'string', maxLength: 120, description: 'Whose list it is (used when the list is made).' },
+        tags: { type: 'array', items: { type: 'string' }, maxItems: 12, description: 'Tags for a new list, e.g. ["Industrial", "Q3"].' },
+        market: MARKET,
+        ids: { type: 'array', items: { type: 'string' }, maxItems: 50, description: 'Parcel ids from search_parcels in that market.' },
+      },
+      required: ['list', 'market', 'ids'],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
   },
   {
     name: 'add_to_crm',
@@ -722,6 +753,107 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
         nearbySource: input.nearby ? foundSource : undefined,
         landmarksPinned,
         link: `${origin}/gis/${encodeURIComponent(input.market)}?view=${encodeURIComponent(id)}`,
+      })
+    }
+
+    case 'my_lists': {
+      if (input.id) {
+        const answer = await ask(`/api/lists/${encodeURIComponent(String(input.id))}`)
+        if (answer.status !== 200) return failure(refusal(answer))
+        const l = answer.body.list
+        return result({
+          id: l.id, name: l.name, client: l.client, tags: l.tags, count: l.count,
+          places: (l.places || []).map((p) => ({ name: p.name, address: p.address, acres: p.acreage, market: p.market, parcelId: p.parcelId, lat: p.lat, lng: p.lng })),
+          link: `${origin}/lists/${encodeURIComponent(l.id)}`,
+        })
+      }
+      const answer = await ask('/api/lists')
+      if (answer.status !== 200) return failure(refusal(answer))
+      const client = String(input.client || '').toLowerCase()
+      const tag = String(input.tag || '').toLowerCase()
+      const lists = (answer.body?.lists || []).filter(
+        (l) => (!client || String(l.client || '').toLowerCase().includes(client)) && (!tag || l.tags.some((t) => t.toLowerCase() === tag)),
+      )
+      return result({ lists: lists.map((l) => ({ id: l.id, name: l.name, client: l.client, tags: l.tags, places: l.count, link: `${origin}/lists/${l.id}` })) })
+    }
+
+    case 'add_to_list': {
+      if (!scope.includes('crm')) {
+        return failure('This connection can read but not change the CRM. Reconnect the Land Quotient connector and tick "Add to my CRM" to allow it.')
+      }
+      const name = String(input.list || '').trim()
+      const ids = (Array.isArray(input.ids) ? input.ids : []).map(String).slice(0, 50)
+      if (!name || !input.market || !ids.length) return failure('list, market and ids are required.')
+      // The list: one of that name, or a new one with its client and tags.
+      const all = await ask('/api/lists')
+      if (all.status !== 200) return failure(refusal(all))
+      let list = (all.body?.lists || []).find((l) => l.name.toLowerCase() === name.toLowerCase())
+      let made = false
+      if (!list) {
+        const created = await ask('/api/lists', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ name, client: input.client ?? null, tags: Array.isArray(input.tags) ? input.tags : [] }),
+        })
+        if (created.status !== 201) return failure(refusal(created))
+        list = created.body.list
+        made = true
+      }
+      // Each parcel as a CRM place: the one already kept, or a new one.
+      const placeIds = []
+      const skipped = []
+      for (const id of ids) {
+        const q = `market=${encodeURIComponent(input.market)}&parcel=${encodeURIComponent(id)}`
+        const known = await ask(`/api/crm/parcel?${q}`)
+        if (known.status === 200 && known.body?.place?.id) {
+          placeIds.push(known.body.place.id)
+          continue
+        }
+        const found = await ask(`/api/gis/parcel?market=${encodeURIComponent(input.market)}&id=${encodeURIComponent(id)}`)
+        if (found.status !== 200) {
+          skipped.push(id)
+          continue
+        }
+        const p = found.body.parcel || {}
+        const bb = Array.isArray(p.bb) && p.bb.length === 4 ? p.bb.map(Number) : null
+        const saved = await ask('/api/crm/places', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            name: String(p.ad || `Parcel ${p.gid ?? id}`),
+            address: fullAddress(p, input.market).full || p.ad || null,
+            acreage: p.ac ?? null,
+            market: input.market,
+            parcelId: String(id),
+            lat: bb ? (bb[1] + bb[3]) / 2 : null,
+            lng: bb ? (bb[0] + bb[2]) / 2 : null,
+            notes: p.ow ? `Owner of record: ${p.ow}` : null,
+          }),
+        })
+        if (saved.status !== 201 && saved.status !== 200) {
+          skipped.push(id)
+          continue
+        }
+        placeIds.push(saved.body?.record?.id)
+      }
+      let added = 0
+      if (placeIds.length) {
+        const answer = await ask(`/api/lists/${encodeURIComponent(list.id)}/places`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ placeIds: placeIds.filter(Boolean) }),
+        })
+        if (answer.status !== 200) return failure(refusal(answer))
+        added = answer.body?.added ?? 0
+      }
+      return result({
+        list: list.name,
+        made: made || undefined,
+        client: list.client ?? undefined,
+        added,
+        alreadyOn: placeIds.length - added || undefined,
+        skipped: skipped.length ? skipped : undefined,
+        link: `${origin}/lists/${encodeURIComponent(list.id)}`,
       })
     }
 

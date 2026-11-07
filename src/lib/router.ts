@@ -74,6 +74,10 @@ export function matchRoute(path: string): Route {
     return { view: 'record', recordType: types[record[1] as keyof typeof types], id: record[2] }
   }
 
+  // The team's lists of places, and one list: /lists, /lists/:id.
+  const lists = path.match(/^\/lists(?:\/([\w-]+))?\/?$/)
+  if (lists) return { view: 'home', tab: 'lists', id: lists[1] }
+
   // The object lists live on the home page, one tab each.
   const list = path.match(/^\/(deals|people|companies|places|surveys)\/?$/)
   if (list) return { view: 'home', tab: list[1] }

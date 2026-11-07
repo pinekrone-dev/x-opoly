@@ -205,6 +205,7 @@ import {
 } from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { withLogos } from './lib/logos.js'
+import { addToList, createList, deleteList, forgetPlace, getList, listLists, removeFromList, updateList } from './lib/lists.js'
 import { LANDMARK_KINDS, LandmarksUnavailable, nearbyLandmarks } from './lib/landmarks.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
@@ -675,6 +676,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const path = new URL(c.req.url).pathname
     if (c.req.method === 'POST' && path === '/api/gis/views' && granted.scope.includes('maps')) return next()
     if (c.req.method === 'POST' && path === '/api/crm/places' && granted.scope.includes('crm')) return next()
+    // Lists are part of the CRM: made and added to with the same permission.
+    if (c.req.method === 'POST' && /^\/api\/lists(\/[\w-]+\/places)?$/.test(path) && granted.scope.includes('crm')) return next()
     return c.json({ error: 'This connection may not make that change.', code: 'connector_scope' }, 403)
   })
 
@@ -1872,9 +1875,72 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
       const removed = await deleteRecord(db, recordType, user.teamId, c.req.param('id'))
       if (!removed) return notFound(c, 'That record does not exist.')
+      // A building no longer in the CRM is no longer on anyone's list.
+      if (recordType === 'place') await forgetPlace(db, user.teamId, c.req.param('id'))
       return c.body(null, 204)
     })
   }
+
+  /*
+   * Lists: named sets of CRM places, filed by client and tags (lib/lists.js).
+   * ?place=<id> marks the lists that hold that place, for the parcel card.
+   */
+  app.get('/api/lists', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    return c.json({ lists: await listLists(db, user.teamId, { placeId: c.req.query('place') || null }) })
+  })
+
+  app.post('/api/lists', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const result = await createList(db, user.teamId, await c.req.json().catch(() => ({})), { userId: user.id })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ list: result.list }, 201)
+  })
+
+  app.get('/api/lists/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const list = await getList(db, user.teamId, c.req.param('id'))
+    if (!list) return notFound(c, 'That list does not exist.')
+    return c.json({ list: { ...list, places: list.places.map(camelRow) } })
+  })
+
+  app.patch('/api/lists/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const result = await updateList(db, user.teamId, c.req.param('id'), await c.req.json().catch(() => ({})))
+    if (result.noList) return notFound(c, 'That list does not exist.')
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ list: result.list })
+  })
+
+  app.delete('/api/lists/:id', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    if (!(await deleteList(db, user.teamId, c.req.param('id')))) return notFound(c, 'That list does not exist.')
+    return c.body(null, 204)
+  })
+
+  app.post('/api/lists/:id/places', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await addToList(db, user.teamId, c.req.param('id'), body?.placeIds)
+    // `missing` is the places not found; `noList` is the list itself.
+    if (result.noList) return notFound(c, 'That list does not exist.')
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json(result)
+  })
+
+  app.delete('/api/lists/:id/places/:placeId', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const result = await removeFromList(db, user.teamId, c.req.param('id'), c.req.param('placeId'))
+    if (result.noList) return notFound(c, 'That list does not exist.')
+    return c.body(null, 204)
+  })
 
   app.post('/api/crm/deals/:id/parties', async (c) => {
     const user = c.get('user')

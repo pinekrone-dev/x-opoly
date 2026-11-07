@@ -382,6 +382,26 @@ export const SCHEMA_STATEMENTS = [
   // Saved views are always asked for one way — "what has this team saved for
   // the market I am looking at" — so that is the index.
   'CREATE INDEX IF NOT EXISTS idx_map_views_team ON map_views(team_id, market)',
+  // Lists: named sets of CRM places, filed by client and tags (lists.js).
+  `CREATE TABLE IF NOT EXISTS lists (
+    id          TEXT PRIMARY KEY,
+    team_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    client      TEXT,
+    tags        TEXT,
+    created_by  TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS list_items (
+    list_id   TEXT NOT NULL,
+    team_id   TEXT NOT NULL,
+    place_id  TEXT NOT NULL,
+    added_at  TEXT NOT NULL,
+    PRIMARY KEY (list_id, place_id)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_lists_team ON lists(team_id)',
+  'CREATE INDEX IF NOT EXISTS idx_list_items_place ON list_items(team_id, place_id)',
   // Re-importing the same page is the normal case, so the dedupe lookup —
   // "has this team seen this listing before" — is the one that must be fast.
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_comps_team_key ON comps(team_id, source_key)',
