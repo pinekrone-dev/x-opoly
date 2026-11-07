@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
-import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
+import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
+import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -4005,14 +4006,24 @@ export default function Gis({
     }
   }
 
-  async function addToCrm() {
-    if (!parcel || !active || selected == null) return
-    setSaving(true)
-    try {
-      // The whole address, town and state included, and the property's ZIP,
-      // never the owner's (lib/address).
-      const place = fullAddress(parcel, active, await zipPlaces())
-      const { record } = await api.crm.create<Place>('places', {
+  /*
+   * The parcel's CRM place, made if it is not there yet. The check for an
+   * existing one is asked again here rather than trusted from the panel:
+   * the button shows at once, before that lookup answers, and a quick
+   * click must not make the same place twice.
+   */
+  async function ensurePlace(): Promise<Place | null> {
+    if (!parcel || !active || selected == null) return null
+    if (known?.place) return known.place
+    const found = await api.crm.parcel(active, String(selected)).catch(() => null)
+    if (found?.place) {
+      setKnown(found)
+      return found.place
+    }
+    // The whole address, town and state included, and the property's ZIP,
+    // never the owner's (lib/address).
+    const place = fullAddress(parcel, active, await zipPlaces())
+    const { record } = await api.crm.create<Place>('places', {
         name: String(parcel.ad || `Parcel ${parcel.gid ?? selected}`),
         address: place.full || parcel.ad || null,
         zip: place.zip || null,
@@ -4023,12 +4034,46 @@ export default function Gis({
         lng: centre?.lng ?? null,
         notes: parcel.ow ? `Owner of record: ${parcel.ow}` : null,
       })
-      setKnown({ place: record, deals: [] })
+    setKnown({ place: record, deals: [] })
+    return record
+  }
+
+  async function addToCrm() {
+    setSaving(true)
+    try {
+      await ensurePlace()
     } catch {
       setError('Could not save that parcel.')
     } finally {
       setSaving(false)
     }
+  }
+
+  /*
+   * An offering memorandum from this parcel, in a new tab. The card already
+   * holds the record, the county's labels and the full details, so they are
+   * handed over rather than fetched again: the memo prints exactly what the
+   * card says, in every market, including the ones served from files.
+   */
+  function openOm() {
+    if (!parcel || !active || selected == null) return
+    const detail = (details?.[String(selected)] as Record<string, unknown> | undefined) ?? null
+    const handoff = {
+      market: active,
+      marketName: meta?.market ?? null,
+      id: String(selected),
+      record: parcel,
+      address: fullAddress(parcel, active).full || String(parcel.ad || ''),
+      center: centre,
+      rows: panelRows(meta?.panel ?? [], parcel, detail, codes),
+      at: Date.now(),
+    }
+    try {
+      localStorage.setItem(`om:${active}:${selected}`, JSON.stringify(handoff))
+    } catch {
+      // A full or blocked store: the memo fetches the record itself instead.
+    }
+    window.open(`/om/${encodeURIComponent(active)}/${encodeURIComponent(String(selected))}`, '_blank', 'noopener')
   }
 
   /** The census figures for the tract this parcel sits in, when they are loaded. */
@@ -5361,28 +5406,49 @@ export default function Gis({
             setSelected(null)
             setFeaturePick(null)
           }}
-          action={
-            // In the header, where it is seen: the parcel into the CRM in one
-            // click, or straight to it when it is already there.
-            parcel && known ? (
-              known.place ? (
+          toolbar={
+            // Under the title, where it is seen, and there from the first
+            // moment: it used to wait on the CRM lookup and was simply absent
+            // until that answered. The three things a broker does next.
+            parcel ? (
+              <>
+                {known?.place ? (
+                  <button
+                    type="button"
+                    className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10"
+                    onClick={() => navigate(`/places/${known.place?.id}`)}
+                  >
+                    In CRM ✓
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
+                    disabled={saving}
+                    onClick={addToCrm}
+                  >
+                    {saving ? 'Saving…' : '+ Add to CRM'}
+                  </button>
+                )}
+                <SendPlaceToSurvey
+                  key={`${active}:${selected}`}
+                  placeIds={known?.place ? [known.place.id] : []}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return [place.id]
+                  }}
+                  label="+ Add to survey"
+                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
                 <button
                   type="button"
-                  className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10"
-                  onClick={() => navigate(`/places/${known.place?.id}`)}
+                  className="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
+                  onClick={openOm}
                 >
-                  In CRM ✓
+                  Turn into OM
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  className="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
-                  disabled={saving}
-                  onClick={addToCrm}
-                >
-                  {saving ? 'Saving…' : '+ Add to CRM'}
-                </button>
-              )
+              </>
             ) : null
           }
           extra={

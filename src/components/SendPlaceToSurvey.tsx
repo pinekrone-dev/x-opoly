@@ -17,11 +17,23 @@ import type { Survey } from '../types'
 export default function SendPlaceToSurvey({
   placeIds,
   onSent,
+  prepare,
+  label: labelOverride,
+  buttonClassName = 'btn-primary text-xs',
 }: {
   placeIds: string[]
   /** After a send lands, with how many arrived — the list clears its checks. */
   onSent?: (count: number) => void
+  /**
+   * Makes the places when there are none yet: a parcel on the map becomes a
+   * CRM place first, then goes to the survey, in one click.
+   */
+  prepare?: () => Promise<string[]>
+  label?: string
+  buttonClassName?: string
 }) {
+  const [prepared, setPrepared] = useState<string[] | null>(null)
+  const ids = placeIds.length ? placeIds : prepared ?? []
   const [open, setOpen] = useState(false)
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [surveyId, setSurveyId] = useState('')
@@ -40,11 +52,11 @@ export default function SendPlaceToSurvey({
   }, [open])
 
   const send = async () => {
-    if (!surveyId || placeIds.length === 0) return
+    if (!surveyId || ids.length === 0) return
     setBusy(true)
     setError(null)
     try {
-      const { properties, missing } = await api.crm.sendPlaces(surveyId, placeIds)
+      const { properties, missing } = await api.crm.sendPlaces(surveyId, ids)
       setSent({ surveyId, count: properties.length })
       if (missing.length) setError(`${missing.length} of them could not be found and did not go.`)
       onSent?.(properties.length)
@@ -55,18 +67,37 @@ export default function SendPlaceToSurvey({
     }
   }
 
-  const many = placeIds.length > 1
-  const label = many ? `Send ${placeIds.length} to survey` : 'Send to survey'
+  const many = ids.length > 1
+  const label = labelOverride ?? (many ? `Send ${ids.length} to survey` : 'Send to survey')
+
+  const toggle = async () => {
+    if (open) {
+      setOpen(false)
+      return
+    }
+    if (!placeIds.length && prepare && !prepared) {
+      setBusy(true)
+      setError(null)
+      try {
+        setPrepared(await prepare())
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : 'That could not be prepared.')
+      } finally {
+        setBusy(false)
+      }
+    }
+    setOpen(true)
+  }
 
   return (
     <div className="relative">
       <button
         type="button"
-        className="btn-primary text-xs"
-        disabled={placeIds.length === 0}
-        onClick={() => setOpen((current) => !current)}
+        className={buttonClassName}
+        disabled={(placeIds.length === 0 && !prepare) || (busy && !open)}
+        onClick={() => void toggle()}
       >
-        {label}
+        {busy && !open ? 'Preparing…' : label}
       </button>
 
       {open ? (
@@ -125,7 +156,7 @@ export default function SendPlaceToSurvey({
               {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
 
               <button type="button" className="btn-primary mt-3 w-full text-xs" disabled={busy} onClick={() => void send()}>
-                {busy ? 'Sending…' : many ? `Send ${placeIds.length}` : 'Send'}
+                {busy ? 'Sending…' : many ? `Send ${ids.length}` : 'Send'}
               </button>
             </>
           )}
