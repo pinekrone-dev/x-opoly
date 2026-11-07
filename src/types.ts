@@ -419,6 +419,39 @@ export interface NearbyBusiness {
   lng: number
   miles: number
   ring: number | null
+  /** Quick service, Grocery & club, Banks... (chains searches). */
+  sector?: string
+  logo?: string | null
+  logoSource?: 'brand' | 'favicon' | null
+  brandWikidata?: string | null
+}
+
+export interface Landmark {
+  kind: 'colleges' | 'hospitals' | 'stadiums' | 'airports' | 'malls' | 'attractions' | 'convention' | 'military' | 'headquarters'
+  name: string
+  miles: number
+  lat: number
+  lng: number
+  students?: number
+  capacity?: number
+  passengers?: number
+  beds?: number
+  employees?: number
+  iata?: string
+  teams?: string[]
+  industries?: string[]
+  /** Headquarters: 'exact', or 'city: Atlanta' where Wikidata names only the city. */
+  located?: string
+  website?: string
+  logo?: string
+  wikidata?: string
+}
+
+export interface LandmarksResult {
+  landmarks: Landmark[]
+  byKind: Record<string, number>
+  radiusMiles: number
+  source: string
 }
 
 export interface CompetitionResult {

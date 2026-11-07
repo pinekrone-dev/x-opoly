@@ -3,6 +3,7 @@ import ShareView from './views/ShareView'
 import SignIn from './views/SignIn'
 import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
+import OfferingMemo from './views/OfferingMemo'
 import Faq from './views/Faq'
 import Landing from './views/Landing'
 import Audience from './views/Audience'
@@ -311,6 +312,10 @@ export default function App() {
 
   if (route.view === 'book' && route.id) {
     return <TourBook id={route.id} />
+  }
+
+  if (route.view === 'om' && route.slug && route.id) {
+    return <OfferingMemo market={route.slug} id={route.id} />
   }
 
   if (route.view === 'workspace' && route.id) {

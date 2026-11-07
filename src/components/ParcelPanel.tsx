@@ -45,6 +45,32 @@ function pick(bag: Record<string, unknown>, key: string): Cell {
   return at !== null && typeof at === 'object' ? undefined : (at as Cell)
 }
 
+/**
+ * The record as the panel reads it, group by group, each row formatted:
+ * what an export (the offering memorandum) prints, so it says exactly what
+ * the card says.
+ */
+export function panelRows(
+  groups: PanelGroup[],
+  attributes: Record<string, unknown>,
+  details: Record<string, unknown> | null,
+  codes: Record<string, { d?: string }>,
+): { group: string; rows: { label: string; text: string }[] }[] {
+  const read = (key: string): Cell => {
+    const own = pick(attributes, key)
+    if (own !== null && own !== undefined) return own
+    return details ? pick(details, key) : undefined
+  }
+  return groups
+    .map((group) => ({
+      group: group.group,
+      rows: group.rows
+        .map((row) => ({ label: row.l, text: format(row, read(row.k), codes, String(read('sc') ?? '')) }))
+        .filter((row): row is { label: string; text: string } => row.text !== null),
+    }))
+    .filter((group) => group.rows.length > 0)
+}
+
 /** Formats one cell, or returns null when there is nothing worth a row. */
 function format(row: PanelRow, value: Cell, codes: Record<string, { d?: string }>, code?: string): string | null {
   if (row.f === 'code') {
@@ -91,9 +117,12 @@ export default function ParcelPanel({
   children,
   extra,
   action,
+  toolbar,
 }: {
   /** One button beside the title: the card's main thing to do, kept in view. */
   action?: React.ReactNode
+  /** A row of actions under the title (add to the CRM, to a survey, make an OM). */
+  toolbar?: React.ReactNode
   title: string
   subtitle: string
   groups: PanelGroup[]
@@ -145,6 +174,7 @@ export default function ParcelPanel({
           ×
         </button>
       </header>
+      {toolbar ? <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-4 py-2">{toolbar}</div> : null}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {children}

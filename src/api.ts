@@ -1,4 +1,4 @@
-import type { AskCircle, ParcelRecords, ZoningReport, BookStyle,
+import type { AskCircle, LandmarksResult, ParcelRecords, ZoningReport, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -483,7 +483,7 @@ export const api = {
   geocode: (query: string) => request<{ results: GeocodeResult[] }>(`/api/geocode?q=${encodeURIComponent(query)}`),
   placeCategories: () => request<{ categories: PlaceCategory[]; rings: number[] }>('/api/places/categories'),
 
-  nearby: (params: { lat: number; lng: number; category?: string; keyword?: string; radius: number }) => {
+  nearby: (params: { lat: number; lng: number; category?: string; keyword?: string; radius: number; logos?: boolean }) => {
     const query = new URLSearchParams({
       lat: String(params.lat),
       lng: String(params.lng),
@@ -491,7 +491,15 @@ export const api = {
     })
     if (params.category) query.set('category', params.category)
     if (params.keyword) query.set('keyword', params.keyword)
+    if (params.logos) query.set('logos', '1')
     return request<CompetitionResult>(`/api/places/nearby?${query.toString()}`)
+  },
+
+  /** Colleges, hospitals, stadiums, airports, malls, attractions, HQs near a point (Wikidata). */
+  landmarks: (params: { lat: number; lng: number; radius: number; kinds?: string[] }) => {
+    const query = new URLSearchParams({ lat: String(params.lat), lng: String(params.lng), radius: String(params.radius) })
+    if (params.kinds?.length) query.set('kinds', params.kinds.join(','))
+    return request<LandmarksResult>(`/api/places/landmarks?${query.toString()}`)
   },
 
   /** Pasted listing text → a filled-in, placed property. */

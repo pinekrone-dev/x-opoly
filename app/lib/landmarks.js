@@ -156,6 +156,9 @@ async function details(fetchImpl, ids) {
     ?item rdfs:label ?itemLabel . FILTER(LANG(?itemLabel) = "en")
     FILTER NOT EXISTS { ?item wdt:P576 [] }
     FILTER NOT EXISTS { ?item wdt:P3999 [] }
+    # Closed places: an end date, or decommissioned (Robert Mueller airport, 1999).
+    FILTER NOT EXISTS { ?item wdt:P582 [] }
+    FILTER NOT EXISTS { ?item wdt:P5817 wd:Q11639308 }
     OPTIONAL { ?item wdt:P2196 ?students }
     OPTIONAL { ?item wdt:P1083 ?cap }
     OPTIONAL { ?item wdt:P3872 ?pax }
