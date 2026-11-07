@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
+import { usePopover } from '../lib/popover'
 import { navigate } from '../lib/router'
 import type { Survey } from '../types'
 
@@ -35,6 +36,7 @@ export default function SendPlaceToSurvey({
   const [prepared, setPrepared] = useState<string[] | null>(null)
   const ids = placeIds.length ? placeIds : prepared ?? []
   const [open, setOpen] = useState(false)
+  const pop = usePopover(open, 288)
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [surveyId, setSurveyId] = useState('')
   const [busy, setBusy] = useState(false)
@@ -90,7 +92,7 @@ export default function SendPlaceToSurvey({
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={pop.anchor}>
       <button
         type="button"
         className={buttonClassName}
@@ -101,7 +103,7 @@ export default function SendPlaceToSurvey({
       </button>
 
       {open ? (
-        <div className="panel absolute right-0 z-20 mt-2 w-72 p-3 text-left shadow-lg">
+        <div className="panel p-3 text-left shadow-lg" style={pop.style}>
           {sent ? (
             <>
               <p className="text-sm text-body">

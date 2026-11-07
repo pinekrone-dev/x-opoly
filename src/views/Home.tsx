@@ -3,6 +3,7 @@ import SurveyList from './SurveyList'
 import { api } from '../api'
 import ConfirmDelete from '../components/ConfirmDelete'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
+import ListsView from './ListsView'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
 import { navigate } from '../lib/router'
 import { useCanEdit } from '../lib/access'
@@ -25,6 +26,7 @@ export default function Home({
   smsConfigured,
   billing,
   tab,
+  listId,
   onAccountChange,
   onSignedOut,
 }: {
@@ -32,6 +34,8 @@ export default function Home({
   smsConfigured?: boolean
   billing?: BillingStatus | null
   tab: string
+  /** On the lists tab, the one list open. */
+  listId?: string
   onAccountChange?: (account: Account) => void
   onSignedOut?: () => void
 }) {
@@ -216,6 +220,28 @@ export default function Home({
 
   const ownButton = spec && spec.type !== 'person' && spec.type !== 'place' ? spec : null
 
+  /* The CRM's lists, always in reach, and the team's own lists of places
+     beside them. The menu under the CRM tab opens on hover, which a phone
+     does not have. */
+  const crmTabs = (current: string) => (
+    <nav className="mb-4 flex gap-1 overflow-x-auto" aria-label="CRM lists">
+      {[...OBJECTS.map((object) => ({ segment: object.segment, label: object.label, count: counts[object.segment] })), { segment: 'lists', label: 'Lists', count: undefined }].map((entry) => (
+        <button
+          key={entry.segment}
+          type="button"
+          aria-current={entry.segment === current ? 'page' : undefined}
+          className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${
+            entry.segment === current ? 'bg-ink text-white' : 'text-muted hover:bg-sunken hover:text-ink'
+          }`}
+          onClick={() => navigate(`/${entry.segment}`)}
+        >
+          {entry.label}
+          <span className="ml-1.5 text-xs opacity-70">{entry.count ?? ''}</span>
+        </button>
+      ))}
+    </nav>
+  )
+
   return (
     <div className="min-h-full bg-paper">
       <WorkspaceNav
@@ -232,26 +258,14 @@ export default function Home({
       <main className="mx-auto max-w-7xl px-5 py-6">
         {tab === 'surveys' ? (
           <SurveyList account={account} smsConfigured={smsConfigured} billing={billing} embedded />
+        ) : tab === 'lists' ? (
+          <>
+            {crmTabs('lists')}
+            <ListsView id={listId} />
+          </>
         ) : spec ? (
           <>
-            {/* The CRM's lists, always in reach. The menu under the CRM tab
-                opens on hover, which a phone does not have. */}
-            <nav className="mb-4 flex gap-1 overflow-x-auto" aria-label="CRM lists">
-              {OBJECTS.map((object) => (
-                <button
-                  key={object.segment}
-                  type="button"
-                  aria-current={object.segment === spec.segment ? 'page' : undefined}
-                  className={`whitespace-nowrap rounded-full px-3 py-1 text-sm ${
-                    object.segment === spec.segment ? 'bg-ink text-white' : 'text-muted hover:bg-sunken hover:text-ink'
-                  }`}
-                  onClick={() => navigate(`/${object.segment}`)}
-                >
-                  {object.label}
-                  <span className="ml-1.5 text-xs opacity-70">{counts[object.segment] ?? ''}</span>
-                </button>
-              ))}
-            </nav>
+            {crmTabs(spec.segment)}
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <input
                 className="field max-w-sm flex-1"

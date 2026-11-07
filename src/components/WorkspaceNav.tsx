@@ -109,6 +109,15 @@ export default function WorkspaceNav({
                   </button>
                 </li>
               ))}
+              <li className="border-t border-line">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-body hover:bg-sunken"
+                  onClick={() => navigate('/lists')}
+                >
+                  Lists
+                </button>
+              </li>
             </ul>
           </div>
 
