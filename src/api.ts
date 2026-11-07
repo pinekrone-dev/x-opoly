@@ -1,4 +1,4 @@
-import type { AskCircle, LandmarksResult, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
+import type { AskCircle, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -177,6 +177,9 @@ export const api = {
   lists: {
     all: (placeId?: string) => request<{ lists: PlaceList[] }>(`/api/lists${placeId ? `?place=${encodeURIComponent(placeId)}` : ''}`),
     get: (id: string) => request<{ list: PlaceListDetail }>(`/api/lists/${encodeURIComponent(id)}`),
+    /** The places on these lists (all lists when none), for map pins. */
+    pins: (ids: string[] = []) =>
+      request<{ places: ListPin[] }>(`/api/lists/pins${ids.length ? `?ids=${ids.map(encodeURIComponent).join(',')}` : ''}`),
     create: (input: { name: string; client?: string | null; tags?: string[] | string }) =>
       request<{ list: PlaceList }>('/api/lists', json(input)),
     update: (id: string, patch: { name?: string; client?: string | null; tags?: string[] | string }) =>

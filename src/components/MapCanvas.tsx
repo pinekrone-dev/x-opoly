@@ -471,6 +471,8 @@ export interface MapPin {
   label: string
   detail?: string
   logo?: string
+  /** The badge's colour (a list's colour); navy when not given. */
+  color?: string
 }
 
 /** Hosts a pin's logo may load from, as app/lib/logos.js LOGO_HOSTS. A saved map is a teammate's data. */
@@ -1521,11 +1523,12 @@ export default function MapCanvas({
       element.className = 'lq-pin'
       element.title = pin.label
       element.setAttribute('aria-label', pin.label)
+      const tone = /^#[0-9a-f]{3,8}$/i.test(pin.color ?? '') ? (pin.color as string) : '#0f172a'
       element.style.cssText =
-        'width:30px;height:30px;border-radius:9999px;background:#fff;border:2px solid #0f172a;box-shadow:0 1px 4px rgba(0,0,0,.35);padding:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden'
+        `width:30px;height:30px;border-radius:9999px;background:#fff;border:2px solid ${tone};box-shadow:0 1px 4px rgba(0,0,0,.35);padding:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;overflow:hidden`
       const initial = () => {
         element.replaceChildren()
-        element.style.background = '#0f172a'
+        element.style.background = tone
         const letter = document.createElement('span')
         letter.style.cssText = 'color:#fff;font-size:12px;font-weight:700;line-height:1'
         letter.textContent = (pin.label.trim()[0] || '•').toUpperCase()
