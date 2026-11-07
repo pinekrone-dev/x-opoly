@@ -11,8 +11,9 @@
  * landmarks that sell the site, a numbered map of the retailers around it,
  * and the trade area's demographics beside the county's record.
  */
-import type { Demographics, Landmark, NearbyBusiness } from '../types'
+import type { Demographics, Landmark } from '../types'
 import { staticMap, type StaticMap } from './staticMap'
+import { amenityGroups, placeMarkers, tenantMix, type NumberedAmenity } from './amenityGroups'
 
 /** Letter, landscape, in points. */
 export const PAGE = { width: 792, height: 612 }
@@ -45,7 +46,9 @@ export interface OmData {
   broker: { name: string; email: string; phone: string; company: string }
   record: { group: string; rows: OmRow[] }[]
   /** Chains near the site, already numbered in the order they print. */
-  amenities: (NearbyBusiness & { n: number })[]
+  amenities: NumberedAmenity[]
+  /** The store directory did not answer: say so, never "no stores". */
+  amenitiesFailed?: boolean
   landmarks: Landmark[]
   demographics: Demographics | null
   sources: string[]
@@ -143,7 +146,7 @@ function footer(ctx: Ctx, data: OmData, n: number) {
   ctx.stroke()
   para(
     ctx,
-    'Figures are from public records (the county assessor, the US Census ACS, OpenStreetMap, Wikidata) and have not been verified. They are not an appraisal or a survey; buyers should make their own investigation.',
+    DISCLAIMER,
     28,
     PAGE.height - 22,
     600,
@@ -225,21 +228,6 @@ function ring(ctx: Ctx, map: StaticMap, ox: number, oy: number, miles: number, c
   }
 }
 
-function numbered(ctx: Ctx, n: number, x: number, y: number) {
-  ctx.save()
-  ctx.shadowColor = 'rgba(0,0,0,0.3)'
-  ctx.shadowBlur = 2
-  ctx.fillStyle = '#1f6f8b'
-  ctx.beginPath()
-  ctx.arc(x, y, 7.5, 0, Math.PI * 2)
-  ctx.fill()
-  ctx.restore()
-  ctx.strokeStyle = '#ffffff'
-  ctx.lineWidth = 1
-  ctx.stroke()
-  text(ctx, String(n), x, y + 3, { size: n > 99 ? 6 : 7.5, weight: 700, color: '#ffffff', align: 'center' })
-}
-
 const fmt = (n: number) => Math.round(n).toLocaleString('en-US')
 
 /** One line on how big a landmark is. */
@@ -257,21 +245,156 @@ const KIND: Record<string, string> = {
   attractions: 'Attraction', convention: 'Convention', military: 'Military', headquarters: 'HQ',
 }
 
+/* ----------------------------------------------------------------- maps */
+
+/**
+ * A map with its pins, rings and labels drawn on, on a canvas of its own:
+ * placed whole on a PDF page, and as a picture on a PowerPoint slide where
+ * the text around it stays editable.
+ */
+export interface MapPicture {
+  canvas: HTMLCanvasElement
+  width: number
+  height: number
+}
+
+export interface OmMaps {
+  cover: MapPicture
+  location: MapPicture & { shown: Landmark[] }
+  amenity: MapPicture
+}
+
+function surface(map: StaticMap) {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(map.width * SCALE)
+  canvas.height = Math.round(map.height * SCALE)
+  const ctx = canvas.getContext('2d') as Ctx
+  ctx.scale(SCALE, SCALE)
+  mapImage(ctx, map, 0, 0)
+  return { canvas, ctx }
+}
+
+async function coverMap(data: OmData): Promise<MapPicture> {
+  // The aerial, close enough to read the lot.
+  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 320, width: 500, height: 330, basemap: 'imagery', labels: true })
+  const { canvas, ctx } = surface(map)
+  const [px, py] = map.project(data.lat, data.lng)
+  pin(ctx, px, py)
+  return { canvas, width: map.width, height: map.height }
+}
+
+async function locationMap(data: OmData): Promise<MapPicture & { shown: Landmark[] }> {
+  // Tall enough for the two-mile ring with a little room, as wide as the page.
+  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 2.3 * 2 * MILE * (744 / 444), width: 744, height: 444, basemap: 'imagery', labels: false })
+  const { canvas, ctx } = surface(map)
+  const [cx, cy] = map.project(data.lat, data.lng)
+  ring(ctx, map, 0, 0, 1, cx, cy)
+  ring(ctx, map, 0, 0, 2, cx, cy)
+
+  // The landmarks on the map, largest first, none on top of another.
+  const taken: { x: number; y: number; w: number; h: number }[] = []
+  const hits = (b: { x: number; y: number; w: number; h: number }) =>
+    taken.some((t) => b.x < t.x + t.w + 4 && b.x + b.w + 4 > t.x && b.y < t.y + t.h + 3 && b.y + b.h + 3 > t.y)
+  const shown: Landmark[] = []
+  for (const l of data.landmarks) {
+    // A headquarters Wikidata places only by its city would be pinned on the
+    // city centre: a point on a map that is not where the office is.
+    if (l.kind === 'headquarters' && l.located !== 'exact') continue
+    const [lx, ly] = map.project(l.lat, l.lng)
+    if (lx < 40 || lx > map.width - 40 || ly < 14 || ly > map.height - 14) continue
+    font(ctx, 8, 600)
+    const w = ctx.measureText(l.name).width + 10
+    const box = { x: lx - w / 2, y: ly - 7.5, w, h: 15 }
+    if (hits(box)) continue
+    pill(ctx, l.name.length > 34 ? `${l.name.slice(0, 33)}…` : l.name, lx, ly, { color: 'rgba(14,116,144,0.92)' })
+    taken.push(box)
+    shown.push(l)
+    if (shown.length >= 14) break
+  }
+  pin(ctx, cx, cy, 'Subject Property')
+  return { canvas, width: map.width, height: map.height, shown }
+}
+
+async function amenityMap(data: OmData): Promise<MapPicture> {
+  const list = data.amenities
+  // Wide enough to hold every numbered store, at least a mile each way.
+  // Close in where the stores are close: a downtown block, not a mile of it.
+  const far = Math.max(0.3, ...list.map((a) => a.miles)) * 1.2
+  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: far * 2 * MILE, width: 400, height: 500, basemap: 'light', labels: true })
+  const { canvas, ctx } = surface(map)
+  ctx.strokeStyle = RULE
+  ctx.strokeRect(0, 0, map.width, map.height)
+
+  // One marker per spot ("12–15" for a centre's tenants), each put where it
+  // is free, nearest its stores; the lines first, so none crosses a number.
+  const groups = amenityGroups(list)
+  const label = (g: { first: number; last: number }) => (g.first === g.last ? String(g.first) : `${g.first}–${g.last}`)
+  font(ctx, 7.5, 700)
+  const wants = groups.map((g) => {
+    const [x, y] = map.project(g.lat, g.lng)
+    const text = label(g)
+    const w = g.first === g.last ? 15 : Math.max(15, ctx.measureText(text).width + 9)
+    return { x, y, w, h: 15 }
+  })
+  const [cx, cy] = map.project(data.lat, data.lng)
+  const spots = placeMarkers(wants, map, [{ x: cx, y: cy - 14, w: 22, h: 30 }])
+  ctx.strokeStyle = '#1f6f8b'
+  ctx.lineWidth = 0.8
+  spots.forEach((spot, i) => {
+    const want = wants[i]
+    if (Math.hypot(spot.x - want.x, spot.y - want.y) < 4) return
+    ctx.beginPath()
+    ctx.moveTo(want.x, want.y)
+    ctx.lineTo(spot.x, spot.y)
+    ctx.stroke()
+    ctx.fillStyle = '#1f6f8b'
+    ctx.beginPath()
+    ctx.arc(want.x, want.y, 1.8, 0, Math.PI * 2)
+    ctx.fill()
+  })
+  pin(ctx, cx, cy)
+  spots.forEach((spot, i) => marker(ctx, label(groups[i]), spot.x, spot.y, wants[i].w))
+  return { canvas, width: map.width, height: map.height }
+}
+
+/** A numbered marker: a circle for one store, a pill for a range. */
+function marker(ctx: Ctx, value: string, x: number, y: number, w: number) {
+  const h = 15
+  ctx.save()
+  ctx.shadowColor = 'rgba(0,0,0,0.3)'
+  ctx.shadowBlur = 2
+  ctx.fillStyle = '#1f6f8b'
+  rounded(ctx, x - w / 2, y - h / 2, w, h, h / 2)
+  ctx.fill()
+  ctx.restore()
+  ctx.strokeStyle = '#ffffff'
+  ctx.lineWidth = 1
+  rounded(ctx, x - w / 2, y - h / 2, w, h, h / 2)
+  ctx.stroke()
+  text(ctx, value, x, y + 2.8, { size: value.length > 2 && w <= 15 ? 6.5 : 7.5, weight: 700, color: '#ffffff', align: 'center' })
+}
+
+/** The three maps an OM carries, drawn once for every export. */
+export async function omMaps(data: OmData): Promise<OmMaps> {
+  const [cover, location, amenity] = await Promise.all([coverMap(data), locationMap(data), amenityMap(data)])
+  return { cover, location, amenity }
+}
+
+/** The landmark key under the location map: name, then kind, size and distance. */
+export function landmarkKey(l: Landmark): string {
+  return [KIND[l.kind], landmarkLine(l), `${l.miles} mi`].filter(Boolean).join(' · ')
+}
+
 /* ---------------------------------------------------------------- pages */
 
-async function cover(data: OmData) {
+function cover(data: OmData, maps: OmMaps) {
   const { canvas, ctx } = page()
   rect(ctx, 0, 0, PAGE.width, 128, NIGHT)
   rect(ctx, 0, 128, PAGE.width, 3, ACCENT)
   text(ctx, data.headline.toUpperCase(), 28, 40, { size: 11, weight: 700, color: ACCENT, max: 736 })
   text(ctx, data.address, 28, 82, { size: 30, weight: 700, color: '#ffffff', max: 736 })
   text(ctx, data.cityLine, 28, 108, { size: 13, weight: 500, color: '#cbd5e1', max: 736 })
-
-  // The aerial, close enough to read the lot.
-  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 320, width: 500, height: 330, basemap: 'imagery', labels: true })
-  mapImage(ctx, map, 0, 131)
-  const [px, py] = map.project(data.lat, data.lng)
-  pin(ctx, px, 131 + py)
+  ctx.drawImage(maps.cover.canvas, 0, 131, maps.cover.width, maps.cover.height)
 
   // Highlights.
   const hx = 520
@@ -291,152 +414,74 @@ async function cover(data: OmData) {
 
   // The pitch, and who to call.
   if (data.description) para(ctx, data.description, 28, 488, 460, { size: 10.5, lines: 6, color: BODY })
-  const by = data.broker
   let by0 = 488
-  if (by.name || by.company) {
-    text(ctx, by.name || by.company, hx, by0, { size: 11, weight: 700, color: INK, max: 250 })
-    by0 += 15
-    if (by.name && by.company) {
-      text(ctx, by.company, hx, by0, { size: 9, color: BODY, max: 250 })
-      by0 += 13
-    }
-    for (const line of [by.phone, by.email].filter(Boolean)) {
-      text(ctx, line, hx, by0, { size: 9, color: BODY, max: 250 })
-      by0 += 13
-    }
+  for (const [i, line] of brokerLines(data).entries()) {
+    text(ctx, line, hx, by0, { size: i === 0 ? 11 : 9, weight: i === 0 ? 700 : 400, color: i === 0 ? INK : BODY, max: 250 })
+    by0 += i === 0 ? 15 : 13
   }
   footer(ctx, data, 1)
   return canvas
 }
 
-async function location(data: OmData) {
+/** Who to call: the name first, then company, phone and email. */
+export function brokerLines(data: OmData): string[] {
+  const by = data.broker
+  const lead = by.name || by.company
+  if (!lead) return []
+  return [lead, ...(by.name && by.company ? [by.company] : []), by.phone, by.email].filter(Boolean)
+}
+
+function location(data: OmData, maps: OmMaps) {
   const { canvas, ctx } = page()
   band(ctx, data, 'Site Location Map')
   const ox = 24
   const oy = 76
-  // Tall enough for the two-mile ring with a little room, as wide as the page.
-  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: 2.3 * 2 * MILE * (744 / 444), width: 744, height: 444, basemap: 'imagery', labels: false })
-  mapImage(ctx, map, ox, oy)
-  const [cx, cy] = map.project(data.lat, data.lng)
-  ring(ctx, map, ox, oy, 1, ox + cx, oy + cy)
-  ring(ctx, map, ox, oy, 2, ox + cx, oy + cy)
-
-  // The landmarks on the map, largest first, none on top of another.
-  const taken: { x: number; y: number; w: number; h: number }[] = []
-  const hits = (b: { x: number; y: number; w: number; h: number }) =>
-    taken.some((t) => b.x < t.x + t.w + 4 && b.x + b.w + 4 > t.x && b.y < t.y + t.h + 3 && b.y + b.h + 3 > t.y)
-  const shown: Landmark[] = []
-  for (const l of data.landmarks) {
-    // A headquarters Wikidata places only by its city would be pinned on the
-    // city centre: a point on a map that is not where the office is.
-    if (l.kind === 'headquarters' && l.located !== 'exact') continue
-    const [lx, ly] = map.project(l.lat, l.lng)
-    if (lx < 40 || lx > map.width - 40 || ly < 14 || ly > map.height - 14) continue
-    font(ctx, 8, 600)
-    const w = ctx.measureText(l.name).width + 10
-    const box = { x: ox + lx - w / 2, y: oy + ly - 7.5, w, h: 15 }
-    if (hits(box)) continue
-    pill(ctx, l.name.length > 34 ? `${l.name.slice(0, 33)}…` : l.name, ox + lx, oy + ly, { color: 'rgba(14,116,144,0.92)' })
-    taken.push(box)
-    shown.push(l)
-    if (shown.length >= 14) break
-  }
-  pin(ctx, ox + cx, oy + cy, 'Subject Property')
-
+  ctx.drawImage(maps.location.canvas, ox, oy, maps.location.width, maps.location.height)
   // The key: what each landmark is and how big a draw.
-  let y = oy + map.height + 18
+  let y = oy + maps.location.height + 18
   const colW = 744 / 2
-  shown.slice(0, 6).forEach((l, i) => {
+  maps.location.shown.slice(0, 6).forEach((l, i) => {
     const x = ox + (i % 2) * colW
     if (i % 2 === 0 && i > 0) y += 13
-    const line = [KIND[l.kind], landmarkLine(l), `${l.miles} mi`].filter(Boolean).join(' · ')
     text(ctx, l.name, x, y, { size: 8.5, weight: 700, color: INK, max: 170 })
-    text(ctx, line, x + 175, y, { size: 8, color: BODY, max: colW - 185 })
+    text(ctx, landmarkKey(l), x + 175, y, { size: 8, color: BODY, max: colW - 185 })
   })
   footer(ctx, data, 2)
   return canvas
 }
 
-async function amenities(data: OmData) {
+function amenities(data: OmData, maps: OmMaps) {
   const { canvas, ctx } = page()
   band(ctx, data, 'Area Retailers & Amenity Map')
   const ox = 24
   const oy = 76
   const list = data.amenities
-  // Wide enough to hold every numbered store, at least a mile each way.
-  const far = Math.max(0.6, ...list.map((a) => a.miles)) * 1.15
-  const map = await staticMap({ lat: data.lat, lng: data.lng, metersAcross: far * 2 * MILE, width: 400, height: 500, basemap: 'light', labels: true })
-  mapImage(ctx, map, ox, oy)
-  ctx.strokeStyle = RULE
-  ctx.strokeRect(ox, oy, map.width, map.height)
-  // Stores in one centre sit on top of each other; each marker that would
-  // cover another is moved out around its spot and tied back with a line.
-  const placed: [number, number][] = []
-  const free = (x: number, y: number) => placed.every(([px, py]) => (px - x) ** 2 + (py - y) ** 2 >= 16 * 16)
-  for (const a of list) {
-    const [x, y] = map.project(a.lat, a.lng)
-    if (x < 6 || x > map.width - 6 || y < 6 || y > map.height - 6) continue
-    let [mx, my] = [x, y]
-    for (let step = 0; step < 48 && !free(mx, my); step += 1) {
-      const angle = step * 0.9
-      const r = 14 + step * 1.6
-      ;[mx, my] = [x + r * Math.cos(angle), y + r * Math.sin(angle)]
-    }
-    mx = Math.min(map.width - 8, Math.max(8, mx))
-    my = Math.min(map.height - 8, Math.max(8, my))
-    if (mx !== x || my !== y) {
-      ctx.strokeStyle = '#1f6f8b'
-      ctx.lineWidth = 0.8
-      ctx.beginPath()
-      ctx.moveTo(ox + x, oy + y)
-      ctx.lineTo(ox + mx, oy + my)
-      ctx.stroke()
-      ctx.fillStyle = '#1f6f8b'
-      ctx.beginPath()
-      ctx.arc(ox + x, oy + y, 1.8, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    placed.push([mx, my])
-    numbered(ctx, a.n, ox + mx, oy + my)
-  }
-  const [cx, cy] = map.project(data.lat, data.lng)
-  pin(ctx, ox + cx, oy + cy)
+  ctx.drawImage(maps.amenity.canvas, ox, oy, maps.amenity.width, maps.amenity.height)
 
-  // The legend, grouped by kind of tenant, numbers in map order.
-  const lx = ox + map.width + 22
+  // The legend in number order, which is the map's order from the site
+  // outward; the tenant mix above it.
+  const lx = ox + maps.amenity.width + 22
   const colW = (PAGE.width - 24 - lx) / 2
-  const top = oy + 6
-  const bottom = PAGE.height - 48
-  let col = 0
-  let y = top
-  const advance = (h: number) => {
-    if (y + h > bottom) {
-      col += 1
-      y = top
-    }
-    return col < 2
+  let y = oy + 10
+  if (list.length) {
+    y = para(ctx, `Tenant mix: ${tenantMix(list)}`, lx, y, PAGE.width - 24 - lx, { size: 7.5, color: MUTED, lead: 1.35, lines: 3 }) + 6
+  } else {
+    text(ctx, data.amenitiesFailed ? 'The store directory did not answer. Try again from the editor.' : 'No chain stores were found within a mile in the directory.', lx, y, { size: 9, color: MUTED })
   }
-  if (!list.length) text(ctx, 'No chain stores were found within a mile in the directory.', lx, y + 10, { size: 9, color: MUTED })
-  let sector = ''
-  for (const a of list) {
-    if (a.sector !== sector) {
-      if (!advance(26)) break
-      sector = a.sector ?? 'Other'
-      text(ctx, sector.toUpperCase(), lx + col * colW, y + 12, { size: 7.5, weight: 700, color: '#1f6f8b', max: colW - 8 })
-      y += 18
-    }
-    if (!advance(12)) break
-    const x = lx + col * colW
-    text(ctx, `${a.n}.`, x + 14, y + 8, { size: 8, weight: 700, color: INK, align: 'right' })
-    text(ctx, a.name, x + 18, y + 8, { size: 8, color: BODY, max: colW - 50 })
-    text(ctx, `${a.miles.toFixed(1)} mi`, x + colW - 10, y + 8, { size: 7, color: MUTED, align: 'right' })
-    y += 12
-  }
+  const top = y
+  const rows = Math.max(1, Math.floor((PAGE.height - 48 - top) / 12.5))
+  list.slice(0, rows * 2).forEach((a, i) => {
+    const x = lx + Math.floor(i / rows) * colW
+    const ry = top + (i % rows) * 12.5 + 8
+    text(ctx, `${a.n}.`, x + 14, ry, { size: 8, weight: 700, color: INK, align: 'right' })
+    text(ctx, a.name, x + 18, ry, { size: 8, color: BODY, max: colW - 50 })
+    text(ctx, `${a.miles.toFixed(1)} mi`, x + colW - 10, ry, { size: 7, color: MUTED, align: 'right' })
+  })
   footer(ctx, data, 3)
   return canvas
 }
 
-const DEMOGRAPHICS: { key: string; label: string; format: 'count' | 'money' | 'percent' | 'decimal' }[] = [
+export const DEMOGRAPHICS: { key: string; label: string; format: 'count' | 'money' | 'percent' | 'decimal' }[] = [
   { key: 'population', label: 'Population', format: 'count' },
   { key: 'households', label: 'Households', format: 'count' },
   { key: 'medianHouseholdIncome', label: 'Median household income', format: 'money' },
@@ -446,7 +491,7 @@ const DEMOGRAPHICS: { key: string; label: string; format: 'count' | 'money' | 'p
   { key: 'medianHomeValue', label: 'Median home value', format: 'money' },
 ]
 
-function metric(value: number | null | undefined, format: string) {
+export function metric(value: number | null | undefined, format: string) {
   if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   if (format === 'money') return `$${fmt(value)}`
   if (format === 'percent') return `${(value <= 1 ? value * 100 : value).toFixed(1)}%`
@@ -454,7 +499,7 @@ function metric(value: number | null | undefined, format: string) {
   return fmt(value)
 }
 
-async function details(data: OmData) {
+function details(data: OmData) {
   const { canvas, ctx } = page()
   band(ctx, data, 'Demographics & Property Details')
   const ox = 28
@@ -516,11 +561,16 @@ async function details(data: OmData) {
   return canvas
 }
 
-/** Every page, in order. */
-export async function renderOm(data: OmData): Promise<HTMLCanvasElement[]> {
+/** Every page, in order, and the maps they were drawn with. */
+export async function renderOm(data: OmData): Promise<{ pages: HTMLCanvasElement[]; maps: OmMaps }> {
   if (document.fonts?.ready) await document.fonts.ready.catch(() => undefined)
-  return Promise.all([cover(data), location(data), amenities(data), details(data)])
+  const maps = await omMaps(data)
+  return { pages: [cover(data, maps), location(data, maps), amenities(data, maps), details(data)], maps }
 }
+
+/** The disclaimer every page carries. */
+export const DISCLAIMER =
+  'Figures are from public records (the county assessor, the US Census ACS, OpenStreetMap, Wikidata) and have not been verified. They are not an appraisal or a survey; buyers should make their own investigation.'
 
 /** The pages as one PDF, letter landscape, each page placed whole. */
 export async function omPdf(pages: HTMLCanvasElement[], filename: string) {

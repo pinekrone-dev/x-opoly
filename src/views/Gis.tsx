@@ -4007,6 +4007,41 @@ export default function Gis({
   }
 
   /*
+   * The last ten parcels opened, in any market, kept in this browser: going
+   * back to the lot from three clicks ago should not mean finding it again.
+   * Recorded once the record has arrived, so each carries its address.
+   */
+  const [recent, setRecent] = useState<RecentParcel[]>(() => readRecent())
+  useEffect(() => {
+    if (!parcel || !active || selected == null) return
+    const label = String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)
+    const detail = [parcel.at, parcel.ac ? `${Number(parcel.ac).toFixed(2)} ac` : null].filter(Boolean).join(' · ')
+    setRecent((list) => {
+      const next = pushRecent(list, { market: active, id: selected, label, detail: detail || undefined })
+      try {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+      } catch {
+        // Not kept past this visit.
+      }
+      return next
+    })
+  }, [parcel, active, selected])
+
+  const goRecent = useCallback(
+    (item: RecentParcel) => {
+      if (item.market === active) {
+        pickFromSearch(item.id)
+        return
+      }
+      // Another county: switch to it, and open the lot once it has loaded.
+      cameraOnSelect.current = true
+      pendingPick.current = { slug: item.market, id: item.id }
+      openMarket(item.market)
+    },
+    [active, pickFromSearch, openMarket],
+  )
+
+  /*
    * The parcel's CRM place, made if it is not there yet. The check for an
    * existing one is asked again here rather than trusted from the panel:
    * the button shows at once, before that lookup answers, and a quick
@@ -4368,6 +4403,9 @@ export default function Gis({
             locating={locating}
             onPick={pickFromSearch}
             onFind={(text) => void goToAddress(text)}
+            recent={recent}
+            onRecent={goRecent}
+            marketNames={Object.fromEntries(markets.map((m) => [m.slug, m.name]))}
           />
         }
         badge={{
@@ -6277,6 +6315,32 @@ function ListingCheck({
  * records that match as typed; Enter takes the first, and with none it
  * looks the address up and flies there, into whichever county holds it.
  */
+/** One parcel opened recently: enough to go back to it and to name it. */
+interface RecentParcel {
+  market: string
+  id: string | number
+  label: string
+  detail?: string
+}
+
+const RECENT_KEY = 'lq:recent-parcels'
+const RECENT_MAX = 10
+
+function readRecent(): RecentParcel[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]')
+    return Array.isArray(list) ? list.slice(0, RECENT_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+/** The list with this parcel at the top, once, at most ten. */
+export function pushRecent(list: RecentParcel[], item: RecentParcel): RecentParcel[] {
+  const rest = list.filter((r) => !(r.market === item.market && String(r.id) === String(item.id)))
+  return [item, ...rest].slice(0, RECENT_MAX)
+}
+
 function AddressBar({
   market,
   serverReady,
@@ -6284,6 +6348,9 @@ function AddressBar({
   locating,
   onPick,
   onFind,
+  recent = [],
+  onRecent,
+  marketNames = {},
 }: {
   market: string | null
   serverReady: boolean
@@ -6291,9 +6358,14 @@ function AddressBar({
   locating: boolean
   onPick: (id: number | string) => void
   onFind: (text: string) => void
+  /** The last parcels opened, newest first, any market. */
+  recent?: RecentParcel[]
+  onRecent?: (item: RecentParcel) => void
+  marketNames?: Record<string, string>
 }) {
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
+  const [showRecent, setShowRecent] = useState(false)
   const [hits, setHits] = useState<Record<string, string | number | null>[]>([])
   // Suggestions already fetched, so backspacing over an address asks nothing.
   const suggested = useRef(new Map<string, Record<string, string | number | null>[]>())
@@ -6371,7 +6443,10 @@ function AddressBar({
             setOpen(true)
           }}
           onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onBlur={() => setTimeout(() => {
+            setOpen(false)
+            setShowRecent(false)
+          }, 150)}
           onKeyDown={(event) => {
             if (event.key === 'Escape') setOpen(false)
           }}
@@ -6381,8 +6456,48 @@ function AddressBar({
           <button type="button" className="text-muted hover:text-ink" aria-label="Clear" onClick={() => setText('')}>
             ×
           </button>
+        ) : recent.length ? (
+          <button
+            type="button"
+            className={`shrink-0 rounded p-0.5 hover:text-ink ${showRecent ? 'text-brand' : 'text-muted'}`}
+            aria-label="Recent parcels"
+            title="Recent parcels"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setShowRecent((on) => !on)}
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+              <path d="M3 3v5h5" />
+              <path d="M12 7v5l3 2" />
+            </svg>
+          </button>
         ) : null}
       </form>
+      {(showRecent || (open && !wanted)) && recent.length ? (
+        <ul className="absolute left-0 right-0 top-full z-10 mt-1 divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
+          <li className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">Recent parcels</li>
+          {recent.map((item) => (
+            <li key={`${item.market}:${item.id}`}>
+              <button
+                type="button"
+                className="w-full px-2.5 py-1.5 text-left hover:bg-sunken"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  setShowRecent(false)
+                  setOpen(false)
+                  onRecent?.(item)
+                }}
+              >
+                <span className="block truncate text-xs font-medium text-ink">{item.label}</span>
+                <span className="block truncate text-[11px] text-muted">
+                  {item.market === market ? 'This market' : marketNames[item.market] ?? item.market}
+                  {item.detail ? ` · ${item.detail}` : ''}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {open && wanted.length >= 3 ? (
         <ul className="absolute left-0 right-0 top-full mt-1 divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
           {hits.map((row) => (

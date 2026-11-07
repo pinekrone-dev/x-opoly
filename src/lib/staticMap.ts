@@ -110,11 +110,27 @@ async function drawStaticMap({
   const exportUrl = (service: string, format: string, transparent: boolean) =>
     `${ESRI}/${service}/MapServer/export?bbox=${x0},${y0},${x1},${y1}&bboxSR=3857&imageSR=3857&size=${px},${py}&format=${format}${transparent ? '&transparent=true' : ''}&f=image`
 
+  // The grey canvas has no detail past its last cached level, and asked for
+  // more pixels than that over a small area it answers an error; so each
+  // layer is asked again at a lower resolution, drawn up to size.
+  const fetchLayer = async (service: string, format: string, transparent: boolean) => {
+    for (const factor of [1, 0.66, 0.5, 0.33]) {
+      const w = Math.round(px * factor)
+      const h = Math.round(py * factor)
+      try {
+        return await load(exportUrl(service, format, transparent).replace(`size=${px},${py}`, `size=${w},${h}`))
+      } catch {
+        // Try smaller.
+      }
+    }
+    throw new Error(`No picture from ${service}`)
+  }
+
   let image: HTMLCanvasElement | null = null
   try {
     const [base, overlay] = await Promise.all([
-      load(exportUrl(layer.base, layer.format, false)),
-      labels ? load(exportUrl(layer.labels, 'png32', true)).catch(() => null) : Promise.resolve(null),
+      fetchLayer(layer.base, layer.format, false),
+      labels ? fetchLayer(layer.labels, 'png32', true).catch(() => null) : Promise.resolve(null),
     ])
     image = document.createElement('canvas')
     image.width = px
