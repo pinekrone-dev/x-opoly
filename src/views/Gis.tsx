@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import MapCanvas, { PARCEL_MIN_ZOOM } from '../components/MapCanvas'
+import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, type PanelGroup } from '../components/ParcelPanel'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
@@ -1290,6 +1290,8 @@ export default function Gis({
    * record twice flies there again rather than being deduplicated away.
    */
   const [layerPick, setLayerPick] = useState<{ layer: string; index: number } | null>(null)
+  // Pins from a saved map (nearby retail from the Claude connector, for one).
+  const [pins, setPins] = useState<MapPin[]>([])
   const [layerView, setLayerView] = useState<{ center: [number, number]; zoom: number; key: number } | null>(null)
   /*
    * Whether the next selection should take the camera with it.
@@ -3531,6 +3533,7 @@ export default function Gis({
       near: nearPicks,
       match: matchMode,
       circle: areaCircle,
+      pins,
       basemap: basemapNow.current,
     }
   }
@@ -3614,6 +3617,23 @@ export default function Gis({
       setAreaCircle(null)
       setAskCircle(null)
     }
+
+    // Pins belong to the map they were saved with, so a view without them
+    // clears the last one's rather than leaving them over a different frame.
+    setPins(
+      Array.isArray(st.pins)
+        ? (st.pins as Partial<MapPin>[])
+            .filter((p) => Number.isFinite(Number(p?.lat)) && Number.isFinite(Number(p?.lng)) && typeof p?.label === 'string')
+            .slice(0, 200)
+            .map((p) => ({
+              lat: Number(p.lat),
+              lng: Number(p.lng),
+              label: String(p.label),
+              detail: typeof p.detail === 'string' ? p.detail : undefined,
+              logo: typeof p.logo === 'string' ? p.logo : undefined,
+            }))
+        : [],
+    )
 
     const centre = st.center as [number, number] | undefined
     if (Array.isArray(centre) && centre.length === 2 && centre.every(Number.isFinite)) {
@@ -4171,6 +4191,7 @@ export default function Gis({
           onNeighbourParcel={onNeighbourParcel}
           places={places}
           placesUntilZoom={9}
+          pins={pins}
           onPlace={openMarket}
           // Drawing the Ask circle: the next click on the map is its centre,
           // and while it waits parcels are not picked.
@@ -4323,6 +4344,14 @@ export default function Gis({
               onOpen={applyView}
               onDelete={removeView}
               />
+              {pins.length > 0 && (
+                <div className="mt-2 flex items-center justify-between rounded-md border border-line px-2 py-1.5 text-[11px] text-muted">
+                  <span>{pins.length.toLocaleString()} pinned {pins.length === 1 ? 'place' : 'places'} on this map</span>
+                  <button type="button" className="font-semibold text-ink hover:underline" onClick={() => setPins([])}>
+                    Clear pins
+                  </button>
+                </div>
+              )}
             </div>
 
             <div className="border-t border-line pt-3" data-tour="layers">
