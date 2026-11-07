@@ -310,4 +310,6 @@ export const LAYER_ICONS = {
   tank: <><path d="M2 9h20" /><rect x="5" y="12" width="14" height="7" rx="3.5" /><path d="M12 9v3" /></>,
   // A drop, for what leaked from one.
   leak: <><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z" /><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5" /></>,
+  // A road with its centre line, for traffic counts.
+  traffic: <><path d="M8 3L5 21M16 3l3 18" /><path d="M12 4v3M12 10.5v3M12 17v3" /></>,
 }
