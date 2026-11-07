@@ -205,7 +205,7 @@ import {
 } from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { withLogos } from './lib/logos.js'
-import { addToList, createList, deleteList, forgetPlace, getList, listLists, removeFromList, updateList } from './lib/lists.js'
+import { addToList, createList, deleteList, forgetPlace, getList, listLists, listPins, removeFromList, updateList } from './lib/lists.js'
 import { LANDMARK_KINDS, LandmarksUnavailable, nearbyLandmarks } from './lib/landmarks.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
@@ -1897,6 +1897,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const result = await createList(db, user.teamId, await c.req.json().catch(() => ({})), { userId: user.id })
     if (result.error) return c.json({ error: result.error }, 400)
     return c.json({ list: result.list }, 201)
+  })
+
+  // The places on chosen lists (?ids=a,b; all lists when none), for map pins.
+  // Before /api/lists/:id, which would otherwise read "pins" as a list id.
+  app.get('/api/lists/pins', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const ids = String(c.req.query('ids') ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+    return c.json({ places: await listPins(db, user.teamId, ids) })
   })
 
   app.get('/api/lists/:id', async (c) => {

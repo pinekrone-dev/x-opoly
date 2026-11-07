@@ -74,4 +74,18 @@ describe('lists over HTTP', () => {
     assert.equal((await call('DELETE', `/api/crm/places/${place.body.record.id}`)).status, 204)
     assert.equal((await call('GET', `/api/lists/${body.list.id}`)).body.list.count, 0)
   })
+
+  test('pins: the places on chosen lists, one per place with every list it is on', async () => {
+    const p1 = (await call('POST', '/api/crm/places', { name: 'One', lat: 30.3, lng: -97.7 })).body.record.id
+    const p2 = (await call('POST', '/api/crm/places', { name: 'Two', lat: 30.31, lng: -97.71 })).body.record.id
+    const a = (await call('POST', '/api/lists', { name: 'A', client: 'Acme' })).body.list.id
+    const b = (await call('POST', '/api/lists', { name: 'B', client: 'Bolt' })).body.list.id
+    await call('POST', `/api/lists/${a}/places`, { placeIds: [p1, p2] })
+    await call('POST', `/api/lists/${b}/places`, { placeIds: [p1] })
+    const all = (await call('GET', '/api/lists/pins')).body.places
+    assert.deepEqual(all.find((p) => p.id === p1).lists.sort(), [a, b].sort())
+    const onlyB = (await call('GET', `/api/lists/pins?ids=${b}`)).body.places
+    assert.deepEqual(onlyB.map((p) => p.name), ['One'])
+    assert.equal(onlyB[0].lat, 30.3)
+  })
 })

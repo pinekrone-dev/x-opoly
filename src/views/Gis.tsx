@@ -3,6 +3,7 @@ import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import ListPicker from '../components/ListPicker'
+import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
@@ -33,6 +34,8 @@ import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilte
 import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
 
 import type {
+  ListPin,
+  PlaceList,
   AskCircle,
   AskAnswer,
   AskRow,
@@ -1296,6 +1299,14 @@ export default function Gis({
   const [layerPick, setLayerPick] = useState<{ layer: string; index: number } | null>(null)
   // Pins from a saved map (nearby retail from the Claude connector, for one).
   const [pins, setPins] = useState<MapPin[]>([])
+  /*
+   * The Lists layer: the team's lists drawn as pins, each list in its own
+   * colour. No list chosen means every list; the card's corner chooses.
+   */
+  const [listsOn, setListsOn] = useState(false)
+  const [listChoice, setListChoice] = useState<string[]>([])
+  const [allLists, setAllLists] = useState<PlaceList[] | null>(null)
+  const [listPlaces, setListPlaces] = useState<ListPin[]>([])
   const [layerView, setLayerView] = useState<{ center: [number, number]; zoom: number; key: number } | null>(null)
   /*
    * Whether the next selection should take the camera with it.
@@ -3123,6 +3134,23 @@ export default function Gis({
         note: coverage.tract ? 'ACS by census tract' : 'No tract on these parcels',
         icon: LAYER_ICONS.demographics,
       },
+      {
+        id: 'lists',
+        label: 'Lists',
+        state: listsOn ? 'on' : 'off',
+        note: allLists === null
+          ? undefined
+          : allLists.length === 0
+            ? 'No lists yet'
+            : listChoice.length
+              ? `${listChoice.length} of ${allLists.length} list${allLists.length === 1 ? '' : 's'}`
+              : `All ${allLists.length} list${allLists.length === 1 ? '' : 's'}`,
+        icon: LAYER_ICONS.lists,
+        corner: <ListsLayerPicker lists={allLists} chosen={listChoice} onChange={(ids) => {
+          setListChoice(ids)
+          setListsOn(true)
+        }} />,
+      } as LayerCard,
       ...(published.some((l) => l.id === 'zoning')
         ? []
         : [{
@@ -3176,7 +3204,7 @@ export default function Gis({
       pending('Rent trends', LAYER_ICONS.rent),
       pending('Forecasts', LAYER_ICONS.forecasts),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists])
 
   /*
    * Collecting the rows an export writes.
@@ -3556,6 +3584,7 @@ export default function Gis({
       match: matchMode,
       circle: areaCircle,
       pins,
+      lists: { on: listsOn, ids: listChoice },
       basemap: basemapNow.current,
     }
   }
@@ -3640,6 +3669,12 @@ export default function Gis({
       setAskCircle(null)
     }
 
+    const savedLists = st.lists as { on?: unknown; ids?: unknown } | undefined
+    if (savedLists && typeof savedLists === 'object') {
+      setListsOn(savedLists.on === true)
+      setListChoice(Array.isArray(savedLists.ids) ? savedLists.ids.map(String) : [])
+    }
+
     // Pins belong to the map they were saved with, so a view without them
     // clears the last one's rather than leaving them over a different frame.
     setPins(
@@ -3672,6 +3707,52 @@ export default function Gis({
     setLayerPick(null)
     setViewNote({ tone: 'ok', text: `Opened "${view.name}".` })
   }
+
+  // The lists themselves, for the card's corner and the pins' colours.
+  useEffect(() => {
+    let cancelled = false
+    api.lists
+      .all()
+      .then(({ lists }) => !cancelled && setAllLists(lists))
+      .catch(() => !cancelled && setAllLists([]))
+    return () => {
+      cancelled = true
+    }
+  }, [listsOn])
+
+  // Their places, while the layer is on.
+  useEffect(() => {
+    if (!listsOn) {
+      setListPlaces([])
+      return undefined
+    }
+    let cancelled = false
+    api.lists
+      .pins(listChoice)
+      .then(({ places }) => !cancelled && setListPlaces(places))
+      .catch(() => !cancelled && setListPlaces([]))
+    return () => {
+      cancelled = true
+    }
+  }, [listsOn, listChoice])
+
+  const listPins = useMemo((): MapPin[] => {
+    if (!listsOn || !allLists) return []
+    const names = new Map(allLists.map((l) => [l.id, l.name]))
+    return listPlaces
+      .filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
+      .map((p) => {
+        const on = listChoice.length ? p.lists.filter((id) => listChoice.includes(id)) : p.lists
+        return {
+          lat: Number(p.lat),
+          lng: Number(p.lng),
+          label: String(p.name || p.address || 'Place'),
+          detail: on.map((id) => names.get(id)).filter(Boolean).join(' · '),
+          color: listColor(allLists, on[0] ?? p.lists[0]),
+        }
+      })
+  }, [listsOn, allLists, listPlaces, listChoice])
+  const mapPins = useMemo(() => (listPins.length ? [...pins, ...listPins] : pins), [pins, listPins])
 
   /*
    * A list on the map, ?list=<id>, from the lists page: its places as pins,
@@ -4347,7 +4428,7 @@ export default function Gis({
           onNeighbourParcel={onNeighbourParcel}
           places={places}
           placesUntilZoom={9}
-          pins={pins}
+          pins={mapPins}
           onPlace={openMarket}
           // Drawing the Ask circle: the next click on the map is its centre,
           // and while it waits parcels are not picked.
@@ -4537,6 +4618,7 @@ export default function Gis({
                       return !on
                     })
                   if (id === 'zoning') setShowZoning((on) => !on)
+                  if (id === 'lists') setListsOn((on) => !on)
                   if (id.startsWith('x:')) {
                     const key = id.slice(2)
                     setLayerOn((current) => ({ ...current, [key]: !current[key] }))
