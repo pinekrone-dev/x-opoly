@@ -205,6 +205,7 @@ import {
 } from './lib/flyer.js'
 import { CATEGORIES, PlacesUnavailable, RING_MILES, nearbyBusinesses } from './lib/places.js'
 import { withLogos } from './lib/logos.js'
+import { LANDMARK_KINDS, LandmarksUnavailable, nearbyLandmarks } from './lib/landmarks.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
@@ -2119,6 +2120,29 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       return c.json(cacheable ? await lookups.places.remember(key, search) : await search())
     } catch (error) {
       if (error instanceof PlacesUnavailable) return c.json({ error: error.message }, 503)
+      throw error
+    }
+  })
+
+  /*
+   * Landmarks that sell a site: colleges, hospitals, stadiums, airports,
+   * malls, attractions, convention centres, military bases and the
+   * headquarters of major employers, from Wikidata. They move on the scale
+   * of years, so an answer is kept at the edge for a week, keyed by the
+   * point to about 100 m: Wikidata's query service is shared and rationed.
+   */
+  app.get('/api/places/landmarks', async (c) => {
+    const lat = Math.round(Number(c.req.query('lat')) * 1000) / 1000
+    const lng = Math.round(Number(c.req.query('lng')) * 1000) / 1000
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return c.json({ error: 'lat and lng are required.' }, 400)
+    const radius = Math.min(15, Math.max(0.5, Number(c.req.query('radius')) || 5))
+    const kinds = String(c.req.query('kinds') ?? '').split(',').map((k) => k.trim()).filter((k) => LANDMARK_KINDS[k]).sort()
+    const minEmployees = Math.max(100, Math.round(Number(c.req.query('minEmployees')) || 1000))
+    const params = { lat: String(lat), lng: String(lng), radius: String(radius), kinds: kinds.join(','), minEmployees: String(minEmployees) }
+    try {
+      return await edgeCached(c, 'landmarks-v1', 7 * 24 * 60 * 60, async () => c.json(await nearbyLandmarks({ lat, lng, radiusMiles: radius, kinds, minEmployees })), { params })
+    } catch (error) {
+      if (error instanceof LandmarksUnavailable) return c.json({ error: error.message }, 503)
       throw error
     }
   })
