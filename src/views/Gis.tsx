@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
+import ListPicker from '../components/ListPicker'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -3653,6 +3654,53 @@ export default function Gis({
   }
 
   /*
+   * A list on the map, ?list=<id>, from the lists page: its places as pins,
+   * labelled, and the map fitted to them. Dropped from the address like a
+   * view, so a reload does not pin them again over what was done since.
+   */
+  const linkedList = useRef<string | null>(new URLSearchParams(window.location.search).get('list'))
+  useEffect(() => {
+    const wanted = linkedList.current
+    if (!wanted || !meta) return
+    linkedList.current = null
+    const url = new URL(window.location.href)
+    url.searchParams.delete('list')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    api.lists
+      .get(wanted)
+      .then(({ list }) => {
+        const located = list.places.filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
+        setPins(
+          located.map((p) => ({
+            lat: Number(p.lat),
+            lng: Number(p.lng),
+            label: String(p.name || p.address || 'Place'),
+            detail: [list.name, p.acreage ? `${Number(p.acreage).toFixed(2)} ac` : null].filter(Boolean).join(' · '),
+          })),
+        )
+        if (located.length) {
+          const lats = located.map((p) => Number(p.lat))
+          const lngs = located.map((p) => Number(p.lng))
+          const span = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lngs) - Math.min(...lngs))
+          setLayerView({
+            center: [(Math.min(...lngs) + Math.max(...lngs)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2],
+            zoom: span > 0 ? Math.max(9, Math.min(16, Math.round(Math.log2(360 / span) - 0.5))) : 16,
+            key: Date.now(),
+          })
+        }
+        setViewNote({
+          tone: located.length ? 'ok' : 'warn',
+          text: located.length
+            ? `Showing "${list.name}": ${located.length} of ${list.count} places pinned.`
+            : `"${list.name}" has no places with a location to pin.`,
+        })
+      })
+      .catch(() => setViewNote({ tone: 'warn', text: 'That list is not in this workspace, or was deleted.' }))
+    // Runs once the market is framed, so the list's camera wins.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta])
+
+  /*
    * A link to a saved map, ?view=<id>, from a colleague or from the Claude
    * connector's make_map: opened once the county's own view has been
    * framed, so the saved camera wins, then dropped from the address so a
@@ -5486,6 +5534,16 @@ export default function Gis({
                   }}
                   label="+ Add to survey"
                   buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
+                <ListPicker
+                  key={`list:${active}:${selected}`}
+                  placeId={known?.place?.id ?? null}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return place.id
+                  }}
+                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
                 />
                 <button
                   type="button"

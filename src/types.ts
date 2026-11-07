@@ -531,6 +531,23 @@ export interface Place {
   updatedAt?: string
 }
 
+/** A named set of CRM places, filed by client and tags. */
+export interface PlaceList {
+  id: string
+  name: string
+  client: string | null
+  tags: string[]
+  count: number
+  createdAt?: string
+  updatedAt?: string
+  /** With ?place=: whether this list holds that place. */
+  has?: boolean
+}
+
+export interface PlaceListDetail extends PlaceList {
+  places: Place[]
+}
+
 /** A person, company or place brought into a deal, in a named role. */
 export interface DealParty {
   id: string

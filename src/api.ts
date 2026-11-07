@@ -1,4 +1,4 @@
-import type { AskCircle, LandmarksResult, ParcelRecords, ZoningReport, BookStyle,
+import type { AskCircle, LandmarksResult, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -173,6 +173,21 @@ export const api = {
 
   // --- CRM ------------------------------------------------------------------
   /** The four object types share one shape, so they share one set of calls. */
+  /** Lists of CRM places, filed by client and tags. */
+  lists: {
+    all: (placeId?: string) => request<{ lists: PlaceList[] }>(`/api/lists${placeId ? `?place=${encodeURIComponent(placeId)}` : ''}`),
+    get: (id: string) => request<{ list: PlaceListDetail }>(`/api/lists/${encodeURIComponent(id)}`),
+    create: (input: { name: string; client?: string | null; tags?: string[] | string }) =>
+      request<{ list: PlaceList }>('/api/lists', json(input)),
+    update: (id: string, patch: { name?: string; client?: string | null; tags?: string[] | string }) =>
+      request<{ list: PlaceList }>(`/api/lists/${encodeURIComponent(id)}`, { ...json(patch), method: 'PATCH' }),
+    remove: (id: string) => request<void>(`/api/lists/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    add: (id: string, placeIds: string[]) =>
+      request<{ added: number; missing: string[] }>(`/api/lists/${encodeURIComponent(id)}/places`, json({ placeIds })),
+    drop: (id: string, placeId: string) =>
+      request<void>(`/api/lists/${encodeURIComponent(id)}/places/${encodeURIComponent(placeId)}`, { method: 'DELETE' }),
+  },
+
   crm: {
     /**
      * A bounded list, newest first. `truncated` says more exist past the
