@@ -3,6 +3,7 @@ import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import ListPicker from '../components/ListPicker'
+import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -374,6 +375,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   transmission: LAYER_ICONS.pylon,
   substations: LAYER_ICONS.power,
   'power-plants': LAYER_ICONS.power,
+  traffic: LAYER_ICONS.traffic,
 }
 
 /*
@@ -2173,7 +2175,10 @@ export default function Gis({
 
   /** Every layer the panel and the map treat alike: published, comps, the summary, buildings and ships. */
   const shownLayers = useMemo(
-    () => [...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])],
+    () =>
+      [...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])].map((layer) =>
+        layerGroup(layer.id) === 'traffic' ? { ...layer, label: trafficLabel(layer) } : layer,
+      ),
     [published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
   )
 
@@ -3131,22 +3136,37 @@ export default function Gis({
       // is matched by label where one fits; the rest get the generic layers
       // mark, because a card must appear for a source this app has never
       // heard of — that is the point of the registry.
-      ...shownLayers.map(
-        (layer): LayerCard => ({
-          id: `x:${layer.id}`,
-          label: layer.label,
-          state: layerOn[layer.id] ? 'on' : 'off',
-          busy: Boolean(layerBusy[layer.id]),
-          note: layer.count
+      // Layers of one family (every traffic source a market has: the city
+      // segments, the state highways, a suburb's count stations) are one
+      // card, on or off together, so the map shows whichever cover the view.
+      ...groupLayers(shownLayers).map(({ key, members }): LayerCard => {
+        const layer = members[0]
+        if (members.length === 1 && key === layer.id) {
+          return {
+            id: `x:${layer.id}`,
+            label: layer.label,
+            state: layerOn[layer.id] ? 'on' : 'off',
+            busy: Boolean(layerBusy[layer.id]),
+            note: layer.count
               ? layer.total && layer.total > layer.count
                 // Say so plainly. A bounded layer that reports only its own
                 // size reads as the whole city, and is not.
                 ? `${layer.count.toLocaleString()} of ${layer.total.toLocaleString()}`
                 : `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : 'areas'}`
               : layer.note,
-          icon: PUBLISHED_ICONS[layer.id] ?? LAYER_ICONS.parcels,
-        }),
-      ),
+            icon: PUBLISHED_ICONS[layer.id] ?? LAYER_ICONS.parcels,
+          }
+        }
+        const counted = members.reduce((n, m) => n + (m.count ?? 0), 0)
+        return {
+          id: `g:${key}`,
+          label: GROUP_LABELS[key] ?? layer.label,
+          state: members.some((m) => layerOn[m.id]) ? 'on' : 'off',
+          busy: members.some((m) => layerBusy[m.id]),
+          note: counted ? `${counted.toLocaleString()} counts` : layer.note,
+          icon: PUBLISHED_ICONS[layer.id] ?? PUBLISHED_ICONS[key] ?? LAYER_ICONS.parcels,
+        }
+      }),
       // Still genuinely unbuilt: no public source publishes these, so they
       // stay honest rather than becoming empty cards.
       ...(published.some((l) => l.id === 'permits') ? [] : [pending('Development pipeline', LAYER_ICONS.pipeline)]),
@@ -4520,6 +4540,13 @@ export default function Gis({
                   if (id.startsWith('x:')) {
                     const key = id.slice(2)
                     setLayerOn((current) => ({ ...current, [key]: !current[key] }))
+                  }
+                  if (id.startsWith('g:')) {
+                    const members = shownLayers.filter((l) => layerGroup(l.id) === id.slice(2)).map((l) => l.id)
+                    setLayerOn((current) => {
+                      const on = !members.some((m) => current[m])
+                      return { ...current, ...Object.fromEntries(members.map((m) => [m, on])) }
+                    })
                   }
                 }}
               />

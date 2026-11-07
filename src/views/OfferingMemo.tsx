@@ -20,6 +20,7 @@ import { omPptx } from '../lib/omPptx'
 import { fullAddress, zipPlaces } from '../lib/address'
 import { numberAmenities } from '../lib/amenityGroups'
 import type { DocLayer } from '../lib/mapLayers'
+import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 
 interface Handoff {
   market: string
@@ -106,7 +107,7 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
             .filter((l) => l.tiles && (l.kind === 'polygon' || l.kind === 'line' || l.kind === 'point'))
             .map((l) => ({
               id: l.id,
-              label: l.label,
+              label: layerGroup(l.id) === 'traffic' ? trafficLabel(l) : l.label,
               kind: l.kind as DocLayer['kind'],
               color: readHandoff(market, id)?.layerColors?.[l.id] || l.color || '#7048e8',
               url: /^https:/.test(String(l.tiles)) ? String(l.tiles) : `${CATALOG}/${encodeURIComponent(market)}/${l.tiles}`,
@@ -349,17 +350,23 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
             <fieldset className="space-y-1 border-t border-line pt-3">
               <legend className="text-xs font-semibold text-ink">Map layers</legend>
               <p className="text-[11px] text-faint">Drawn on every map in the OM, with a key.</p>
-              {available.map((l) => (
-                <label key={l.id} className="flex items-center gap-2 text-xs text-body">
-                  <input
-                    type="checkbox"
-                    checked={layerIds.includes(l.id)}
-                    onChange={(e) => setLayerIds((ids) => (e.target.checked ? [...ids, l.id] : ids.filter((id) => id !== l.id)))}
-                  />
-                  <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: l.color }} />
-                  {l.label}
-                </label>
-              ))}
+              {groupLayers(available).map(({ key, members }) => {
+                const ids = members.map((m) => m.id)
+                const on = ids.some((id) => layerIds.includes(id))
+                return (
+                  <label key={key} className="flex items-center gap-2 text-xs text-body">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={(e) =>
+                        setLayerIds((current) => (e.target.checked ? [...new Set([...current, ...ids])] : current.filter((id) => !ids.includes(id))))
+                      }
+                    />
+                    <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: members[0].color }} />
+                    {members.length > 1 ? GROUP_LABELS[key] ?? members[0].label : members[0].label}
+                  </label>
+                )
+              })}
             </fieldset>
           )}
           <fieldset className="space-y-2 border-t border-line pt-3">
