@@ -4101,6 +4101,14 @@ export default function Gis({
       address: fullAddress(parcel, active).full || String(parcel.ad || ''),
       center: centre,
       rows: panelRows(meta?.panel ?? [], parcel, detail, codes),
+      // The layers switched on here go onto the memo's maps, in the colours
+      // they are drawn in here.
+      layers: Object.keys(layerOn).filter((id) => layerOn[id]),
+      layerColors: Object.fromEntries(
+        Object.entries(layerStyle)
+          .filter(([, style]) => style?.color)
+          .map(([id, style]) => [id, style.color]),
+      ),
       at: Date.now(),
     }
     try {
