@@ -261,3 +261,12 @@ test('an Overpass remark is a failure, and the next instance is asked', async ()
   const never = async () => Response.json({ elements: [], remark: 'runtime error: open64: 0 Success /osm3s_osm_base Dispatcher_Client::request_read_and_idx::rate_limited' })
   await assert.rejects(nearbyBusinesses({ lat: 30, lng: -97, category: 'chains', radiusMiles: 1, fetchImpl: never }), /did not finish/)
 })
+
+test('object and array arguments sent as JSON strings are read back', async () => {
+  const { parsedArguments } = await import('../app/lib/mcp.js')
+  const out = parsedArguments('make_map', { market: 'x', name: 'y', nearby: '{"category":"chains"}', pins: '[{"lat":1,"lng":2,"label":"a"}]', circle: 'not json' })
+  assert.deepEqual(out.nearby, { category: 'chains' })
+  assert.equal(out.pins.length, 1)
+  assert.equal(out.circle, 'not json')
+  assert.equal(out.name, 'y')
+})
