@@ -93,9 +93,11 @@ export async function brandLogos(qids, { fetchImpl = fetch, timeout = 8000, widt
 
   // The brands' logo files and websites.
   const facts = new Map()
-  for (const group of chunks(missing, BATCH)) {
-    const url = `${WIKIDATA}?action=wbgetentities&props=claims&format=json&ids=${encodeURIComponent(group.join('|'))}`
-    const body = await getJson(fetchImpl, url, timeout)
+  const groups = chunks(missing, BATCH)
+  const answers = await Promise.all(groups.map((group) =>
+    getJson(fetchImpl, `${WIKIDATA}?action=wbgetentities&props=claims&format=json&ids=${encodeURIComponent(group.join('|'))}`, timeout)))
+  for (const [i, group] of groups.entries()) {
+    const body = answers[i]
     if (!body?.entities) continue
     for (const q of group) {
       const claims = body.entities[q]?.claims
@@ -107,10 +109,11 @@ export async function brandLogos(qids, { fetchImpl = fetch, timeout = 8000, widt
   // The logo files' thumbnails, from Commons.
   const files = [...new Set([...facts.values()].map((f) => f.file).filter(Boolean))]
   const thumbs = new Map()
-  for (const group of chunks(files, BATCH)) {
+  const pages = await Promise.all(chunks(files, BATCH).map((group) => {
     const titles = group.map((f) => `File:${f}`).join('|')
-    const url = `${COMMONS}?action=query&prop=imageinfo&iiprop=url&iiurlwidth=${width}&format=json&titles=${encodeURIComponent(titles)}`
-    const body = await getJson(fetchImpl, url, timeout)
+    return getJson(fetchImpl, `${COMMONS}?action=query&prop=imageinfo&iiprop=url&iiurlwidth=${width}&format=json&titles=${encodeURIComponent(titles)}`, timeout)
+  }))
+  for (const body of pages) {
     if (!body?.query?.pages) continue
     // Commons answers under its own spelling of each title (spaces, not
     // underscores; a capital first letter), and says which it changed.
