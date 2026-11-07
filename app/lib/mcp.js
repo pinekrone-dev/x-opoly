@@ -548,6 +548,8 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
       if (!input.market || !input.name) return failure('market and name are required.')
       const state = viewState(input)
       let pinned = 0
+      let foundCount
+      let foundSource
       if (input.nearby && typeof input.nearby === 'object') {
         const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
         if (!at) return failure('nearby needs a center or a circle to search around.')
@@ -555,6 +557,8 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
         const found = await ask(`/api/places/nearby?${nearbyQuery(at.lat, at.lng, options)}`)
         if (found.status !== 200) return failure(refusal(found))
         const businesses = Array.isArray(found.body?.results) ? found.body.results : []
+        foundCount = businesses.length
+        foundSource = found.body?.source
         const pins = pinList([...(state.pins ?? []), ...businesses.map(businessPin)])
         pinned = pins.length - (state.pins?.length ?? 0)
         if (pins.length) state.pins = pins
@@ -571,6 +575,8 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
         saved: answer.body?.view?.name,
         pins: state.pins?.length || undefined,
         nearbyPinned: input.nearby ? pinned : undefined,
+        nearbyFound: input.nearby ? foundCount : undefined,
+        nearbySource: input.nearby ? foundSource : undefined,
         link: `${origin}/gis/${encodeURIComponent(input.market)}?view=${encodeURIComponent(id)}`,
       })
     }
