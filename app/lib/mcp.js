@@ -11,12 +11,13 @@
 
 import { fullAddress } from '../../src/lib/address.ts'
 import { safeLogo } from './logos.js'
+import { squeeze } from './places.js'
 
 export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the businesses around a point (retail by default, or restaurants, grocery, banks...) with each chain's brand and logo. make_map saves a map (layers, criteria, a circle, pins with brand logos) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. make_map saves a map (layers, criteria, a circle, pins with brand logos) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files and cannot be searched here yet; the tool says so.`
 
@@ -59,13 +60,22 @@ const CRITERIA = {
 }
 
 /** The business kinds nearby_retail and make_map's nearby know, as app/lib/places.js names them. */
-const PLACE_KINDS = ['retail', 'restaurant', 'cafe', 'grocery', 'pharmacy', 'bank', 'fitness', 'salon', 'medical', 'dentist', 'veterinary', 'childcare']
+const PLACE_KINDS = ['chains', 'retail', 'restaurant', 'cafe', 'grocery', 'pharmacy', 'bank', 'fitness', 'salon', 'medical', 'dentist', 'veterinary', 'childcare']
 
 const NEARBY = {
-  category: { type: 'string', enum: PLACE_KINDS, description: 'What kind of business (default retail: any shop).' },
-  keyword: { type: 'string', maxLength: 60, description: 'A brand or name to look for, e.g. Starbucks or "Dollar".' },
+  category: {
+    type: 'string',
+    enum: PLACE_KINDS,
+    description: 'What to find. chains (default): the national and regional brands, Target to Zaxby\'s, across shops, restaurants, banks and fuel, leaving out independents. retail: every shop, independents included. The rest: every business of that kind.',
+  },
+  brands: {
+    type: 'array',
+    maxItems: 25,
+    items: { type: 'string', maxLength: 60 },
+    description: 'Particular chains to look for, e.g. ["Target", "Chick-fil-A", "Zaxbys"]: each comes back with its nearest store, or as not found within the radius. Spelling is forgiving.',
+  },
+  keyword: { type: 'string', maxLength: 60, description: 'A name to look for among every business of the category, e.g. "Dollar".' },
   radiusMiles: { type: 'number', minimum: 0.25, maximum: 10, description: 'How far from the point (default 1 mile).' },
-  brandsOnly: { type: 'boolean', description: 'Only chains and branded stores, leaving out independents.' },
 }
 
 /** As many pins as one map carries: a saved map holds settings, not data. */
@@ -146,7 +156,7 @@ export const TOOLS = [
   {
     name: 'nearby_retail',
     title: 'Nearby retail',
-    description: 'The businesses around a point: retail by default, or restaurants, cafes, grocery, pharmacies, banks, gyms and more. Each comes with its brand, distance, address and a logo (the brand logo from Wikidata for chains, otherwise the store website\'s icon), plus counts within 1, 3 and 5 miles and the brands present. Give lat and lng, or an address. Pass the results to make_map as pins, or use make_map nearby, to see them on the map.',
+    description: 'The national and regional chains around a point (Target, Walmart, Chick-fil-A, Zaxby\'s, Starbucks, CVS, Chase...), each with its brand logo, sector, distance and address; the tenant mix by sector (quick service, grocery, department & big box, pharmacy, banks, convenience & fuel...); each brand present with its count and nearest store; and counts within 1, 3 and 5 miles. Ask for particular brands to get the nearest of each or "not within the radius". Other categories list every business of a kind, independents included. Give lat and lng, or an address. Use make_map nearby, or pass these as make_map pins, to see them on the map.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -154,7 +164,7 @@ export const TOOLS = [
         lng: { type: 'number' },
         address: { type: 'string', description: 'Used when lat and lng are not given.' },
         ...NEARBY,
-        limit: { type: 'integer', minimum: 1, maximum: 80, description: 'How many businesses to list, nearest first (default 40).' },
+        limit: { type: 'integer', minimum: 1, maximum: 150, description: 'How many stores to list, nearest first (default 40). The brand and sector summaries always cover every store found.' },
       },
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
@@ -182,7 +192,7 @@ export const TOOLS = [
         nearby: {
           type: 'object',
           properties: NEARBY,
-          description: 'Pin the businesses around the centre (or the circle) with their logos, found as nearby_retail finds them.',
+          description: 'Pin the chains (or other businesses) around the centre or circle with their logos, found as nearby_retail finds them.',
         },
       },
       required: ['market', 'name'],
@@ -302,11 +312,18 @@ export function businessPin(b) {
   }
 }
 
-/** Query string for /api/places/nearby, with logos. */
+/** The brands asked for, cleaned. */
+function brandList(value) {
+  return (Array.isArray(value) ? value : []).map((b) => String(b).replace(/\|/g, ' ').trim().slice(0, 60)).filter((b) => squeeze(b)).slice(0, 25)
+}
+
+/** Query string for /api/places/nearby, with logos. Brands are always among the chains. */
 function nearbyQuery(lat, lng, options = {}) {
   const p = new URLSearchParams({ lat: String(lat), lng: String(lng), logos: '1' })
-  p.set('category', PLACE_KINDS.includes(options.category) ? options.category : 'retail')
-  if (options.keyword) p.set('keyword', String(options.keyword).slice(0, 60))
+  const brands = brandList(options.brands)
+  p.set('category', brands.length ? 'chains' : PLACE_KINDS.includes(options.category) ? options.category : 'chains')
+  if (brands.length) p.set('brands', brands.join('|'))
+  else if (options.keyword) p.set('keyword', String(options.keyword).slice(0, 60))
   const miles = Number(options.radiusMiles)
   p.set('radius', String(Number.isFinite(miles) ? Math.min(10, Math.max(0.25, miles)) : 1))
   return p
@@ -475,28 +492,45 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
       const answer = await ask(`/api/places/nearby?${nearbyQuery(lat, lng, input)}`)
       if (answer.status !== 200) return failure(refusal(answer))
       const b = answer.body || {}
-      let all = Array.isArray(b.results) ? b.results : []
-      if (input.brandsOnly) all = all.filter((r) => r.brand)
-      const limit = Math.min(80, Math.max(1, Number(input.limit) || 40))
-      const brands = new Map()
+      const all = Array.isArray(b.results) ? b.results : []
+      const limit = Math.min(150, Math.max(1, Number(input.limit) || 40))
+      const brandsSeen = new Map()
+      const sectors = {}
       for (const r of all) {
-        if (!r.brand) continue
-        const seen = brands.get(r.brand) ?? { brand: r.brand, count: 0, logo: null }
+        if (r.sector) sectors[r.sector] = (sectors[r.sector] ?? 0) + 1
+        const key = r.brand || (r.brandWikidata ? r.name : null)
+        if (!key) continue
+        const seen = brandsSeen.get(key) ?? { brand: key, sector: r.sector ?? undefined, count: 0, nearestMiles: r.miles, logo: undefined }
         seen.count += 1
+        seen.nearestMiles = Math.min(seen.nearestMiles, r.miles)
         if (!seen.logo && r.logoSource === 'brand') seen.logo = r.logo
-        brands.set(r.brand, seen)
+        brandsSeen.set(key, seen)
       }
+      const asked = brandList(input.brands)
+      const lookingFor = asked.length
+        ? asked.map((wanted) => {
+            const w = squeeze(wanted)
+            const hits = all.filter((r) => squeeze(r.brand).includes(w) || squeeze(r.name).includes(w))
+            if (!hits.length) return { brand: wanted, found: 0, note: `None within ${b.radiusMiles} miles in the directory.` }
+            const near = hits[0]
+            return { brand: wanted, found: hits.length, nearestMiles: near.miles, nearest: { name: near.name, address: near.address ?? undefined, lat: near.lat, lng: near.lng }, logo: hits.find((h) => h.logoSource === 'brand')?.logo }
+          })
+        : undefined
+      const category = asked.length ? 'chains' : PLACE_KINDS.includes(input.category) ? input.category : 'chains'
       return result({
         center: { lat, lng, ...(place ? { place } : {}) },
         radiusMiles: b.radiusMiles,
-        category: PLACE_KINDS.includes(input.category) ? input.category : 'retail',
+        category,
         source: b.source,
         found: all.length,
         withinMiles: Object.fromEntries((b.rings || []).map((ring) => [ring.miles, ring.count])),
-        brands: [...brands.values()].sort((x, y) => y.count - x.count).slice(0, 30),
-        businesses: all.slice(0, limit).map((r) => ({
+        lookingFor,
+        sectors: Object.fromEntries(Object.entries(sectors).sort((x, y) => y[1] - x[1])),
+        brands: [...brandsSeen.values()].sort((x, y) => y.count - x.count || x.nearestMiles - y.nearestMiles).slice(0, 60),
+        stores: all.slice(0, limit).map((r) => ({
           name: r.name,
           brand: r.brand ?? undefined,
+          sector: r.sector ?? undefined,
           category: r.category ?? undefined,
           address: r.address ?? undefined,
           miles: r.miles,
@@ -504,9 +538,8 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
           lng: r.lng,
           logo: r.logo ?? undefined,
           logoSource: r.logoSource ?? undefined,
-          website: r.website ?? undefined,
         })),
-        note: 'Businesses are from the directory named in source, which misses some small tenants; a count is a floor, not a census. Logos marked brand are the chain\'s logo on Wikidata; favicon is the store website\'s own icon.',
+        note: `From ${b.source || 'the business directory'}. ${category === 'chains' ? 'Chains are the stores the directory ties to a brand on Wikidata; a new or untagged store can be missing, so a count is a floor. ' : 'Small tenants can be missing, so a count is a floor. '}Logos marked brand are the chain's logo on Wikidata; favicon is the store website's own icon.${all.length >= 300 ? ' The directory stops at 300 stores: use a smaller radius for a full count.' : ''}`,
       })
     }
 
@@ -521,8 +554,7 @@ export async function runTool(name, input = {}, { call, origin, scope = [] }) {
         const options = { ...input.nearby, radiusMiles: input.nearby.radiusMiles ?? state.circle?.miles ?? 1 }
         const found = await ask(`/api/places/nearby?${nearbyQuery(at.lat, at.lng, options)}`)
         if (found.status !== 200) return failure(refusal(found))
-        let businesses = Array.isArray(found.body?.results) ? found.body.results : []
-        if (input.nearby.brandsOnly) businesses = businesses.filter((r) => r.brand)
+        const businesses = Array.isArray(found.body?.results) ? found.body.results : []
         const pins = pinList([...(state.pins ?? []), ...businesses.map(businessPin)])
         pinned = pins.length - (state.pins?.length ?? 0)
         if (pins.length) state.pins = pins

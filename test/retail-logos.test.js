@@ -7,7 +7,7 @@ import test from 'node:test'
 
 import { brandLogos, clearLogoMemo, faviconFor, safeLogo, withLogos } from '../app/lib/logos.js'
 import { MAX_PINS, TOOLS, businessPin, pinList, runTool, viewState } from '../app/lib/mcp.js'
-import { parseElements } from '../app/lib/places.js'
+import { buildQuery, loosePattern, parseElements, sectorOf } from '../app/lib/places.js'
 
 const WALMART_THUMB = 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Walmart_logo.svg/128px-Walmart_logo.svg.png'
 
@@ -147,32 +147,64 @@ function app(routes) {
 
 const NEARBY = {
   results: [
-    { name: 'Target', brand: 'Target', category: 'department store', address: '1 Main St', miles: 0.3, lat: 30.27, lng: -97.74, logo: WALMART_THUMB, logoSource: 'brand' },
-    { name: 'Target Express', brand: 'Target', category: 'department store', miles: 0.8, lat: 30.28, lng: -97.74, logo: WALMART_THUMB, logoSource: 'brand' },
-    { name: 'Corner Books', brand: null, category: 'books', miles: 1.2, lat: 30.29, lng: -97.74, logo: null, logoSource: null },
+    { name: 'Target', brand: 'Target', brandWikidata: 'Q1046951', sector: 'Department & big box', category: 'department store', address: '1 Main St', miles: 0.3, lat: 30.27, lng: -97.74, logo: WALMART_THUMB, logoSource: 'brand' },
+    { name: "Zaxby's", brand: "Zaxby's", brandWikidata: 'Q8067525', sector: 'Quick service', category: 'fast food', miles: 0.6, lat: 30.275, lng: -97.74, logo: WALMART_THUMB, logoSource: 'brand' },
+    { name: 'Target Express', brand: 'Target', brandWikidata: 'Q1046951', sector: 'Department & big box', category: 'department store', miles: 0.8, lat: 30.28, lng: -97.74, logo: WALMART_THUMB, logoSource: 'brand' },
   ],
-  rings: [{ miles: 1, count: 2 }, { miles: 3, count: 3 }, { miles: 5, count: 3 }],
+  rings: [{ miles: 1, count: 3 }, { miles: 3, count: 3 }, { miles: 5, count: 3 }],
   radiusMiles: 2,
   source: 'OpenStreetMap via Overpass',
 }
 
-test('nearby_retail geocodes an address and asks for logos', async () => {
+test('nearby_retail defaults to chains, with sectors and each brand\'s nearest store', async () => {
   const { call, seen } = app({
     '/api/geocode': [200, { results: [{ label: '100 Congress Ave, Austin', lat: 30.26, lng: -97.74 }] }],
     '/api/places/nearby': [200, NEARBY],
   })
-  const out = await runTool('nearby_retail', { address: '100 Congress Ave, Austin TX', radiusMiles: 2, brandsOnly: true }, { call, origin: 'https://lq.test' })
+  const out = await runTool('nearby_retail', { address: '100 Congress Ave, Austin TX', radiusMiles: 2 }, { call, origin: 'https://lq.test' })
   assert.ok(!out.isError, JSON.stringify(out))
   const asked = new URL(`https://x${seen[1].path}`)
   assert.equal(asked.searchParams.get('logos'), '1')
-  assert.equal(asked.searchParams.get('category'), 'retail')
+  assert.equal(asked.searchParams.get('category'), 'chains')
   assert.equal(asked.searchParams.get('radius'), '2')
   const b = out.structuredContent
   assert.equal(b.center.place, '100 Congress Ave, Austin')
-  assert.equal(b.found, 2)
-  assert.deepEqual(b.brands, [{ brand: 'Target', count: 2, logo: WALMART_THUMB }])
-  assert.deepEqual(b.withinMiles, { 1: 2, 3: 3, 5: 3 })
-  assert.equal(b.businesses[0].logoSource, 'brand')
+  assert.equal(b.found, 3)
+  assert.deepEqual(b.sectors, { 'Department & big box': 2, 'Quick service': 1 })
+  assert.deepEqual(b.brands[0], { brand: 'Target', sector: 'Department & big box', count: 2, nearestMiles: 0.3, logo: WALMART_THUMB })
+  assert.deepEqual(b.withinMiles, { 1: 3, 3: 3, 5: 3 })
+  assert.equal(b.stores[1].sector, 'Quick service')
+})
+
+test('nearby_retail finds particular brands, forgiving spelling, and says which are absent', async () => {
+  const { call, seen } = app({ '/api/places/nearby': [200, NEARBY] })
+  const out = await runTool('nearby_retail', { lat: 30.27, lng: -97.74, category: 'retail', brands: ['Zaxbys', 'Chick-fil-A'] }, { call, origin: 'https://lq.test' })
+  const asked = new URL(`https://x${seen[0].path}`)
+  assert.equal(asked.searchParams.get('category'), 'chains')
+  assert.equal(asked.searchParams.get('brands'), 'Zaxbys|Chick-fil-A')
+  const [zax, cfa] = out.structuredContent.lookingFor
+  assert.equal(zax.found, 1)
+  assert.equal(zax.nearestMiles, 0.6)
+  assert.equal(cfa.found, 0)
+})
+
+test('a chains search asks OpenStreetMap for brand-tagged storefronts only', () => {
+  const q = buildQuery({ lat: 30, lng: -97, radiusMeters: 1609, category: 'chains' })
+  assert.match(q, /nwr\["brand:wikidata"\]\["amenity"!~"\^\(atm\|/)
+  assert.match(q, /out center 300;/)
+  const brands = buildQuery({ lat: 30, lng: -97, radiusMeters: 1609, category: 'chains', keyword: ["Zaxby's", 'Target'] })
+  assert.ok(brands.includes(loosePattern("Zaxby's")))
+  assert.ok(!brands.includes('"amenity"!~'), 'a brand search is the brands, nothing else')
+  assert.equal(loosePattern('Chick-fil-A'), 'c[^[:alnum:]]*h[^[:alnum:]]*i[^[:alnum:]]*c[^[:alnum:]]*k[^[:alnum:]]*f[^[:alnum:]]*i[^[:alnum:]]*l[^[:alnum:]]*a')
+})
+
+test('stores are sorted into sectors', () => {
+  assert.equal(sectorOf({ amenity: 'fast_food' }), 'Quick service')
+  assert.equal(sectorOf({ shop: 'department_store' }), 'Department & big box')
+  assert.equal(sectorOf({ shop: 'supermarket' }), 'Grocery & club')
+  assert.equal(sectorOf({ amenity: 'fuel' }), 'Convenience & fuel')
+  assert.equal(sectorOf({ shop: 'variety_store' }), 'Discount & dollar')
+  assert.equal(sectorOf({ amenity: 'bank' }), 'Banks')
 })
 
 test('nearby_retail needs a point', async () => {
@@ -192,12 +224,12 @@ test('make_map nearby pins the businesses around the circle', async () => {
   })
   const out = await runTool(
     'make_map',
-    { market: 'austin-tx', name: 'Retail near site', circle: { lat: 30.27, lng: -97.74, miles: 1 }, nearby: { brandsOnly: true }, pins: [{ lat: 30.27, lng: -97.74, label: 'Site' }] },
+    { market: 'austin-tx', name: 'Retail near site', circle: { lat: 30.27, lng: -97.74, miles: 1 }, nearby: {}, pins: [{ lat: 30.27, lng: -97.74, label: 'Site' }] },
     { call, origin: 'https://lq.test', scope: ['maps'] },
   )
   assert.ok(!out.isError, JSON.stringify(out))
-  assert.equal(out.structuredContent.pins, 3)
-  assert.equal(out.structuredContent.nearbyPinned, 2)
+  assert.equal(out.structuredContent.pins, 4)
+  assert.equal(out.structuredContent.nearbyPinned, 3)
   assert.equal(saved.state.pins[0].label, 'Site')
   assert.equal(saved.state.pins[1].logo, WALMART_THUMB)
   assert.equal(out.structuredContent.link, 'https://lq.test/gis/austin-tx?view=v1')
