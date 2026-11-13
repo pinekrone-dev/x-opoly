@@ -318,4 +318,6 @@ export const LAYER_ICONS = {
   lists: <><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1" /><circle cx="4.5" cy="12" r="1" /><circle cx="4.5" cy="18" r="1" /></>,
   // A road with its centre line, for traffic counts.
   traffic: <><path d="M8 3L5 21M16 3l3 18" /><path d="M12 4v3M12 10.5v3M12 17v3" /></>,
+  // A trail winding past a tree, for parks and recreation.
+  trail: <><path d="M5 21c0-4 7-4 7-8s-5-3-5-6" /><path d="M17 3l3.5 6h-7z" /><path d="M17 9v3" /></>,
 }
