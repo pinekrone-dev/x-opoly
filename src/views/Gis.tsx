@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
+import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
@@ -5644,6 +5645,28 @@ export default function Gis({
                   label="+ Add to survey"
                   buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
                 />
+                <DealPicker
+                  key={`deal:${active}:${selected}:${known?.place?.id ?? ''}`}
+                  kind="place"
+                  refId={known?.place?.id ?? null}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return place.id
+                  }}
+                  defaultRole="Candidate"
+                  defaultName={String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)}
+                  label="+ Add to deal"
+                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
+                  onChanged={() => {
+                    // The card lists the deals this parcel is on; read them again.
+                    if (!active || selected == null) return
+                    api.crm
+                      .parcel(active, String(selected))
+                      .then(setKnown)
+                      .catch(() => undefined)
+                  }}
+                />
                 <ListPicker
                   key={`list:${active}:${selected}`}
                   placeId={known?.place?.id ?? null}
@@ -5876,7 +5899,7 @@ export default function Gis({
                       className="text-[11px] text-body hover:underline"
                       onClick={() => navigate(`/deals/${deal.id}`)}
                     >
-                      {deal.name} · {deal.stage}
+                      {deal.name} · {stageWords(deal.stage)}
                     </button>
                   </li>
                 ))}

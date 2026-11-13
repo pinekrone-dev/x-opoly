@@ -2,6 +2,7 @@ import type { AskCircle, LandmarksResult, ListPin, PlaceList, PlaceListDetail, P
   Account,
   CrmRecord,
   Deal,
+  DealOn,
   Place,
   RecordType,
   BillingConfig,
@@ -217,6 +218,11 @@ export const api = {
     update: <T = CrmRecord>(segment: string, id: string, patch: Record<string, unknown>) =>
       request<{ record: T }>(`/api/crm/${segment}/${id}`, { ...json(patch), method: 'PATCH' }),
     remove: (segment: string, id: string) => request<void>(`/api/crm/${segment}/${id}`, { method: 'DELETE' }),
+    /** The deals a person, company or place is on, each with this record's role on it. */
+    dealsOf: (segment: string, id: string) => request<{ deals: DealOn[] }>(`/api/crm/${segment}/${id}/deals`),
+    /** Opens a deal with its first party already on it: the contact it is for, or the site it began with. */
+    startDeal: (name: string, party: { kind: RecordType; refId: string; role?: string }) =>
+      request<{ record: Deal }>('/api/crm/deals', json({ name, party })),
     addParty: (dealId: string, input: { kind: RecordType; refId: string; role?: string }) =>
       request<{ deal: Deal }>(`/api/crm/deals/${dealId}/parties`, json(input)),
     removeParty: (dealId: string, partyId: string) =>

@@ -96,6 +96,7 @@ import {
   countRecords,
   createRecord,
   dealWithParties,
+  dealsFor,
   deleteRecord,
   getRecord,
   listRecords,
@@ -1838,10 +1839,51 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     app.post(`/api/crm/${segment}`, async (c) => {
       const user = c.get('user')
       if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-      const result = await createRecord(db, recordType, user.teamId, await c.req.json().catch(() => ({})))
+      const body = await c.req.json().catch(() => ({}))
+
+      /*
+       * A deal may be opened with its first party already on it: the contact
+       * it is for, or the site it started from. One request rather than a
+       * create and then an add, so a deal started from a person's page cannot
+       * be left behind with nobody on it when the second call fails. The
+       * party is checked before the deal is made, for the same reason.
+       */
+      const party = recordType === 'deal' && body?.party && typeof body.party === 'object' ? body.party : null
+      if (party) {
+        const kind = String(party.kind ?? '')
+        const known = ['person', 'company', 'place'].includes(kind)
+          ? await getRecord(db, kind, user.teamId, String(party.refId ?? ''))
+          : null
+        if (!known) return c.json({ error: 'That record could not be found.' }, 400)
+      }
+
+      const result = await createRecord(db, recordType, user.teamId, body)
       if (result.error) return c.json({ error: result.error }, 400)
-      return c.json({ record: result.record }, 201)
+      if (!party) return c.json({ record: result.record }, 201)
+
+      const added = await addParty(db, user.teamId, result.record.id, {
+        kind: String(party.kind),
+        refId: String(party.refId),
+        role: party.role ? String(party.role).slice(0, 80) : null,
+      })
+      if (added.error) return c.json({ error: added.error }, 400)
+      return c.json({ record: await dealWithParties(db, user.teamId, result.record.id) }, 201)
     })
+
+    /*
+     * The deals this person, company or place is on. A deal's own page lists
+     * its parties; this is the same join read from the other end, so a
+     * contact's page can show what is open for them.
+     */
+    if (recordType !== 'deal') {
+      app.get(`/api/crm/${segment}/:id/deals`, async (c) => {
+        const user = c.get('user')
+        if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+        const record = await getRecord(db, recordType, user.teamId, c.req.param('id'))
+        if (!record) return notFound(c, 'That record does not exist.')
+        return c.json({ deals: await dealsFor(db, user.teamId, recordType, record.id) })
+      })
+    }
 
     app.get(`/api/crm/${segment}/:id`, async (c) => {
       const user = c.get('user')

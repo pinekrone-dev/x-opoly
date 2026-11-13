@@ -187,6 +187,69 @@ describe('the CRM objects', () => {
   })
 })
 
+describe('a deal that starts with a contact', () => {
+  let opened
+
+  test('a deal opens with one person on it and nothing else', async () => {
+    const created = await alice(
+      '/api/crm/deals',
+      asJson({ name: 'Dana Ortiz', party: { kind: 'person', refId: person.id, role: 'Tenant' } }),
+    )
+    assert.equal(created.status, 201)
+    opened = created.body.record
+    assert.equal(opened.stage, 'prospect', 'it is open, at the first stage')
+    assert.equal(opened.parties.length, 1)
+    assert.equal(opened.parties[0].kind, 'person')
+    assert.equal(opened.parties[0].role, 'Tenant')
+  })
+
+  test('the person lists the deals they are on, with their role', async () => {
+    const { status, body } = await alice(`/api/crm/people/${person.id}/deals`)
+    assert.equal(status, 200)
+    const names = body.deals.map((d) => d.name)
+    assert.ok(names.includes('Dana Ortiz') && names.includes('Vega — Costa Mesa'))
+    const mine = body.deals.find((d) => d.id === opened.id)
+    assert.equal(mine.partyRole, 'Tenant')
+    assert.ok(mine.partyId, 'the party row is named, so the page can take them off the deal')
+  })
+
+  test('a candidate site is added to the open deal later', async () => {
+    const added = await alice(
+      `/api/crm/deals/${opened.id}/parties`,
+      asJson({ kind: 'place', refId: place.id, role: 'Candidate' }),
+    )
+    assert.equal(added.status, 201)
+    const { body } = await alice(`/api/crm/places/${place.id}/deals`)
+    assert.ok(body.deals.some((d) => d.id === opened.id && d.partyRole === 'Candidate'))
+    const deal = await alice(`/api/crm/deals/${opened.id}`)
+    assert.deepEqual(deal.body.record.parties.map((p) => p.kind).sort(), ['person', 'place'])
+  })
+
+  test('taking the site off the deal takes the deal off the site', async () => {
+    const { body } = await alice(`/api/crm/places/${place.id}/deals`)
+    const row = body.deals.find((d) => d.id === opened.id)
+    assert.equal((await alice(`/api/crm/deals/${opened.id}/parties/${row.partyId}`, { method: 'DELETE' })).status, 204)
+    const after = await alice(`/api/crm/places/${place.id}/deals`)
+    assert.ok(!after.body.deals.some((d) => d.id === opened.id))
+  })
+
+  test('a deal is not made around a record that does not exist, or a kind that cannot be on one', async () => {
+    const before = (await alice('/api/crm/deals')).body.records.length
+    const missing = await alice('/api/crm/deals', asJson({ name: 'Nobody', party: { kind: 'person', refId: 'nope' } }))
+    assert.equal(missing.status, 400)
+    const wrong = await alice('/api/crm/deals', asJson({ name: 'Wrong', party: { kind: 'deal', refId: opened.id } }))
+    assert.equal(wrong.status, 400)
+    assert.equal((await alice('/api/crm/deals')).body.records.length, before, 'no deal was left behind')
+  })
+
+  test("another team cannot open a deal around this team's contact, or read their deals", async () => {
+    const stolen = await mallory('/api/crm/deals', asJson({ name: 'Poach', party: { kind: 'person', refId: person.id } }))
+    assert.equal(stolen.status, 400)
+    assert.equal((await mallory(`/api/crm/people/${person.id}/deals`)).status, 404)
+    assert.equal((await client()(`/api/crm/people/${person.id}/deals`)).status, 401)
+  })
+})
+
 describe('sending a place into a survey', () => {
   let surveyId
 

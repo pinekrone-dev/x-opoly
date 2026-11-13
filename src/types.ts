@@ -585,6 +585,9 @@ export interface Deal {
   updatedAt?: string
 }
 
+/** A deal as seen from one of its parties: the deal, and that party's place on it. */
+export type DealOn = Deal & { partyId: string; partyRole?: string | null }
+
 export type CrmRecord = Company | Person | Place | Deal
 
 /*
