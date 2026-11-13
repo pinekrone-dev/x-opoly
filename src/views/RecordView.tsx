@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import BrandMark from '../components/BrandMark'
 import ConfirmDelete from '../components/ConfirmDelete'
 import DealEconomics from '../components/DealEconomics'
+import DealPicker, { stageWords } from '../components/DealPicker'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
@@ -10,7 +11,7 @@ import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
 import { countyCounts, describeMismatch, listingCounts, mismatches } from '../lib/listingCheck'
 import type { PanelGroup } from '../components/ParcelPanel'
 import type { DetailField } from '../lib/crm'
-import type { CrmRecord, Deal, DealParty, Place, RecordField, RecordType, Survey } from '../types'
+import type { CrmRecord, Deal, DealOn, DealParty, Place, RecordField, RecordType, Survey } from '../types'
 
 /**
  * One CRM record, and everything attached to it.
@@ -25,6 +26,9 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [fields, setFields] = useState<RecordField[]>([])
+  // Bumped when this record is put on a deal or taken off one, so the list of
+  // its deals below is read again.
+  const [dealsVersion, setDealsVersion] = useState(0)
 
   const load = () =>
     api.crm
@@ -158,6 +162,19 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           <div className="flex flex-wrap items-center gap-2">
             {deal ? <OpenSurvey deal={deal} canEdit={canEdit} onLinked={(updated) => setRecord(updated)} /> : null}
             {recordType === 'place' && canEdit ? <SendPlaceToSurvey placeIds={[id]} /> : null}
+            {recordType !== 'deal' && canEdit ? (
+              // A deal can start here, with this record on it and nothing
+              // else: the sites are added as they are found.
+              <DealPicker
+                key={`${recordType}:${id}`}
+                kind={recordType}
+                refId={id}
+                defaultName={titleOf(recordType, record)}
+                defaultRole={recordType === 'place' ? 'Candidate' : ''}
+                openNewDeal
+                onChanged={() => setDealsVersion((n) => n + 1)}
+              />
+            ) : null}
             {canEdit ? <ConfirmDelete what={`this ${spec.singular.toLowerCase()}`} onConfirm={remove} /> : null}
           </div>
         </div>
@@ -177,6 +194,8 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
         {deal ? <DealEconomics deal={deal} canEdit={canEdit} onSaved={(updated) => setRecord(updated)} /> : null}
 
         {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
+
+        {recordType !== 'deal' ? <DealsOn recordType={recordType} id={id} version={dealsVersion} /> : null}
 
         {/* A disabled fieldset turns every input inside it read-only at once. */}
         <fieldset disabled={!canEdit} className="contents">
@@ -466,6 +485,53 @@ function CustomFields({
         </button>
       </div>
     </>
+  )
+}
+
+/**
+ * The deals this person, company or place is on.
+ *
+ * A deal's page lists who and what is on it; this is the same thing read
+ * from the other end. It is what makes a deal that is only a contact so far
+ * findable from the contact, and it says nothing at all when there are none.
+ */
+function DealsOn({ recordType, id, version }: { recordType: RecordType; id: string; version: number }) {
+  const [deals, setDeals] = useState<DealOn[] | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.crm
+      .dealsOf(objectFor(recordType).segment, id)
+      .then(({ deals: found }) => !cancelled && setDeals(found))
+      .catch(() => !cancelled && setDeals([]))
+    return () => {
+      cancelled = true
+    }
+  }, [recordType, id, version])
+
+  if (!deals?.length) return null
+
+  return (
+    <section className="panel mt-4 p-4">
+      <p className="label mb-2">Deals</p>
+      <ul className="divide-y divide-line">
+        {deals.map((deal) => (
+          <li key={deal.id} className="flex items-center gap-3 py-2">
+            <button
+              type="button"
+              className="min-w-0 flex-1 truncate text-left text-sm text-ink hover:text-brand-deep"
+              onClick={() => navigate(`/deals/${deal.id}`)}
+            >
+              {deal.name}
+            </button>
+            {deal.partyRole ? <span className="shrink-0 text-xs text-muted">{deal.partyRole}</span> : null}
+            <span className="shrink-0 rounded-full bg-sunken px-2 py-0.5 text-[11px] capitalize text-body">
+              {stageWords(deal.stage)}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 

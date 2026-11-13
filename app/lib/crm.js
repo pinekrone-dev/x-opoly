@@ -436,6 +436,28 @@ export async function dealWithParties(db, teamId, dealId) {
   return { ...deal, parties }
 }
 
+/**
+ * The deals a person, company or place is on, newest first.
+ *
+ * The other direction of the join `dealWithParties` reads. A deal lists its
+ * parties; this is what lets a contact's own page say which deals are open
+ * for them, so a deal can start from the person and gather sites later.
+ * Each deal carries the party row's id and role, so the page can show the
+ * role and take the record off the deal again.
+ */
+export async function dealsFor(db, teamId, kind, refId) {
+  if (!PARTY_KINDS.has(kind)) return []
+  const rows = await db.all(
+    `SELECT d.*, p.id AS party_id, p.role AS party_role
+       FROM deals d
+       JOIN deal_parties p ON p.deal_id = d.id
+      WHERE d.team_id = ? AND p.kind = ? AND p.ref_id = ?
+      ORDER BY d.updated_at DESC`,
+    [teamId, kind, refId],
+  )
+  return rows.map(camel)
+}
+
 export async function addParty(db, teamId, dealId, { kind, refId, role = null }) {
   if (!PARTY_KINDS.has(kind)) return { error: 'A deal joins people, companies and places.' }
 
