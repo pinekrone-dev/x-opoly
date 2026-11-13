@@ -16,3 +16,9 @@
 
 /manifest.webmanifest
   Content-Type: application/manifest+json
+
+# Vite names every bundle after a hash of its contents, so a file under
+# /assets never changes: a new build is a new name. Without this the browser
+# asked the server about every bundle on every visit.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import ShareView from './views/ShareView'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import SignIn from './views/SignIn'
-import SurveyWorkspace from './views/SurveyWorkspace'
 import TourBook from './views/TourBook'
 import OfferingMemo from './views/OfferingMemo'
 import Faq from './views/Faq'
@@ -14,12 +12,28 @@ import Home from './views/Home'
 import RecordView from './views/RecordView'
 import { BillingReturn, Paywall } from './views/Billing'
 import { api } from './api'
-import Gis from './views/Gis'
 import Settings from './views/Settings'
 import WorkspaceNav from './components/WorkspaceNav'
 import { matchRoute, navigate, usePath } from './lib/router'
 import type { Account, AppFeatures, BillingConfig, BillingStatus } from './types'
 import { setAccess } from './lib/access'
+import { lazyView } from './lib/lazyView'
+
+/*
+ * The three views that draw a map are loaded when they are opened. The map
+ * engine is more than half the script this site ships, and the landing page,
+ * pricing, the FAQ, sign-in and the home screen never draw a map: a visitor
+ * reading the pricing page was downloading a 3D map engine to do it.
+ */
+const loadGis = () => import('./views/Gis')
+const Gis = lazyView(loadGis)
+const SurveyWorkspace = lazyView(() => import('./views/SurveyWorkspace'))
+const ShareView = lazyView(() => import('./views/ShareView'))
+
+/** What stands in for a map view for the moment its script is on the way. */
+function MapViewLoading() {
+  return <div className="h-full min-h-[100dvh] w-full bg-white" aria-busy="true" />
+}
 
 /**
  * Used only if /api/health cannot be reached. Keyless, and a light street map
@@ -70,6 +84,20 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(null)
   // A view-only teammate's screens drop the controls the server would refuse.
   useEffect(() => setAccess(session?.user), [session?.user])
+
+  // Someone signed in is a click away from the map, so its script is fetched
+  // while the browser is idle rather than when they ask for it.
+  const hasAccount = Boolean(session?.user)
+  useEffect(() => {
+    if (!hasAccount) return
+    const warm = () => void loadGis().catch(() => {})
+    if ('requestIdleCallback' in window) {
+      const id = window.requestIdleCallback(warm, { timeout: 4000 })
+      return () => window.cancelIdleCallback(id)
+    }
+    const timer = setTimeout(warm, 1500)
+    return () => clearTimeout(timer)
+  }, [hasAccount])
 
   // What the signed-out visitor is looking at: the landing page, or a form.
   // Sent here to sign in on the way to approving a connector: straight to
@@ -139,7 +167,11 @@ export default function App() {
    * credential, and it is checked server-side.
    */
   if (route.view === 'share' && route.token) {
-    return <ShareView token={route.token} features={features} />
+    return (
+      <Suspense fallback={<MapViewLoading />}>
+        <ShareView token={route.token} features={features} />
+      </Suspense>
+    )
   }
 
   /*
@@ -319,7 +351,11 @@ export default function App() {
   }
 
   if (route.view === 'workspace' && route.id) {
-    return <SurveyWorkspace id={route.id} features={features} />
+    return (
+      <Suspense fallback={<MapViewLoading />}>
+        <SurveyWorkspace id={route.id} features={features} />
+      </Suspense>
+    )
   }
 
   /*
@@ -344,12 +380,14 @@ export default function App() {
           }}
         />
         <div className="min-h-0 flex-1">
-          <Gis
-            tiles={features.tiles}
-            basemaps={features.basemaps}
-            slug={route.slug}
-            defaultMarket={session.user.defaultMarket ?? null}
-          />
+          <Suspense fallback={<div className="h-full w-full bg-white" aria-busy="true" />}>
+            <Gis
+              tiles={features.tiles}
+              basemaps={features.basemaps}
+              slug={route.slug}
+              defaultMarket={session.user.defaultMarket ?? null}
+            />
+          </Suspense>
         </div>
       </div>
     )

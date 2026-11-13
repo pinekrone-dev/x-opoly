@@ -1177,12 +1177,6 @@ export default function MapCanvas({
       // this machine is not going to start on the third ask, and the person
       // watching the grey grid needs a map, not a diagnosis.
       enterLite('start-hung-twice')
-      return
-      setEngineNote(
-        startupError.current
-          ? `The map engine stopped while starting — ${startupError.current}`
-          : `The map did not finish starting. ${engineDiagnosis()}`,
-      )
     }, 12000)
 
     popup.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 14 })
