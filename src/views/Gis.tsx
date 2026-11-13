@@ -380,6 +380,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   substations: LAYER_ICONS.power,
   'power-plants': LAYER_ICONS.power,
   traffic: LAYER_ICONS.traffic,
+  'parks-rec': LAYER_ICONS.trail,
 }
 
 /*
