@@ -3,6 +3,7 @@ import BrandMark from '../components/BrandMark'
 import ConfirmDelete from '../components/ConfirmDelete'
 import DealEconomics from '../components/DealEconomics'
 import DealPicker, { stageWords } from '../components/DealPicker'
+import LibraryButton from '../components/LibraryButton'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
 import { navigate } from '../lib/router'
@@ -162,6 +163,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           <div className="flex flex-wrap items-center gap-2">
             {deal ? <OpenSurvey deal={deal} canEdit={canEdit} onLinked={(updated) => setRecord(updated)} /> : null}
             {recordType === 'place' ? <SeeOnMap place={record as Place} /> : null}
+            {recordType === 'place' && canEdit ? <LibraryButton placeId={id} /> : null}
             {recordType === 'place' && canEdit ? <SendPlaceToSurvey placeIds={[id]} /> : null}
             {recordType !== 'deal' && canEdit ? (
               // A deal can start here, with this record on it and nothing

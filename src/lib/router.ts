@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings' | 'audience' | 'markets' | 'pricing' | 'om'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings' | 'audience' | 'markets' | 'pricing' | 'om' | 'library'
   /** Which public page an `audience` route is showing. */
   audience?: 'investors' | 'developers' | 'investment-sales'
   id?: string
@@ -56,6 +56,9 @@ export function matchRoute(path: string): Route {
   // An offering memorandum from one parcel: /om/<market>/<parcel id>.
   const om = path.match(/^\/om\/([\w-]+)\/([^/]+)\/?$/)
   if (om) return { view: 'om', slug: om[1], id: decodeURIComponent(om[2]) }
+
+  // The Library: the pieces of an offering memorandum, kept per parcel.
+  if (/^\/library\/?$/.test(path)) return { view: 'library' }
 
   // The account's own settings: default market, the team.
   if (/^\/settings\/?$/.test(path)) return { view: 'settings' }

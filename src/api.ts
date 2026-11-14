@@ -1,4 +1,4 @@
-import type { AskCircle, ClientPin, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, ZoningCodeAnswer, BookStyle,
+import type { AskCircle, ClientPin, LibraryItem, LibraryPiece, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, ZoningCodeAnswer, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -562,6 +562,19 @@ export const api = {
     ),
 
   demographics: (lat: number, lng: number) => request<Demographics>(`/api/demographics?lat=${lat}&lng=${lng}`),
+
+  /**
+   * The Library: parcels whose offering-memorandum pieces are kept. A map
+   * piece is drawn on the server and replaces the one of its kind before it.
+   */
+  library: {
+    all: () => request<{ items: LibraryItem[] }>('/api/library'),
+    has: (placeId: string) => request<{ inLibrary: boolean }>(`/api/library?place=${encodeURIComponent(placeId)}`),
+    add: (placeId: string) => request<{ ok: true }>('/api/library', json({ placeId })),
+    remove: (placeId: string) => request<{ ok: true }>(`/api/library/${encodeURIComponent(placeId)}`, { method: 'DELETE' }),
+    makePiece: (placeId: string, kind: LibraryPiece['kind'], pins: { lat: number; lng: number; label: string }[] = []) =>
+      request<{ piece: LibraryPiece; notes: string[] }>(`/api/library/${encodeURIComponent(placeId)}/pieces`, json({ kind, pins })),
+  },
 
   /** Uploads the raw file body; the filename travels in a header. */
   uploadFlyer: (surveyId: string, file: File, hint?: { lat: number; lng: number } | null) =>

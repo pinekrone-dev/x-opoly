@@ -9,6 +9,7 @@ import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/laye
 import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
 import ClientPinPicker from '../components/ClientPinPicker'
+import LibraryButton from '../components/LibraryButton'
 import ZoningCode from '../components/ZoningCode'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -5837,6 +5838,16 @@ export default function Gis({
                   }}
                   label="+ Add to survey"
                   buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
+                <LibraryButton
+                  key={`library:${active}:${selected}:${known?.place?.id ?? ''}`}
+                  placeId={known?.place?.id ?? null}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return place.id
+                  }}
+                  className="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
                 />
                 <ClientPinPicker
                   key={`client-pin:${active}:${selected}:${known?.place?.id ?? ''}`}
