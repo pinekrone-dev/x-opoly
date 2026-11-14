@@ -37,7 +37,6 @@ import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilte
 import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
 
 import type {
-  ClientPin,
   ListPin,
   PlaceList,
   AskCircle,
@@ -402,7 +401,6 @@ const CATEGORY_COLORS = [
 /** How many distinct values are still worth their own colour. */
 const CATEGORY_LIMIT = 12
 
-/** A steady colour per client, so one client's pins read as a set. */
 /**
  * A parcel id as the map holds it: a number where it is all digits, which
  * is what a click on a lot yields, so an id kept as text in the CRM selects
@@ -410,13 +408,6 @@ const CATEGORY_LIMIT = 12
  */
 const parcelKey = (raw: string | number): string | number =>
   typeof raw === 'string' && /^\d{1,15}$/.test(raw) ? Number(raw) : raw
-
-const CLIENT_COLORS = ['#7048e8', '#0ca678', '#e8590c', '#1971c2', '#c2255c', '#5c940d', '#0b7285', '#9c36b5']
-function clientColor(key: string): string {
-  let sum = 0
-  for (let i = 0; i < key.length; i += 1) sum = (sum * 31 + key.charCodeAt(i)) >>> 0
-  return CLIENT_COLORS[sum % CLIENT_COLORS.length]
-}
 
 /**
  * The legend's rows: value, colour, count.
@@ -834,99 +825,6 @@ function CompsImport({
 }
 
 /**
- * Saved views: this market, configured, under a name.
- *
- * Getting a map to say something takes a dozen small decisions, and until
- * this existed all of them lived in the tab — gone on refresh, impossible to
- * return to next week, impossible to hand to a colleague. Saving is one field
- * and one button because anything more ceremonious does not get used.
- */
-function SavedViews({
-  views,
-  name,
-  busy,
-  note,
-  onName,
-  onSave,
-  onOpen,
-  onDelete,
-}: {
-  views: MapView[] | null
-  name: string
-  busy: boolean
-  note: { tone: 'ok' | 'warn'; text: string } | null
-  onName: (value: string) => void
-  onSave: () => void
-  onOpen: (view: MapView) => void
-  onDelete: (id: string) => void
-}) {
-  return (
-    <div className="border-t border-line pt-3">
-      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
-        Saved views
-      </p>
-
-      {views?.length ? (
-        <ul className="mb-2 space-y-0.5">
-          {views.map((view) => (
-            <li key={view.id} className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onOpen(view)}
-                className="min-w-0 flex-1 truncate rounded-md border border-line px-2 py-1 text-left text-[11px] text-ink hover:border-accent/50"
-                title={`Saved ${new Date(view.updatedAt).toLocaleDateString()}`}
-              >
-                {view.name}
-              </button>
-              <button
-                type="button"
-                onClick={() => onDelete(view.id)}
-                aria-label={`Delete the view "${view.name}"`}
-                className="shrink-0 px-1 leading-none text-muted hover:text-ink"
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mb-2 text-[11px] text-faint">
-          {views === null
-            ? 'Loading…'
-            : 'Set the layers, colours and filters you want, then save them here to come back to.'}
-        </p>
-      )}
-
-      <div className="flex gap-1">
-        <input
-          value={name}
-          onChange={(event) => onName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') onSave()
-          }}
-          placeholder="Name this view"
-          className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1.5 text-xs text-ink"
-          aria-label="Name for the saved view"
-        />
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={busy || !name.trim()}
-          className="shrink-0 rounded-md bg-brand px-2.5 py-1.5 text-[11px] font-medium text-white disabled:opacity-50"
-        >
-          Save
-        </button>
-      </div>
-      {note && (
-        <p className={`mt-1 text-[11px] ${note.tone === 'warn' ? 'text-rose-600' : 'text-muted'}`}>
-          {note.text}
-        </p>
-      )}
-    </div>
-  )
-}
-
-/**
  * The first-run tips.
  *
  * Four, in the order somebody actually works: choose the county, switch on
@@ -951,7 +849,7 @@ const GIS_TIPS: Coachmark[] = [
   {
     target: '[data-tour="views"]',
     title: 'Keep the map you build',
-    body: 'Layers, colours, filters and where you are looking, saved under a name. Your colleagues see it too, so a good read on a market only gets built once.',
+    body: 'The history button on the address bar keeps your saved views and the parcels you opened last. Save the layers, colours, filters and where you are looking under a name there. Your colleagues see it too, so a good read on a market only gets built once.',
   },
   {
     target: '[data-tour="rail"]',
@@ -1325,13 +1223,6 @@ export default function Gis({
    * colour. No list chosen means every list; the card's corner chooses.
    */
   const [listsOn, setListsOn] = useState(false)
-  // Client pins: places on a client's open deal, as a layer of their own.
-  // `clientFocus` narrows the layer to one client, when the map was opened
-  // from that client's page.
-  const [clientsOn, setClientsOn] = useState(false)
-  const [clientPlaces, setClientPlaces] = useState<ClientPin[]>([])
-  const [clientFocus, setClientFocus] = useState<string | null>(null)
-  const [clientPinsVersion, setClientPinsVersion] = useState(0)
   // The team's own starting points: saved views under a market of their own,
   // so they are shared with the team and follow the person between devices.
   const [ownPoints, setOwnPoints] = useState<StartingPoint[]>([])
@@ -1456,7 +1347,7 @@ export default function Gis({
   const [snapshotting, setSnapshotting] = useState<'png' | 'pdf' | null>(null)
   const [snapshotError, setSnapshotError] = useState<string | null>(null)
   /** A clicked layer feature, shown in the right-hand card. */
-  const [featurePick, setFeaturePick] = useState<{ layerId: string; properties: Record<string, unknown> } | null>(null)
+  const [featurePick, setFeaturePick] = useState<{ layerId: string; properties: Record<string, unknown>; title?: string; subtitle?: string } | null>(null)
   // A click is a question about a thing, so the answer comes forward: the
   // right panel opens on Data whenever a parcel or a layer feature is picked.
   useEffect(() => {
@@ -3215,17 +3106,6 @@ export default function Gis({
           setListsOn(false)
         }} />,
       } as LayerCard,
-      {
-        id: 'clients',
-        label: 'Client pins',
-        state: clientsOn ? 'on' : 'off',
-        note: !clientsOn
-          ? 'Parcels pinned for a client'
-          : clientPlaces.length
-            ? `${clientPlaces.length} pin${clientPlaces.length === 1 ? '' : 's'}${clientFocus ? ', one client' : ''}`
-            : 'No pins yet: pin a parcel from its card',
-        icon: LAYER_ICONS.clients,
-      } as LayerCard,
       ...(published.some((l) => l.id === 'zoning')
         ? []
         : [{
@@ -3279,7 +3159,7 @@ export default function Gis({
       pending('Rent trends', LAYER_ICONS.rent),
       pending('Forecasts', LAYER_ICONS.forecasts),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists, clientsOn, clientPlaces.length, clientFocus])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists])
 
   /* One card switched on or off: the same handler for a click on the card,
    * its off button under "On now", and a starting point. */
@@ -3302,11 +3182,6 @@ export default function Gis({
       })
     if (id === 'zoning') setShowZoning((on) => !on)
     if (id === 'lists') setListsOn((on) => !on)
-    if (id === 'clients') {
-      // Switched by hand, the layer shows every client again.
-      setClientFocus(null)
-      setClientsOn((on) => !on)
-    }
     if (id.startsWith('x:')) {
       const key = id.slice(2)
       setLayerOn((current) => ({ ...current, [key]: !current[key] }))
@@ -3706,7 +3581,6 @@ export default function Gis({
       circle: areaCircle,
       pins,
       lists: { on: listsOn, ids: listChoice },
-      clients: { on: clientsOn },
       basemap: basemapNow.current,
     }
   }
@@ -3791,11 +3665,6 @@ export default function Gis({
       setAskCircle(null)
     }
 
-    const savedClients = st.clients as { on?: unknown } | undefined
-    if (savedClients && typeof savedClients === 'object') {
-      setClientFocus(null)
-      setClientsOn(savedClients.on === true)
-    }
     const savedLists = st.lists as { on?: unknown; ids?: unknown } | undefined
     if (savedLists && typeof savedLists === 'object') {
       setListsOn(savedLists.on === true)
@@ -3880,81 +3749,7 @@ export default function Gis({
         }
       })
   }, [listsOn, allLists, listPlaces, listChoice])
-  // The client pins, while their layer is on, and again whenever one is
-  // added or taken off from a parcel's card.
-  useEffect(() => {
-    if (!clientsOn) {
-      setClientPlaces([])
-      return undefined
-    }
-    let cancelled = false
-    api.crm
-      .pins(clientFocus ? { client: clientFocus } : {})
-      .then(({ pins: found }) => !cancelled && setClientPlaces(found))
-      .catch(() => !cancelled && setClientPlaces([]))
-    return () => {
-      cancelled = true
-    }
-  }, [clientsOn, clientFocus, clientPinsVersion])
-
-  const clientPins = useMemo((): MapPin[] => {
-    if (!clientsOn) return []
-    return clientPlaces
-      .filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
-      .map((p) => ({
-        lat: Number(p.lat),
-        lng: Number(p.lng),
-        label: String(p.name || p.address || 'Place'),
-        detail: [...new Set(p.clients.map((c) => c.name))].join(' · '),
-        color: clientColor(`${p.clients[0]?.kind}:${p.clients[0]?.id}`),
-        parcel: p.market && p.parcelId ? { market: p.market, id: p.parcelId } : undefined,
-      }))
-  }, [clientsOn, clientPlaces])
-  const mapPins = useMemo(
-    () => (listPins.length || clientPins.length ? [...pins, ...listPins, ...clientPins] : pins),
-    [pins, listPins, clientPins],
-  )
-
-  /*
-   * A client's pins on the map, ?client=person:<id>, from the client's page:
-   * the layer on, narrowed to that client, and the map fitted to their pins.
-   */
-  const linkedClient = useRef<string | null>(new URLSearchParams(window.location.search).get('client'))
-  useEffect(() => {
-    const wanted = linkedClient.current
-    if (!wanted || !meta) return
-    linkedClient.current = null
-    const url = new URL(window.location.href)
-    url.searchParams.delete('client')
-    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
-    setClientFocus(wanted)
-    setClientsOn(true)
-    api.crm
-      .pins({ client: wanted })
-      .then(({ pins: found }) => {
-        const located = found.filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
-        const who = found[0]?.clients.find((c) => `${c.kind}:${c.id}` === wanted)?.name ?? 'this client'
-        if (located.length) {
-          const lats = located.map((p) => Number(p.lat))
-          const lngs = located.map((p) => Number(p.lng))
-          const span = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lngs) - Math.min(...lngs))
-          setLayerView({
-            center: [(Math.min(...lngs) + Math.max(...lngs)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2],
-            zoom: span > 0 ? Math.max(9, Math.min(16, Math.round(Math.log2(360 / span) - 0.5))) : 16,
-            key: Date.now(),
-          })
-        }
-        setViewNote({
-          tone: located.length ? 'ok' : 'warn',
-          text: located.length
-            ? `Showing ${located.length} pin${located.length === 1 ? '' : 's'} for ${who}.`
-            : `Nothing is pinned for ${who} yet. Pin a parcel from its card.`,
-        })
-      })
-      .catch(() => setViewNote({ tone: 'warn', text: 'That client is not in this workspace.' }))
-    // Runs once the market is framed, so the client's camera wins.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meta])
+  const mapPins = useMemo(() => (listPins.length ? [...pins, ...listPins] : pins), [pins, listPins])
 
   /*
    * A list on the map, ?list=<id>, from the lists page: its places as pins,
@@ -4632,7 +4427,22 @@ export default function Gis({
           placesUntilZoom={9}
           pins={mapPins}
           onPinPick={(pin) => {
-            if (!pin.parcel) return
+            // A pin that is not a parcel (a chain, a landmark, a place with
+            // no lot behind it) takes the panel as itself.
+            if (!pin.parcel) {
+              setSelected(null)
+              setFeaturePick({
+                layerId: 'pin',
+                title: pin.label,
+                subtitle: 'Pinned place',
+                properties: {
+                  Name: pin.label,
+                  ...(pin.detail ? { About: pin.detail } : {}),
+                  Location: `${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}`,
+                },
+              })
+              return
+            }
             const id = parcelKey(pin.parcel.id)
             if (pin.parcel.market === active) {
               pickFromSearch(id)
@@ -4675,6 +4485,10 @@ export default function Gis({
           tiltControl
           onTilt={onTilt}
           onExtraPick={(pick) => {
+            // A dot is the subject of its own click: the panel changes to it,
+            // and the parcel that was open steps aside. An area or a line
+            // stays context beside whatever parcel is open.
+            if (pick.point) setSelected(null)
             setFeaturePick(pick)
           }}
           nearBox={selectedBox}
@@ -4778,6 +4592,14 @@ export default function Gis({
             recent={recent}
             onRecent={goRecent}
             marketNames={Object.fromEntries(markets.map((m) => [m.slug, m.name]))}
+            views={views}
+            viewName={viewName}
+            viewBusy={viewBusy}
+            viewNote={viewNote}
+            onViewName={setViewName}
+            onViewSave={saveCurrentView}
+            onViewOpen={applyView}
+            onViewDelete={removeView}
           />
         }
         badge={{
@@ -4786,19 +4608,9 @@ export default function Gis({
       >
         {rail === 'layers' && (
           <div className="space-y-3">
-            {/* Above the catalog, because a saved view is where you start
-                rather than something you reach after configuring by hand. */}
-            <div data-tour="views">
-              <SavedViews
-              views={views}
-              name={viewName}
-              busy={viewBusy}
-              note={viewNote}
-              onName={setViewName}
-              onSave={saveCurrentView}
-              onOpen={applyView}
-              onDelete={removeView}
-              />
+            {/* Saved views live with the history button on the address
+                bar: one menu for every way back to a map. */}
+            <div>
               {pins.length > 0 && (
                 <div className="mt-2 flex items-center justify-between rounded-md border border-line px-2 py-1.5 text-[11px] text-muted">
                   <span>{pins.length.toLocaleString()} pinned {pins.length === 1 ? 'place' : 'places'} on this map</span>
@@ -5748,7 +5560,7 @@ export default function Gis({
         const rows = order
           .filter((field) => featurePick.properties[field] != null && featurePick.properties[field] !== '')
           .map((field) => <Row key={field} label={field} value={String(featurePick.properties[field])} />)
-        const label = layer?.label ?? featurePick.layerId
+        const label = featurePick.title ?? layer?.label ?? featurePick.layerId
         const section = (
           <PanelSection title={label}>
             <dl className="space-y-1 text-xs">{rows}</dl>
@@ -5767,7 +5579,7 @@ export default function Gis({
             <ParcelPanel
               embedded
               title={label}
-              subtitle="Layer record"
+              subtitle={featurePick.subtitle ?? (featurePick.title ? layer?.label ?? 'Layer record' : 'Layer record')}
               groups={[]}
               attributes={{}}
               details={null}
@@ -5815,10 +5627,11 @@ export default function Gis({
                 {/*
                   * Two things are done with a parcel that is worth keeping:
                   * it goes on a deal, or on a list. Either saves it to the
-                  * CRM, so there is no separate "add to CRM"; a deal for a
-                  * client is made from the deal picker, so there is no
-                  * separate client pin. Then the two ways it is shown: on a
-                  * survey's tour, and as pieces in the Library.
+                  * CRM, so there is no separate "add to CRM". A list is how
+                  * parcels are kept for a client (a list carries its client),
+                  * so there is no separate client pin either. Then the two
+                  * ways it is shown: on a survey's tour, and as pieces in the
+                  * Library.
                   */}
                 <DealPicker
                   key={`deal:${active}:${selected}:${known?.place?.id ?? ''}`}
@@ -5832,10 +5645,8 @@ export default function Gis({
                   defaultRole="Candidate"
                   defaultName={String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)}
                   label="+ Deal"
-                  clients
                   buttonClassName="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90"
                   onChanged={() => {
-                    setClientPinsVersion((n) => n + 1)
                     // The card lists the deals this parcel is on; read them again.
                     if (!active || selected == null) return
                     api.crm
@@ -5852,7 +5663,8 @@ export default function Gis({
                     if (!place) throw new Error('Could not save that parcel.')
                     return place.id
                   }}
-                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
+                  label="Add to list"
+                  buttonClassName="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90"
                 />
                 <SendPlaceToSurvey
                   key={`${active}:${selected}`}
@@ -6749,6 +6561,14 @@ function AddressBar({
   recent = [],
   onRecent,
   marketNames = {},
+  views = null,
+  viewName = '',
+  viewBusy = false,
+  viewNote = null,
+  onViewName,
+  onViewSave,
+  onViewOpen,
+  onViewDelete,
 }: {
   market: string | null
   serverReady: boolean
@@ -6760,10 +6580,20 @@ function AddressBar({
   recent?: RecentParcel[]
   onRecent?: (item: RecentParcel) => void
   marketNames?: Record<string, string>
+  /** This market's saved views, kept with the history: both are ways back. */
+  views?: MapView[] | null
+  viewName?: string
+  viewBusy?: boolean
+  viewNote?: { tone: 'ok' | 'warn'; text: string } | null
+  onViewName?: (value: string) => void
+  onViewSave?: () => void
+  onViewOpen?: (view: MapView) => void
+  onViewDelete?: (id: string) => void
 }) {
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
   const [showRecent, setShowRecent] = useState(false)
+  const menu = useRef<HTMLDivElement | null>(null)
   const [hits, setHits] = useState<Record<string, string | number | null>[]>([])
   // Suggestions already fetched, so backspacing over an address asks nothing.
   const suggested = useRef(new Map<string, Record<string, string | number | null>[]>())
@@ -6843,7 +6673,9 @@ function AddressBar({
           onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => {
             setOpen(false)
-            setShowRecent(false)
+            // The menu holds a field of its own (the view's name); focus
+            // moving into it is not leaving.
+            if (!menu.current?.contains(document.activeElement)) setShowRecent(false)
           }, 150)}
           onKeyDown={(event) => {
             if (event.key === 'Escape') setOpen(false)
@@ -6854,12 +6686,13 @@ function AddressBar({
           <button type="button" className="text-muted hover:text-ink" aria-label="Clear" onClick={() => setText('')}>
             ×
           </button>
-        ) : recent.length ? (
+        ) : (
           <button
             type="button"
+            data-tour="views"
             className={`shrink-0 rounded p-0.5 hover:text-ink ${showRecent ? 'text-brand' : 'text-muted'}`}
-            aria-label="Recent parcels"
-            title="Recent parcels"
+            aria-label="Saved views and recent parcels"
+            title="Saved views and recent parcels"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => setShowRecent((on) => !on)}
           >
@@ -6869,32 +6702,112 @@ function AddressBar({
               <path d="M12 7v5l3 2" />
             </svg>
           </button>
-        ) : null}
+        )}
       </form>
-      {(showRecent || (open && !wanted)) && recent.length ? (
-        <ul className="absolute left-0 right-0 top-full z-10 mt-1 divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
-          <li className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">Recent parcels</li>
-          {recent.map((item) => (
-            <li key={`${item.market}:${item.id}`}>
-              <button
-                type="button"
-                className="w-full px-2.5 py-1.5 text-left hover:bg-sunken"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  setShowRecent(false)
-                  setOpen(false)
-                  onRecent?.(item)
-                }}
-              >
-                <span className="block truncate text-xs font-medium text-ink">{item.label}</span>
-                <span className="block truncate text-[11px] text-muted">
-                  {item.market === market ? 'This market' : marketNames[item.market] ?? item.market}
-                  {item.detail ? ` · ${item.detail}` : ''}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+      {showRecent || (open && !wanted && recent.length) ? (
+        <div
+          ref={menu}
+          className="absolute left-0 right-0 top-full z-10 mt-1 max-h-[70vh] overflow-y-auto rounded-lg border border-line bg-surface shadow-lg"
+        >
+          {/* Saved views first: a view is a place to start from, a recent
+              parcel a place to get back to. Only the button opens them, so
+              the suggestions under an empty box stay the recent parcels. */}
+          {showRecent && onViewSave ? (
+            <div className="border-b border-line">
+              <p className="px-2.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">Saved views</p>
+              {views?.length ? (
+                <ul>
+                  {views.map((view) => (
+                    <li key={view.id} className="flex items-center">
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate px-2.5 py-1.5 text-left text-xs font-medium text-ink hover:bg-sunken"
+                        title={`Saved ${new Date(view.updatedAt).toLocaleDateString()}`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          setShowRecent(false)
+                          setOpen(false)
+                          onViewOpen?.(view)
+                        }}
+                      >
+                        {view.name}
+                      </button>
+                      <button
+                        type="button"
+                        className="shrink-0 px-2 leading-none text-muted hover:text-ink"
+                        aria-label={`Delete the view "${view.name}"`}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => onViewDelete?.(view.id)}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="px-2.5 py-1 text-[11px] text-faint">
+                  {views === null ? 'Loading…' : 'None yet. Set the layers and filters you want, then save them below.'}
+                </p>
+              )}
+              <div className="flex gap-1 px-2.5 pb-2 pt-1">
+                <input
+                  value={viewName}
+                  onChange={(event) => onViewName?.(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      onViewSave()
+                    }
+                    if (event.key === 'Escape') setShowRecent(false)
+                  }}
+                  onBlur={() => setTimeout(() => {
+                    if (!menu.current?.contains(document.activeElement)) setShowRecent(false)
+                  }, 150)}
+                  placeholder="Save this map as…"
+                  className="min-w-0 flex-1 rounded-md border border-line bg-surface px-2 py-1 text-xs text-ink"
+                  aria-label="Name for the saved view"
+                />
+                <button
+                  type="button"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={onViewSave}
+                  disabled={viewBusy || !viewName.trim()}
+                  className="shrink-0 rounded-md bg-brand px-2.5 py-1 text-[11px] font-medium text-white disabled:opacity-50"
+                >
+                  Save
+                </button>
+              </div>
+              {viewNote ? (
+                <p className={`px-2.5 pb-1.5 text-[11px] ${viewNote.tone === 'warn' ? 'text-rose-600' : 'text-muted'}`}>{viewNote.text}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {recent.length ? (
+            <ul className="divide-y divide-line">
+              <li className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted">Recent parcels</li>
+              {recent.map((item) => (
+                <li key={`${item.market}:${item.id}`}>
+                  <button
+                    type="button"
+                    className="w-full px-2.5 py-1.5 text-left hover:bg-sunken"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      setShowRecent(false)
+                      setOpen(false)
+                      onRecent?.(item)
+                    }}
+                  >
+                    <span className="block truncate text-xs font-medium text-ink">{item.label}</span>
+                    <span className="block truncate text-[11px] text-muted">
+                      {item.market === market ? 'This market' : marketNames[item.market] ?? item.market}
+                      {item.detail ? ` · ${item.detail}` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {open && wanted.length >= 3 ? (
         <ul className="absolute left-0 right-0 top-full mt-1 divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface shadow-lg">

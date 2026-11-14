@@ -18,7 +18,7 @@ export default function ListPicker({
   placeId,
   prepare,
   buttonClassName = 'btn-secondary text-xs',
-  label = '+ List',
+  label = 'Add to list',
 }: {
   placeId: string | null
   prepare?: () => Promise<string>
@@ -34,6 +34,32 @@ export default function ListPicker({
   const [error, setError] = useState<string | null>(null)
   const [making, setMaking] = useState(false)
   const [draft, setDraft] = useState({ name: '', client: '', tags: '' })
+  // The people and companies in the CRM, offered as the client: a list
+  // filed under a client's name is what their CRM page counts.
+  const [clients, setClients] = useState<string[]>([])
+  useEffect(() => {
+    if (!making || clients.length) return
+    let cancelled = false
+    Promise.all([
+      api.crm.list<{ firstName?: string | null; lastName?: string | null; email?: string | null }>('people', '', { limit: 300 }),
+      api.crm.list<{ name: string }>('companies', '', { limit: 300 }),
+    ])
+      .then(([people, companies]) => {
+        if (cancelled) return
+        const names = [
+          ...companies.records.map((c) => c.name),
+          ...people.records.map((p) => [p.firstName, p.lastName].filter(Boolean).join(' ') || p.email || ''),
+          ...(lists ?? []).map((l) => l.client ?? ''),
+        ].map((n) => n.trim()).filter(Boolean)
+        setClients([...new Set(names)].sort((a, b) => a.localeCompare(b)))
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+    // Asked once, when the form first opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [making])
 
   useEffect(() => setPlace(placeId), [placeId])
 
@@ -140,7 +166,12 @@ export default function ListPicker({
           {making ? (
             <div className="mt-2 space-y-1.5 border-t border-line pt-2">
               <input className="field w-full text-sm" placeholder="List name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-              <input className="field w-full text-sm" placeholder="Client (optional)" value={draft.client} onChange={(e) => setDraft({ ...draft, client: e.target.value })} />
+              <input className="field w-full text-sm" placeholder="Client (optional)" list="list-picker-clients" value={draft.client} onChange={(e) => setDraft({ ...draft, client: e.target.value })} />
+              <datalist id="list-picker-clients">
+                {clients.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
               <input className="field w-full text-sm" placeholder="Tags, comma separated" value={draft.tags} onChange={(e) => setDraft({ ...draft, tags: e.target.value })} />
               <div className="flex gap-2">
                 <button type="button" className="btn-primary flex-1 text-xs" disabled={!draft.name.trim() || busy !== null} onClick={() => void make()}>

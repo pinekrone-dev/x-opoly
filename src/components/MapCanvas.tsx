@@ -554,7 +554,8 @@ interface Props {
    * callback gets the feature's properties and renders them wherever records
    * belong — the same right-hand card a parcel uses.
    */
-  onExtraPick?: (pick: { layerId: string; properties: Record<string, unknown> }) => void
+  /** `point` is set when the thing clicked is a dot, which takes the panel from the parcel under it. */
+  onExtraPick?: (pick: { layerId: string; properties: Record<string, unknown>; point?: boolean }) => void
   /**
    * A "3D" button beside the zoom buttons that tilts the camera, so layers
    * marked `extrude` stand up. Off by default: the survey map has nothing to
@@ -1552,9 +1553,10 @@ export default function MapCanvas({
       element.addEventListener('click', (event) => {
         event.stopPropagation()
         open?.remove()
-        // A pin on a parcel opens the parcel: its card says everything the
-        // label would, and the county's record besides.
-        if (pin.parcel && pinPick.current) {
+        // Where the page listens, the pin's click is the page's: a pin on a
+        // parcel opens the parcel, and any other pin takes the info panel.
+        // Only a map nobody listens on answers with a bubble.
+        if (pinPick.current) {
           pinPick.current(pin)
           return
         }
@@ -1999,9 +2001,13 @@ export default function MapCanvas({
   /*
    * What a published feature says when it is clicked.
    *
-   * Only the fields the pipeline kept, in the order it kept them, and only
-   * when the click did not land on a parcel — the parcel is the subject and
-   * these are context, same rule as the tracts.
+   * Only the fields the pipeline kept, in the order it kept them. An area or
+   * a line speaks only when the click did not land on a parcel: the parcel is
+   * the subject and these are context, same rule as the tracts. A dot is the
+   * other way round. A permit, a sale, a school is a thing somebody aimed at,
+   * and nearly every one of them sits on a lot, so under the old rule a dot
+   * could not be clicked at all while parcels were drawn: the dot is the
+   * subject, and the parcel click stands down for it (see the parcel layer).
    */
   useEffect(() => {
     const instance = map.current
@@ -2012,12 +2018,20 @@ export default function MapCanvas({
     const handlers: [string, (event: maplibregl.MapLayerMouseEvent) => void][] = []
     for (const layer of wanted) {
       const open = (event: maplibregl.MapLayerMouseEvent) => {
-        if (instance.getLayer('parcel-fill')) {
+        const dot = event.features?.[0]?.layer?.id === `x-${layer.id}-point`
+        if (!dot && instance.getLayer('parcel-fill')) {
           if (instance.queryRenderedFeatures(event.point, { layers: ['parcel-fill'] }).length) return
+        }
+        // Two dots of different layers under one click: the first handler to
+        // run has spoken for it.
+        const original = event.originalEvent as MouseEvent & { lqDotTaken?: boolean }
+        if (dot) {
+          if (original.lqDotTaken) return
+          original.lqDotTaken = true
         }
         const props = event.features?.[0]?.properties ?? {}
         if (onExtraPick) {
-          onExtraPick({ layerId: layer.id, properties: props })
+          onExtraPick({ layerId: layer.id, properties: props, point: dot || undefined })
           return
         }
         // No handler, nothing to say. The panel is the only place a
@@ -2595,6 +2609,12 @@ export default function MapCanvas({
       hovered = null
     }
     const click = (event: maplibregl.MapLayerMouseEvent) => {
+      // A dot from a layer under the click is what was aimed at; its own
+      // handler answers, and the lot beneath it is not also picked.
+      const dots = (instance.getStyle().layers ?? [])
+        .filter((layer) => layer.type === 'circle' && layer.id.startsWith('x-') && layer.id.endsWith('-point'))
+        .map((layer) => layer.id)
+      if (dots.length && instance.queryRenderedFeatures(event.point, { layers: dots }).length) return
       const id = event.features?.[0]?.id
       if (id != null) parcels.onSelectParcel?.(id)
     }
