@@ -164,6 +164,12 @@ PARCEL_SHARDS = "denver-co=PARCELS_2,tampa-fl=PARCELS_2,minneapolis-mn=PARCELS_2
 FREE_ACCESS = "1"
 PARCEL_WRITE_CAP = "27000000"
 PARCEL_WRITES_SPENT = "2026-10=27000000"
+# Other assistants allowed to connect to /mcp, by the host their OAuth
+# callback lives on (comma-separated; Claude's own hosts and localhost are
+# always allowed, see app/lib/oauth.js). An approval can only be sent to one
+# of these hosts, which is what stops a stranger collecting one.
+#   agent.meta.ai  Muse (Meta AI): https://agent.meta.ai/api/hatch/oauth/callback
+CONNECTOR_REDIRECT_HOSTS = "agent.meta.ai"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.

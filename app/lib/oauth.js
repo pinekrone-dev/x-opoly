@@ -75,7 +75,7 @@ export function goodRedirect(uri, env = {}) {
 export async function registerClient(db, body = {}, env = {}) {
   const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
   if (!uris.length || uris.length > 10 || !uris.every((uri) => goodRedirect(uri, env))) {
-    return { error: 'invalid_redirect_uri', description: "redirect_uris must be Claude's callback, or http on localhost." }
+    return { error: 'invalid_redirect_uri', description: "redirect_uris must be the callback of an assistant this connector allows, or http on localhost." }
   }
   const name = String(body.client_name || 'An application').slice(0, 100)
   const id = `lqc_${randomToken(16)}`
