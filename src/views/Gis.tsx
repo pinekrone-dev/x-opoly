@@ -3211,6 +3211,10 @@ export default function Gis({
         corner: <ListsLayerPicker lists={allLists} chosen={listChoice} onChange={(ids) => {
           setListChoice(ids)
           setListsOn(true)
+        }} onNone={() => {
+          // Nothing left ticked: the layer is off, and all lists again next time.
+          setListChoice([])
+          setListsOn(false)
         }} />,
       } as LayerCard,
       {

@@ -341,6 +341,8 @@ export function LayerSections({
   // exactly when something in it is on.
   const [open, setOpen] = useState<Record<string, boolean>>(() => readOpen() ?? {})
   const [naming, setNaming] = useState(false)
+  // A layer looked for by name is shown wherever it is filed, folded or not.
+  const [finding, setFinding] = useState('')
   const [name, setName] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -433,6 +435,26 @@ export function LayerSections({
         </div>
       ) : null}
 
+      <input
+        type="search"
+        className="w-full rounded-md border border-line bg-white px-2 py-1.5 text-xs text-ink placeholder:text-faint focus:border-ink focus:outline-none"
+        placeholder="Find a layer, e.g. opportunity zones"
+        aria-label="Find a layer"
+        value={finding}
+        onChange={(event) => setFinding(event.target.value)}
+      />
+
+      {finding.trim() ? (
+        (() => {
+          const needle = finding.trim().toLowerCase()
+          const found = cards.filter((card) => `${card.label} ${card.note ?? ''}`.toLowerCase().includes(needle))
+          return found.length ? (
+            <LayerGrid cards={found} onToggle={onToggle} />
+          ) : (
+            <p className="text-[11px] text-faint">No layer here is called that. This market may not publish it.</p>
+          )
+        })()
+      ) : (
       <div className="divide-y divide-line rounded-lg border border-line">
         {groups.map(({ section, cards: members }) => {
           const live = members.filter((c) => c.state === 'on').length
@@ -464,6 +486,7 @@ export function LayerSections({
           )
         })}
       </div>
+      )}
     </div>
   )
 }
