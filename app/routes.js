@@ -2376,6 +2376,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     'parcels.pmtiles': 'application/octet-stream',
     'index.json': 'application/json',
     'details.json': 'application/json',
+    // The same records packed for reading one parcel at a time: gzipped
+    // shards laid end to end (rows.pack) and where each starts (rows.json).
+    // The map reads one shard by byte range on a click, so a market outside
+    // the search store no longer downloads its index and details whole.
+    'rows.pack': 'application/octet-stream',
+    'rows.json': 'application/json',
     'parcels.geojson': 'application/geo+json',
     // The catalog: light files the app reads to know what markets exist and
     // how to draw them. Publishing these through the same door makes a build
@@ -2583,7 +2589,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a whole county file is downloaded once a session, if at all.
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
-      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles)$/.test(parts[1])
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack)$/.test(parts[1])
       const throttled = viewer.pipeline
         ? null
         : ranged
@@ -2702,8 +2708,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // And an hour, not a day, for a market's index and records: a rebuild
     // that added columns (the owner filters' sale year and mailing state)
     // was invisible for a day to a browser that had opened the market.
+    // The packed rows are asked for under their build's stamp
+    // (rows.pack?v=<built>), so a browser may keep a shard for the day; the
+    // manifest that carries the stamp is kept for minutes, like the lists.
     const browserTtl =
-      key === 'markets.json' || /\/layers\.json$/.test(key) || /\.pmtiles$/.test(key)
+      key === 'markets.json' || /\/(layers|rows)\.json$/.test(key) || /\.pmtiles$/.test(key)
         ? 300
         : /\/(index|details|codes|extras)\.json$/.test(key)
           ? 3600
@@ -2747,7 +2756,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       // The market list is the one file a new market has to reach quickly:
       // a county published an hour ago that the picker still does not show
       // reads as "not added". Five minutes, at one bucket read per colo.
-      const ttl = key === 'markets.json' ? 300 : /\.(pmtiles|geojson)$/.test(key) ? 86400 : 3600
+      const ttl = key === 'markets.json' ? 300 : /\.(pmtiles|geojson|pack)$/.test(key) ? 86400 : 3600
       /*
        * A tile archive's ranges are kept under the archive's version.
        *
@@ -2764,7 +2773,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       // served from yesterday's build for an hour after a rebuild, because
       // its ranges were kept under the file name alone.
       let version = ''
-      if (/\.(pmtiles|json|geojson)$/.test(key) && key !== 'markets.json' && typeof bucket.head === 'function') {
+      if (/\.(pmtiles|json|geojson|pack)$/.test(key) && key !== 'markets.json' && typeof bucket.head === 'function') {
         const known = await edgeCached(c, `catalog/${key}#version`, 60, async () => {
           const found = await bucket.head(key)
           return c.json({ etag: found ? found.httpEtag || found.etag || '' : null })
