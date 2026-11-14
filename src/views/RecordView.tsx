@@ -11,7 +11,7 @@ import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
 import { countyCounts, describeMismatch, listingCounts, mismatches } from '../lib/listingCheck'
 import type { PanelGroup } from '../components/ParcelPanel'
 import type { DetailField } from '../lib/crm'
-import type { CrmRecord, Deal, DealOn, DealParty, Place, RecordField, RecordType, Survey } from '../types'
+import type { ClientPin, CrmRecord, Deal, DealOn, DealParty, Place, RecordField, RecordType, Survey } from '../types'
 
 /**
  * One CRM record, and everything attached to it.
@@ -194,6 +194,8 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
         {deal ? <DealEconomics deal={deal} canEdit={canEdit} onSaved={(updated) => setRecord(updated)} /> : null}
 
         {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
+
+        {recordType === 'person' || recordType === 'company' ? <Opportunities kind={recordType} id={id} version={dealsVersion} canEdit={canEdit} /> : null}
 
         {recordType !== 'deal' ? <DealsOn recordType={recordType} id={id} version={dealsVersion} /> : null}
 
@@ -531,6 +533,86 @@ function DealsOn({ recordType, id, version }: { recordType: RecordType; id: stri
           </li>
         ))}
       </ul>
+    </section>
+  )
+}
+
+/*
+ * A client's opportunities: every place pinned for them, which is every
+ * place on one of their open deals. Pinned from the map, one parcel at a
+ * time; listed here with the deal each sits on, and opened on the map as a
+ * set.
+ */
+function Opportunities({ kind, id, version, canEdit }: { kind: 'person' | 'company'; id: string; version: number; canEdit: boolean }) {
+  const [pins, setPins] = useState<ClientPin[] | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const key = `${kind}:${id}`
+
+  const load = useCallback(() => {
+    api.crm
+      .pins({ client: key })
+      .then(({ pins: found }) => setPins(found))
+      .catch(() => setPins([]))
+  }, [key])
+  useEffect(() => { load() }, [load, version])
+
+  if (pins === null) return null
+  const markets = [...new Set(pins.map((p) => p.market).filter(Boolean))] as string[]
+
+  return (
+    <section className="panel mt-4 p-4" data-testid="opportunities">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="label">Opportunities{pins.length ? ` (${pins.length})` : ''}</p>
+        {markets.map((market) => (
+          <button key={market} type="button" className="btn-secondary text-xs" onClick={() => navigate(`/gis/${market}?client=${encodeURIComponent(key)}`)}>
+            {markets.length > 1 ? `Map: ${market}` : 'Open on the map'}
+          </button>
+        ))}
+      </div>
+      {pins.length === 0 ? (
+        <p className="text-sm text-muted">
+          Nothing pinned yet. On the map, open a parcel and choose “Pin for client” to add it here.
+        </p>
+      ) : (
+        <ul className="divide-y divide-line">
+          {pins.map((pin) => {
+            const mine = pin.clients.find((c) => `${c.kind}:${c.id}` === key)
+            return (
+              <li key={pin.id} className="flex items-center gap-3 py-2">
+                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => navigate(`/places/${pin.id}`)}>
+                  <span className="block truncate text-sm text-ink hover:text-brand-deep">{pin.name || pin.address || 'Place'}</span>
+                  <span className="block truncate text-xs text-muted">
+                    {[pin.address && pin.name ? pin.address : null, [pin.city, pin.state].filter(Boolean).join(', ') || null, pin.acreage ? `${Number(pin.acreage).toFixed(2)} ac` : null].filter(Boolean).join(' · ')}
+                  </span>
+                </button>
+                {mine ? (
+                  <button type="button" className="shrink-0 truncate text-xs text-muted hover:text-brand-deep" onClick={() => navigate(`/deals/${mine.deal.id}`)} title={mine.deal.name}>
+                    <span className="rounded-full bg-sunken px-2 py-0.5 text-[11px] capitalize text-body">{stageWords(mine.deal.stage)}</span>
+                  </button>
+                ) : null}
+                {canEdit ? (
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-muted hover:text-rose-600"
+                    disabled={busy !== null}
+                    onClick={async () => {
+                      setBusy(pin.id)
+                      try {
+                        await api.crm.unpin({ kind, id }, pin.id)
+                        load()
+                      } finally {
+                        setBusy(null)
+                      }
+                    }}
+                  >
+                    {busy === pin.id ? 'Removing…' : 'Unpin'}
+                  </button>
+                ) : null}
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </section>
   )
 }

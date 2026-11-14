@@ -544,6 +544,31 @@ export interface PlaceList {
   has?: boolean
 }
 
+/**
+ * A place pinned for one or more clients: it sits on each client's open deal,
+ * which is what makes it an opportunity on the client's own page.
+ */
+export interface ClientPin {
+  id: string
+  name: string | null
+  address: string | null
+  city: string | null
+  state: string | null
+  lat: number | null
+  lng: number | null
+  acreage: number | null
+  market: string | null
+  parcelId: string | null
+  clients: {
+    kind: 'person' | 'company'
+    id: string
+    name: string
+    deal: { id: string; name: string; stage: string }
+    partyId: string
+    pinnedAt: string
+  }[]
+}
+
 /** A place on one or more lists, for a pin. */
 export interface ListPin {
   id: string

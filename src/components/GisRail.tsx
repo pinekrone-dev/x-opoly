@@ -491,6 +491,8 @@ export const LAYER_ICONS = {
   // A drop, for what leaked from one.
   leak: <><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11z" /><path d="M9.5 14.5a2.5 2.5 0 0 0 2.5 2.5" /></>,
   // A list: three lines with bullets, for the team's lists of places.
+  // A map pin with a person in it, for places pinned for a client.
+  clients: <><path d="M12 21s7-5.4 7-11a7 7 0 1 0-14 0c0 5.6 7 11 7 11z" /><circle cx="12" cy="8.5" r="1.8" /><path d="M8.8 13.2a3.4 3.4 0 0 1 6.4 0" /></>,
   lists: <><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1" /><circle cx="4.5" cy="12" r="1" /><circle cx="4.5" cy="18" r="1" /></>,
   // A road with its centre line, for traffic counts.
   traffic: <><path d="M8 3L5 21M16 3l3 18" /><path d="M12 4v3M12 10.5v3M12 17v3" /></>,

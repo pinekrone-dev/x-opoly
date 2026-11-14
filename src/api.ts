@@ -1,4 +1,4 @@
-import type { AskCircle, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
+import type { AskCircle, ClientPin, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -220,6 +220,26 @@ export const api = {
     remove: (segment: string, id: string) => request<void>(`/api/crm/${segment}/${id}`, { method: 'DELETE' }),
     /** The deals a person, company or place is on, each with this record's role on it. */
     dealsOf: (segment: string, id: string) => request<{ deals: DealOn[] }>(`/api/crm/${segment}/${id}/deals`),
+
+    /**
+     * Client pins: every one for the map, one client's for their page
+     * (`client` as person:<id> or company:<id>), or one place's for its card.
+     */
+    pins: (filter: { client?: string; place?: string } = {}) => {
+      const params = new URLSearchParams()
+      if (filter.client) params.set('client', filter.client)
+      if (filter.place) params.set('place', filter.place)
+      const query = params.toString()
+      return request<{ pins: ClientPin[] }>(`/api/crm/pins${query ? `?${query}` : ''}`)
+    },
+    /** Pins a place for a client, opening a deal for them when none is open. */
+    pin: (client: { kind: 'person' | 'company'; id: string }, placeId: string) =>
+      request<{ dealId: string; opened: boolean; pins: ClientPin[] }>('/api/crm/pins', json({ client, placeId })),
+    unpin: (client: { kind: 'person' | 'company'; id: string }, placeId: string) =>
+      request<{ removed: number; pins: ClientPin[] }>(
+        `/api/crm/pins?client=${encodeURIComponent(`${client.kind}:${client.id}`)}&place=${encodeURIComponent(placeId)}`,
+        { method: 'DELETE' },
+      ),
     /** Opens a deal with its first party already on it: the contact it is for, or the site it began with. */
     startDeal: (name: string, party: { kind: RecordType; refId: string; role?: string }) =>
       request<{ record: Deal }>('/api/crm/deals', json({ name, party })),
