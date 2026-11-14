@@ -230,6 +230,17 @@ describe('the connector', () => {
     assert.equal(other.status, 403, 'nor anything else')
   })
 
+  test('the reads that travel as a POST are let through, since they change nothing', async () => {
+    const auth = { authorization: `Bearer ${tokens.access_token}` }
+    // Each is answered by its own route (whatever it says about this
+    // market), not turned away at the door as a change.
+    for (const path of ['/api/gis/zoning-report', '/api/gis/parcels/shapes', '/api/gis/map-image']) {
+      const res = await claude(path, json({ market: 'austin-tx' }, auth))
+      assert.notEqual(res.body?.code, 'connector_scope', path)
+      assert.notEqual(res.status, 403, path)
+    }
+  })
+
   test('a refresh token is swapped for a new pair, once', async () => {
     const fresh = await claude('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: clientId }))
     assert.equal(fresh.status, 200)
