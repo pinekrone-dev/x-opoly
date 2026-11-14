@@ -8,6 +8,7 @@ import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
+import ClientPinPicker from '../components/ClientPinPicker'
 import ZoningCode from '../components/ZoningCode'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -37,6 +38,7 @@ import { FREE_CLEAR_YEARS, HELD_YEARS, marketState, ownerTraits, type OwnerFilte
 import { NEAR_GROUPS, NEAR_MAX_LAYERS, NEAR_MILES, cellOf, nearGrid, type NearPick } from '../lib/nearby'
 
 import type {
+  ClientPin,
   ListPin,
   PlaceList,
   AskCircle,
@@ -400,6 +402,14 @@ const CATEGORY_COLORS = [
 
 /** How many distinct values are still worth their own colour. */
 const CATEGORY_LIMIT = 12
+
+/** A steady colour per client, so one client's pins read as a set. */
+const CLIENT_COLORS = ['#7048e8', '#0ca678', '#e8590c', '#1971c2', '#c2255c', '#5c940d', '#0b7285', '#9c36b5']
+function clientColor(key: string): string {
+  let sum = 0
+  for (let i = 0; i < key.length; i += 1) sum = (sum * 31 + key.charCodeAt(i)) >>> 0
+  return CLIENT_COLORS[sum % CLIENT_COLORS.length]
+}
 
 /**
  * The legend's rows: value, colour, count.
@@ -1308,6 +1318,13 @@ export default function Gis({
    * colour. No list chosen means every list; the card's corner chooses.
    */
   const [listsOn, setListsOn] = useState(false)
+  // Client pins: places on a client's open deal, as a layer of their own.
+  // `clientFocus` narrows the layer to one client, when the map was opened
+  // from that client's page.
+  const [clientsOn, setClientsOn] = useState(false)
+  const [clientPlaces, setClientPlaces] = useState<ClientPin[]>([])
+  const [clientFocus, setClientFocus] = useState<string | null>(null)
+  const [clientPinsVersion, setClientPinsVersion] = useState(0)
   // The team's own starting points: saved views under a market of their own,
   // so they are shared with the team and follow the person between devices.
   const [ownPoints, setOwnPoints] = useState<StartingPoint[]>([])
@@ -3171,6 +3188,17 @@ export default function Gis({
           setListsOn(true)
         }} />,
       } as LayerCard,
+      {
+        id: 'clients',
+        label: 'Client pins',
+        state: clientsOn ? 'on' : 'off',
+        note: !clientsOn
+          ? 'Parcels pinned for a client'
+          : clientPlaces.length
+            ? `${clientPlaces.length} pin${clientPlaces.length === 1 ? '' : 's'}${clientFocus ? ', one client' : ''}`
+            : 'No pins yet: pin a parcel from its card',
+        icon: LAYER_ICONS.clients,
+      } as LayerCard,
       ...(published.some((l) => l.id === 'zoning')
         ? []
         : [{
@@ -3224,7 +3252,7 @@ export default function Gis({
       pending('Rent trends', LAYER_ICONS.rent),
       pending('Forecasts', LAYER_ICONS.forecasts),
     ]
-  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists])
+  }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists, clientsOn, clientPlaces.length, clientFocus])
 
   /* One card switched on or off: the same handler for a click on the card,
    * its off button under "On now", and a starting point. */
@@ -3247,6 +3275,11 @@ export default function Gis({
       })
     if (id === 'zoning') setShowZoning((on) => !on)
     if (id === 'lists') setListsOn((on) => !on)
+    if (id === 'clients') {
+      // Switched by hand, the layer shows every client again.
+      setClientFocus(null)
+      setClientsOn((on) => !on)
+    }
     if (id.startsWith('x:')) {
       const key = id.slice(2)
       setLayerOn((current) => ({ ...current, [key]: !current[key] }))
@@ -3646,6 +3679,7 @@ export default function Gis({
       circle: areaCircle,
       pins,
       lists: { on: listsOn, ids: listChoice },
+      clients: { on: clientsOn },
       basemap: basemapNow.current,
     }
   }
@@ -3730,6 +3764,11 @@ export default function Gis({
       setAskCircle(null)
     }
 
+    const savedClients = st.clients as { on?: unknown } | undefined
+    if (savedClients && typeof savedClients === 'object') {
+      setClientFocus(null)
+      setClientsOn(savedClients.on === true)
+    }
     const savedLists = st.lists as { on?: unknown; ids?: unknown } | undefined
     if (savedLists && typeof savedLists === 'object') {
       setListsOn(savedLists.on === true)
@@ -3813,7 +3852,80 @@ export default function Gis({
         }
       })
   }, [listsOn, allLists, listPlaces, listChoice])
-  const mapPins = useMemo(() => (listPins.length ? [...pins, ...listPins] : pins), [pins, listPins])
+  // The client pins, while their layer is on, and again whenever one is
+  // added or taken off from a parcel's card.
+  useEffect(() => {
+    if (!clientsOn) {
+      setClientPlaces([])
+      return undefined
+    }
+    let cancelled = false
+    api.crm
+      .pins(clientFocus ? { client: clientFocus } : {})
+      .then(({ pins: found }) => !cancelled && setClientPlaces(found))
+      .catch(() => !cancelled && setClientPlaces([]))
+    return () => {
+      cancelled = true
+    }
+  }, [clientsOn, clientFocus, clientPinsVersion])
+
+  const clientPins = useMemo((): MapPin[] => {
+    if (!clientsOn) return []
+    return clientPlaces
+      .filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
+      .map((p) => ({
+        lat: Number(p.lat),
+        lng: Number(p.lng),
+        label: String(p.name || p.address || 'Place'),
+        detail: [...new Set(p.clients.map((c) => c.name))].join(' · '),
+        color: clientColor(`${p.clients[0]?.kind}:${p.clients[0]?.id}`),
+      }))
+  }, [clientsOn, clientPlaces])
+  const mapPins = useMemo(
+    () => (listPins.length || clientPins.length ? [...pins, ...listPins, ...clientPins] : pins),
+    [pins, listPins, clientPins],
+  )
+
+  /*
+   * A client's pins on the map, ?client=person:<id>, from the client's page:
+   * the layer on, narrowed to that client, and the map fitted to their pins.
+   */
+  const linkedClient = useRef<string | null>(new URLSearchParams(window.location.search).get('client'))
+  useEffect(() => {
+    const wanted = linkedClient.current
+    if (!wanted || !meta) return
+    linkedClient.current = null
+    const url = new URL(window.location.href)
+    url.searchParams.delete('client')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    setClientFocus(wanted)
+    setClientsOn(true)
+    api.crm
+      .pins({ client: wanted })
+      .then(({ pins: found }) => {
+        const located = found.filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)))
+        const who = found[0]?.clients.find((c) => `${c.kind}:${c.id}` === wanted)?.name ?? 'this client'
+        if (located.length) {
+          const lats = located.map((p) => Number(p.lat))
+          const lngs = located.map((p) => Number(p.lng))
+          const span = Math.max(Math.max(...lats) - Math.min(...lats), Math.max(...lngs) - Math.min(...lngs))
+          setLayerView({
+            center: [(Math.min(...lngs) + Math.max(...lngs)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2],
+            zoom: span > 0 ? Math.max(9, Math.min(16, Math.round(Math.log2(360 / span) - 0.5))) : 16,
+            key: Date.now(),
+          })
+        }
+        setViewNote({
+          tone: located.length ? 'ok' : 'warn',
+          text: located.length
+            ? `Showing ${located.length} pin${located.length === 1 ? '' : 's'} for ${who}.`
+            : `Nothing is pinned for ${who} yet. Pin a parcel from its card.`,
+        })
+      })
+      .catch(() => setViewNote({ tone: 'warn', text: 'That client is not in this workspace.' }))
+    // Runs once the market is framed, so the client's camera wins.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meta])
 
   /*
    * A list on the map, ?list=<id>, from the lists page: its places as pins,
@@ -5686,6 +5798,22 @@ export default function Gis({
                   }}
                   label="+ Add to survey"
                   buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
+                <ClientPinPicker
+                  key={`client-pin:${active}:${selected}:${known?.place?.id ?? ''}`}
+                  placeId={known?.place?.id ?? null}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return place.id
+                  }}
+                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
+                  onChanged={() => {
+                    // A pin made here should be on the map: the layer goes on
+                    // if it was off, and reads its pins again.
+                    setClientsOn(true)
+                    setClientPinsVersion((n) => n + 1)
+                  }}
                 />
                 <DealPicker
                   key={`deal:${active}:${selected}:${known?.place?.id ?? ''}`}

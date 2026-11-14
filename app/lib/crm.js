@@ -458,6 +458,126 @@ export async function dealsFor(db, teamId, kind, refId) {
   return rows.map(camel)
 }
 
+/*
+ * Client pins.
+ *
+ * A client looking for sites is a deal with the client on it and nothing
+ * else, until places are found. A place put on that deal is a pin for the
+ * client: it shows on the map as theirs, and on the client's own page as an
+ * opportunity. So a pin is not a table of its own. It is a place and a
+ * client (a person or a company) on the same deal, while that deal is open.
+ */
+const CLIENT_KINDS = new Set(['person', 'company'])
+
+async function clientNames(db, teamId, clients) {
+  const names = new Map()
+  for (const kind of CLIENT_KINDS) {
+    const ids = [...new Set(clients.filter((c) => c.kind === kind).map((c) => c.id))]
+    for (const slice of chunks(ids)) {
+      const rows = await db.all(
+        kind === 'person'
+          ? `SELECT id, first_name, last_name, email FROM people WHERE team_id = ? AND id IN (${slice.map(() => '?').join(', ')})`
+          : `SELECT id, name FROM companies WHERE team_id = ? AND id IN (${slice.map(() => '?').join(', ')})`,
+        [teamId, ...slice],
+      )
+      for (const row of rows) {
+        const name = kind === 'person' ? [row.first_name, row.last_name].filter(Boolean).join(' ') || row.email || 'Unnamed contact' : row.name
+        names.set(`${kind}:${row.id}`, name)
+      }
+    }
+  }
+  return names
+}
+
+/**
+ * Every pin the team holds, as places with the clients each is pinned for.
+ * `client` narrows it to one client's opportunities; `placeId` to one place.
+ */
+export async function clientPins(db, teamId, { client = null, placeId = null } = {}) {
+  const where = ['d.team_id = ?', "pl.kind = 'place'", "cl.kind IN ('person', 'company')", "d.stage <> 'passed'"]
+  const values = [teamId]
+  if (client && CLIENT_KINDS.has(client.kind)) {
+    where.push('cl.kind = ?', 'cl.ref_id = ?')
+    values.push(client.kind, String(client.id))
+  }
+  if (placeId) {
+    where.push('pl.ref_id = ?')
+    values.push(String(placeId))
+  }
+  const rows = await db.all(
+    `SELECT d.id AS deal_id, d.name AS deal_name, d.stage, pl.id AS party_id, pl.created_at AS pinned_at,
+            cl.kind AS client_kind, cl.ref_id AS client_id,
+            p.id, p.name, p.address, p.city, p.state, p.lat, p.lng, p.acreage, p.market, p.parcel_id
+       FROM deal_parties pl
+       JOIN deals d ON d.id = pl.deal_id
+       JOIN deal_parties cl ON cl.deal_id = d.id
+       JOIN places p ON p.id = pl.ref_id AND p.team_id = d.team_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY pl.created_at DESC
+      LIMIT 5000`,
+    values,
+  )
+  const names = await clientNames(db, teamId, rows.map((r) => ({ kind: r.client_kind, id: r.client_id })))
+  const places = new Map()
+  for (const r of rows) {
+    const name = names.get(`${r.client_kind}:${r.client_id}`)
+    if (!name) continue
+    let place = places.get(r.id)
+    if (!place) {
+      place = {
+        id: r.id, name: r.name, address: r.address, city: r.city, state: r.state,
+        lat: r.lat, lng: r.lng, acreage: r.acreage, market: r.market, parcelId: r.parcel_id, clients: [],
+      }
+      places.set(r.id, place)
+    }
+    place.clients.push({
+      kind: r.client_kind, id: r.client_id, name,
+      deal: { id: r.deal_id, name: r.deal_name, stage: r.stage }, partyId: r.party_id, pinnedAt: r.pinned_at,
+    })
+  }
+  return [...places.values()]
+}
+
+/**
+ * Pins a place for a client: puts it on the client's open deal, opening one
+ * named for the client when there is none. Pinning twice is one pin.
+ */
+export async function pinForClient(db, teamId, { clientKind, clientId, placeId }) {
+  if (!CLIENT_KINDS.has(clientKind)) return { error: 'A pin is for a person or a company.' }
+  const names = await clientNames(db, teamId, [{ kind: clientKind, id: String(clientId) }])
+  const name = names.get(`${clientKind}:${clientId}`)
+  if (!name) return { error: 'That client could not be found.' }
+  const place = await db.get('SELECT id FROM places WHERE id = ? AND team_id = ?', [String(placeId), teamId])
+  if (!place) return { error: 'That place could not be found.' }
+
+  const open = (await dealsFor(db, teamId, clientKind, String(clientId))).filter((deal) => deal.stage !== 'passed')
+  let dealId = open[0]?.id ?? null
+  let opened = false
+  if (!dealId) {
+    const made = await createRecord(db, 'deal', teamId, { name: `${name}: site search`.slice(0, 120), kind: 'Site search' })
+    if (made.error) return { error: made.error }
+    dealId = made.record.id
+    opened = true
+    const client = await addParty(db, teamId, dealId, { kind: clientKind, refId: String(clientId), role: 'Client' })
+    if (client.error) return { error: client.error }
+  }
+  const added = await addParty(db, teamId, dealId, { kind: 'place', refId: String(placeId), role: 'Candidate' })
+  if (added.error) return { error: added.error }
+  return { ok: true, dealId, opened, partyId: added.id }
+}
+
+/** Takes a client's pin off a place: the place leaves every open deal the client is on. */
+export async function unpinForClient(db, teamId, { clientKind, clientId, placeId }) {
+  const pins = await clientPins(db, teamId, { client: { kind: clientKind, id: clientId }, placeId })
+  let removed = 0
+  for (const place of pins) {
+    for (const held of place.clients) {
+      if (await removeParty(db, teamId, held.deal.id, held.partyId)) removed += 1
+    }
+  }
+  return { removed }
+}
+
 export async function addParty(db, teamId, dealId, { kind, refId, role = null }) {
   if (!PARTY_KINDS.has(kind)) return { error: 'A deal joins people, companies and places.' }
 

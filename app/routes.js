@@ -104,6 +104,9 @@ import {
   rememberPlace,
   removeParty,
   updateRecord,
+  clientPins,
+  pinForClient,
+  unpinForClient,
 } from './lib/crm.js'
 import { clientAddress, rateLimit } from './lib/ratelimit.js'
 import { checkInvite, createInvite, listInvites, redeemInvite, revokeInvite } from './lib/invites.js'
@@ -1826,6 +1829,45 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * wrong question. A short page of each kind: the table is for finding
    * one record, and the lists are there for browsing.
    */
+  /*
+   * Client pins: a place put on a client's open deal (lib/crm.js). Read
+   * whole for the map's layer, by client for the client's page, or by place
+   * for the parcel card; made and taken off from the same address.
+   */
+  const pinClient = (value) => {
+    const [kind, ...rest] = String(value ?? '').split(':')
+    const id = rest.join(':')
+    return ['person', 'company'].includes(kind) && id ? { kind, id } : null
+  }
+  app.get('/api/crm/pins', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const client = pinClient(c.req.query('client'))
+    if (c.req.query('client') && !client) return c.json({ error: 'client is person:<id> or company:<id>.' }, 400)
+    const placeId = String(c.req.query('place') ?? '').trim() || null
+    return c.json({ pins: await clientPins(db, user.teamId, { client, placeId }) })
+  })
+  app.post('/api/crm/pins', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const client = pinClient(`${body?.client?.kind ?? ''}:${body?.client?.id ?? ''}`)
+    const placeId = String(body?.placeId ?? '').trim()
+    if (!client || !placeId) return c.json({ error: 'A pin needs a client and a place.' }, 400)
+    const result = await pinForClient(db, user.teamId, { clientKind: client.kind, clientId: client.id, placeId })
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ ...result, pins: await clientPins(db, user.teamId, { placeId }) }, 201)
+  })
+  app.delete('/api/crm/pins', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const client = pinClient(c.req.query('client'))
+    const placeId = String(c.req.query('place') ?? '').trim()
+    if (!client || !placeId) return c.json({ error: 'A pin needs a client and a place.' }, 400)
+    const result = await unpinForClient(db, user.teamId, { clientKind: client.kind, clientId: client.id, placeId })
+    return c.json({ ...result, pins: await clientPins(db, user.teamId, { placeId }) })
+  })
+
   app.get('/api/crm/search', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)

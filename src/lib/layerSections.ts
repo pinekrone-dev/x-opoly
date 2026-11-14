@@ -19,7 +19,7 @@ export interface Section {
 
 export const SECTIONS: Section[] = [
   { id: 'property', label: 'Property & ownership', hint: 'Land use colours, who owns what' },
-  { id: 'workspace', label: 'My map', hint: 'Your own lists and pins' },
+  { id: 'workspace', label: 'My map', hint: 'Your own lists, and pins for clients' },
   { id: 'boundaries', label: 'Boundaries', hint: 'Opportunity zones, districts, incentive areas' },
   { id: 'zoning', label: 'Zoning & land use', hint: 'Districts, overlays, plans' },
   { id: 'development', label: 'Development activity', hint: 'Permits, entitlements, projects' },
@@ -31,7 +31,7 @@ export const SECTIONS: Section[] = [
 
 const BY_KEY: Record<string, string> = {
   parcels: 'property', ownership: 'property', buildings: 'property',
-  lists: 'workspace',
+  lists: 'workspace', clients: 'workspace',
   'opportunity-zones': 'boundaries', 'opportunity-zones-2027': 'boundaries', 'school-districts': 'boundaries',
   tirz: 'boundaries', 'super-neighborhoods': 'boundaries', uez: 'boundaries', nez: 'boundaries', redevelopment: 'boundaries',
   zoning: 'zoning', 'land-use': 'zoning', overlays: 'zoning', landmarks: 'zoning', 'built-form': 'zoning', plans: 'zoning',
