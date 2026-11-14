@@ -161,6 +161,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {deal ? <OpenSurvey deal={deal} canEdit={canEdit} onLinked={(updated) => setRecord(updated)} /> : null}
+            {recordType === 'place' ? <SeeOnMap place={record as Place} /> : null}
             {recordType === 'place' && canEdit ? <SendPlaceToSurvey placeIds={[id]} /> : null}
             {recordType !== 'deal' && canEdit ? (
               // A deal can start here, with this record on it and nothing
@@ -534,6 +535,30 @@ function DealsOn({ recordType, id, version }: { recordType: RecordType; id: stri
         ))}
       </ul>
     </section>
+  )
+}
+
+/*
+ * From a parcel's record to the parcel itself: the map, on its county, with
+ * the lot open. A record that is not tied to a county's parcel but has a
+ * location opens the map there instead.
+ */
+function SeeOnMap({ place }: { place: Place }) {
+  const lat = Number(place.lat)
+  const lng = Number(place.lng)
+  const tied = place.market && place.parcelId
+  if (!tied && !(Number.isFinite(lat) && Number.isFinite(lng) && (lat !== 0 || lng !== 0))) return null
+  return (
+    <button
+      type="button"
+      className="btn-secondary text-xs"
+      data-testid="see-on-map"
+      onClick={() =>
+        navigate(tied ? `/gis/${place.market}?parcel=${encodeURIComponent(String(place.parcelId))}` : `/gis#17/${lat}/${lng}`)
+      }
+    >
+      See it on the map
+    </button>
   )
 }
 

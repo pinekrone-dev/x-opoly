@@ -96,9 +96,12 @@ export const OBJECTS: ObjectSpec[] = [
   {
     type: 'place',
     segment: 'places',
-    label: 'Places',
-    singular: 'Place',
-    empty: 'Buildings you know. Send one into any survey without retyping it.',
+    // "Parcels" to the person, `places` in the address and the store: a
+    // record here is a lot or a building the team knows, most of them saved
+    // straight from a parcel on the map.
+    label: 'Parcels',
+    singular: 'Parcel',
+    empty: 'Parcels and buildings you know. Save one from the map, or send one into any survey without retyping it.',
     create: [
       { key: 'name', label: 'Name', placeholder: 'Harbor & 21st' },
       { key: 'address', label: 'Address', placeholder: '2101 Harbor Blvd' },
