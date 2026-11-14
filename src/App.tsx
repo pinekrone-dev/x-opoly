@@ -29,6 +29,7 @@ const loadGis = () => import('./views/Gis')
 const Gis = lazyView(loadGis)
 const SurveyWorkspace = lazyView(() => import('./views/SurveyWorkspace'))
 const ShareView = lazyView(() => import('./views/ShareView'))
+const Library = lazyView(() => import('./views/Library'))
 
 /** What stands in for a map view for the moment its script is on the way. */
 function MapViewLoading() {
@@ -407,6 +408,24 @@ export default function App() {
           setDoor('landing')
         }}
       />
+    )
+  }
+
+  /* The Library: offering-memorandum pieces, kept per parcel. */
+  if (route.view === 'library') {
+    return (
+      <Suspense fallback={null}>
+        <Library
+          account={session.user}
+          smsConfigured={session.smsConfigured}
+          billing={billing}
+          onAccountChange={(user) => setSession({ ...session, user })}
+          onSignedOut={() => {
+            setSession({ ...session, user: null, setupRequired: false })
+            setDoor('landing')
+          }}
+        />
+      </Suspense>
     )
   }
 

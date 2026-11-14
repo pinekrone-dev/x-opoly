@@ -28,7 +28,7 @@ export default function WorkspaceNav({
   onSignedOut,
 }: {
   /** Which tab is lit; `settings` lights none, the page being off the tab row. */
-  current: 'gis' | 'crm' | 'surveys' | 'settings'
+  current: 'gis' | 'crm' | 'surveys' | 'library' | 'settings'
   /** Live counts per CRM segment, when the caller has them. */
   counts?: Record<string, number>
   surveyCount?: number
@@ -127,6 +127,8 @@ export default function WorkspaceNav({
             count={shownSurveys}
             onClick={() => navigate('/surveys')}
           />
+          {/* The pieces of an offering memorandum, kept per parcel. */}
+          <Tab label="Library" active={current === 'library'} onClick={() => navigate('/library')} />
         </nav>
 
         {account ? (

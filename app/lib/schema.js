@@ -412,6 +412,28 @@ export const SCHEMA_STATEMENTS = [
     rows       INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  // The Library (library.js): the parcels whose offering-memorandum pieces
+  // are kept, and the pieces drawn for each, one of a kind per parcel.
+  `CREATE TABLE IF NOT EXISTS library_items (
+    team_id   TEXT NOT NULL,
+    place_id  TEXT NOT NULL,
+    added_by  TEXT,
+    added_at  TEXT NOT NULL,
+    PRIMARY KEY (team_id, place_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS library_pieces (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL,
+    place_id   TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    path       TEXT NOT NULL,
+    width      INTEGER,
+    height     INTEGER,
+    created_by TEXT,
+    created_at TEXT NOT NULL
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_library_pieces_place ON library_pieces(team_id, place_id)',
+  'CREATE INDEX IF NOT EXISTS idx_library_pieces_path ON library_pieces(path)',
 ]
 
 /**

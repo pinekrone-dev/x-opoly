@@ -223,6 +223,7 @@ import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
 import { MAX_HEIGHT, MAX_WIDTH, frameOf, renderMap, zoomToFit } from './lib/mapimage.js'
 import { featureReader, parcelShape } from './lib/shapes.js'
+import { PIECES, addToLibrary, inLibrary, isLibraryPiece, libraryPlace, listLibrary, removeFromLibrary, savePiece } from './lib/library.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 import { timingSafeEqual } from './lib/crypto.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
@@ -3766,25 +3767,15 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return answer.ok ? new Uint8Array(await answer.arrayBuffer()) : null
   }
 
-  app.post('/api/gis/map-image', async (c) => {
-    const user = c.get('user')
-    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    const throttled = limited(c, 'map-image', 30, 10 * 60 * 1000)
-    if (throttled) return throttled
-    let body = {}
-    try { body = await c.req.json() } catch { body = {} }
-    const market = String(body.market || '')
-    if (!/^[a-z0-9-]{2,40}$/.test(market)) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
-    const state = body.state && typeof body.state === 'object' ? body.state : {}
-    const day = await spendCount(db, { key: user.teamId, kind: 'mapimage', cap: 200 }).catch(() => ({ allowed: true }))
-    if (!day.allowed) return c.json({ error: 'This workspace has drawn its 200 map images for today. The allowance resets at midnight UTC.' }, 429)
-
+  // The drawing itself, for the route below and for the library's map
+  // pieces: { status, payload }, the payload an error or the picture's path.
+  const drawMapImage = async (c, market, state, body) => {
     const notes = []
     const width = Math.max(320, Math.min(MAX_WIDTH, Math.round(Number(body.width) || 1000)))
     const height = Math.max(240, Math.min(MAX_HEIGHT, Math.round(Number(body.height) || 700)))
     const archive = archiveFor(`${market}/parcels.pmtiles`)
     const header = await archive.getHeader().catch(() => null)
-    if (!header) return c.json({ error: `No map is published for ${market}.` }, 404)
+    if (!header) return { status: 404, payload: { error: `No map is published for ${market}.` } }
 
     // Where the frame sits: where the saved map opens, else on its circle,
     // else on the whole county.
@@ -3815,9 +3806,21 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     let matches = null
     let matchPoints = null
     let matchTotal = null
+    let matchLabel = null
+    // Parcels named outright (a library map's own subject) are picked out
+    // as they are, with no search behind them.
+    const named = (Array.isArray(body.highlight) ? body.highlight : []).map(String).filter(Boolean).slice(0, 200)
+    if (named.length) {
+      matches = new Set(named)
+      matchLabel = String(body.highlightLabel || 'Subject parcel').slice(0, 40)
+      const at = Array.isArray(state.center) && state.center.length === 2
+        ? state.center.map(Number)
+        : state.circle ? [Number(state.circle.lng), Number(state.circle.lat)] : null
+      if (at && at.every(Number.isFinite)) matchPoints = [at]
+    }
     const criteria = new URLSearchParams(String(body.criteria || ''))
     const asked = [...criteria.keys()].some((key) => !['market', 'limit', 'offset', 'circle', 'match'].includes(key))
-    if (asked || criteria.has('circle')) {
+    if (!named.length && (asked || criteria.has('circle'))) {
       const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
       if (!summary) notes.push('This market cannot be searched yet, so no parcels are picked out.')
       else {
@@ -3872,34 +3875,120 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         center, zoom, width, height, basemap, fetchTile: env.MAP_TILE_FETCH ?? tileBytes,
         parcels: { read: featureReader(archive, 'parcels'), minZoom: header.minZoom, maxZoom: header.maxZoom },
         showLandUse: Boolean(state.showParcels), matches, matchPoints,
-        matchLabel: matches ? `Search matches (${(matchTotal ?? matches.size).toLocaleString('en-US')} in view)` : null,
+        matchLabel: matchLabel ?? (matches ? `Search matches (${(matchTotal ?? matches.size).toLocaleString('en-US')} in view)` : null),
         layers, circle, pins, title: String(body.title || '').slice(0, 90) || null,
       })
     } catch (cause) {
       console.error(JSON.stringify({ event: 'map_image_failed', market, message: String(cause?.message ?? cause).slice(0, 300) }))
-      return c.json({ error: 'The map image could not be drawn just now.' }, 502)
+      return { status: 502, payload: { error: 'The map image could not be drawn just now.' } }
     }
     const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
     const name = `${stamp}-${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')}.png`
     await storage.put(`map-export-${name}`, drawn.png, 'image/png')
-    return c.json({
+    return { status: 200, payload: {
       path: `/api/map-exports/${name}`,
       width: drawn.width, height: drawn.height, bytes: drawn.png.length,
       center: { lng: center[0], lat: center[1] }, zoom: drawn.frame.z, box: drawn.frame.box,
       shown: { ...drawn.shown, matchesInFrame: matchTotal },
       keptDays: EXPORT_DAYS,
       notes: [...notes, ...drawn.notes],
-    })
+    } }
+  }
+
+  app.post('/api/gis/map-image', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'map-image', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+    let body = {}
+    try { body = await c.req.json() } catch { body = {} }
+    const market = String(body.market || '')
+    if (!/^[a-z0-9-]{2,40}$/.test(market)) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const state = body.state && typeof body.state === 'object' ? body.state : {}
+    const day = await spendCount(db, { key: user.teamId, kind: 'mapimage', cap: 200 }).catch(() => ({ allowed: true }))
+    if (!day.allowed) return c.json({ error: 'This workspace has drawn its 200 map images for today. The allowance resets at midnight UTC.' }, 429)
+
+    const drawn = await drawMapImage(c, market, state, body)
+    return c.json(drawn.payload, drawn.status)
   })
 
   app.get('/api/map-exports/:name', async (c) => {
     const name = c.req.param('name')
     if (!/^[0-9]{8}-[0-9a-f]{32}\.png$/.test(name)) return c.notFound()
     const made = Date.UTC(Number(name.slice(0, 4)), Number(name.slice(4, 6)) - 1, Number(name.slice(6, 8)))
-    if (!(Date.now() - made < (EXPORT_DAYS + 1) * 86400 * 1000)) return c.json({ error: 'This map image has expired. Export it again.' }, 410)
+    // A month for a one-off export; a piece the Library keeps does not age out.
+    if (!(Date.now() - made < (EXPORT_DAYS + 1) * 86400 * 1000) && !(await isLibraryPiece(db, `/api/map-exports/${name}`).catch(() => false))) {
+      return c.json({ error: 'This map image has expired. Export it again.' }, 410)
+    }
     const file = await storage.get(`map-export-${name}`)
     if (!file) return c.notFound()
     return new Response(file.body, { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400', 'x-robots-tag': 'noindex' } })
+  })
+
+  /*
+   * The Library (lib/library.js): parcels whose offering-memorandum pieces
+   * are kept. A map piece is drawn here, the same drawing as a map image,
+   * framed for what the piece is: the parcel itself, its location with a
+   * three-mile ring, or the retail within a mile. The pins on the last two
+   * (landmarks, chains) are found by the page and handed in.
+   */
+  app.get('/api/library', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const placeId = String(c.req.query('place') ?? '').trim()
+    if (placeId) return c.json({ inLibrary: await inLibrary(db, user.teamId, placeId) })
+    return c.json({ items: await listLibrary(db, user.teamId) })
+  })
+  app.post('/api/library', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const body = await c.req.json().catch(() => ({}))
+    const result = await addToLibrary(db, user.teamId, String(body?.placeId ?? ''), user.id)
+    if (result.error) return c.json({ error: result.error }, 400)
+    return c.json({ ok: true }, 201)
+  })
+  app.delete('/api/library/:placeId', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    await removeFromLibrary(db, user.teamId, c.req.param('placeId'))
+    return c.json({ ok: true })
+  })
+  app.post('/api/library/:placeId/pieces', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'map-image', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const body = await c.req.json().catch(() => ({}))
+    const kind = String(body?.kind ?? '')
+    if (!PIECES[kind]) return c.json({ error: `A piece is one of ${Object.keys(PIECES).join(', ')}.` }, 400)
+    const place = await libraryPlace(db, user.teamId, c.req.param('placeId'))
+    if (!place) return c.json({ error: 'That parcel is not in the library.' }, 404)
+    const lat = Number(place.lat)
+    const lng = Number(place.lng)
+    if (!place.market || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return c.json({ error: 'This record has no location on a county map, so a map cannot be drawn for it.' }, 400)
+    }
+    const day = await spendCount(db, { key: user.teamId, kind: 'mapimage', cap: 200 }).catch(() => ({ allowed: true }))
+    if (!day.allowed) return c.json({ error: 'This workspace has drawn its 200 map images for today. The allowance resets at midnight UTC.' }, 429)
+
+    const name = String(place.name || place.address || 'Parcel').slice(0, 60)
+    const pins = (Array.isArray(body?.pins) ? body.pins : []).slice(0, 60)
+    const subject = { lat, lng, label: name }
+    const state =
+      kind === 'parcel-map'
+        ? { center: [lng, lat], zoom: 17 }
+        : kind === 'location-map'
+          ? { circle: { lat, lng, miles: 3 }, pins: [subject, ...pins] }
+          : { circle: { lat, lng, miles: 1 }, pins: [subject, ...pins] }
+    const drawn = await drawMapImage(c, place.market, state, {
+      title: `${name}: ${PIECES[kind].title.toLowerCase()}`,
+      width: 1200, height: 800,
+      highlight: place.parcelId ? [String(place.parcelId)] : [],
+    })
+    if (drawn.status !== 200) return c.json(drawn.payload, drawn.status)
+    const piece = await savePiece(db, user.teamId, place.id, { kind, path: drawn.payload.path, width: drawn.payload.width, height: drawn.payload.height }, user.id)
+    if (piece.error) return c.json({ error: piece.error }, 400)
+    return c.json({ piece, notes: drawn.payload.notes }, 201)
   })
 
   /*

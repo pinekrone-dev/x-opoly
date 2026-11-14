@@ -544,6 +544,34 @@ export interface PlaceList {
   has?: boolean
 }
 
+/** A piece of an offering memorandum the Library keeps for a parcel. */
+export interface LibraryPiece {
+  kind: 'parcel-map' | 'location-map' | 'retail-map'
+  title: string
+  path: string
+  width: number | null
+  height: number | null
+  createdAt: string
+}
+
+/** A parcel in the Library, with the pieces made for it. */
+export interface LibraryItem {
+  place: {
+    id: string
+    name: string | null
+    address: string | null
+    city: string | null
+    state: string | null
+    lat: number | null
+    lng: number | null
+    acreage: number | null
+    market: string | null
+    parcelId: string | null
+  }
+  addedAt: string
+  pieces: LibraryPiece[]
+}
+
 /**
  * A place pinned for one or more clients: it sits on each client's open deal,
  * which is what makes it an opportunity on the client's own page.

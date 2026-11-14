@@ -364,3 +364,53 @@ describe('the connector\'s tools', () => {
     assert.match(missing.content[0].text, /Capitol Hill land/)
   })
 })
+
+describe('the library', () => {
+  let place
+
+  test('a parcel is added once, listed, and found by its place', async () => {
+    const made = await json('/api/crm/places', { name: '501 Test St', address: '501 Test St', lat: C[1], lng: C[0], market: 'denver-co', parcelId: '501' })
+    assert.equal(made.status, 201)
+    place = made.body.record
+    assert.equal((await json('/api/library', { placeId: place.id })).status, 201)
+    assert.equal((await json('/api/library', { placeId: place.id })).status, 201, 'adding it again is not an error')
+    const listed = await json('/api/library')
+    assert.equal(listed.body.items.length, 1)
+    assert.equal(listed.body.items[0].place.parcelId, '501')
+    assert.deepEqual(listed.body.items[0].pieces, [])
+    assert.equal((await json(`/api/library?place=${place.id}`)).body.inLibrary, true)
+    assert.equal((await json('/api/library', { placeId: 'nothing' })).status, 400)
+  })
+
+  test('a parcel map is drawn with the subject picked out, and kept as the parcel\'s piece', async () => {
+    const made = await json(`/api/library/${place.id}/pieces`, { kind: 'parcel-map' })
+    assert.equal(made.status, 201, JSON.stringify(made.body))
+    assert.equal(made.body.piece.title, 'Parcel map')
+    assert.match(made.body.piece.path, /^\/api\/map-exports\/\d{8}-[0-9a-f]{32}\.png$/)
+    const file = await call(made.body.piece.path, {}, true)
+    const image = await decodePng(new Uint8Array(await file.arrayBuffer()))
+    assert.equal(image.width, 1200)
+    const o = (400 * image.width + 600) * 4
+    assert.ok(image.rgba[o] > 200 && image.rgba[o + 1] < 190, 'the subject parcel is red at the centre of the frame')
+    const listed = await json('/api/library')
+    assert.deepEqual(listed.body.items[0].pieces.map((p) => p.kind), ['parcel-map'])
+  })
+
+  test('a location map takes the pins it is handed, and making a piece again replaces it', async () => {
+    const first = await json(`/api/library/${place.id}/pieces`, { kind: 'location-map', pins: [{ lat: C[1] + 0.01, lng: C[0], label: 'A landmark' }] })
+    assert.equal(first.status, 201, JSON.stringify(first.body))
+    const again = await json(`/api/library/${place.id}/pieces`, { kind: 'location-map' })
+    assert.notEqual(again.body.piece.path, first.body.piece.path)
+    const kinds = (await json('/api/library')).body.items[0].pieces.map((p) => p.kind).sort()
+    assert.deepEqual(kinds, ['location-map', 'parcel-map'])
+    assert.equal((await json(`/api/library/${place.id}/pieces`, { kind: 'nonsense' })).status, 400)
+  })
+
+  test('a parcel taken out of the library takes its pieces with it', async () => {
+    const res = await call(`/api/library/${place.id}`, { method: 'DELETE' })
+    assert.equal(res.status, 200)
+    assert.equal((await json('/api/library')).body.items.length, 0)
+    assert.equal((await json(`/api/library/${place.id}/pieces`, { kind: 'parcel-map' })).status, 404)
+    assert.equal((await json('/api/library', undefined, true)).status, 401)
+  })
+})
