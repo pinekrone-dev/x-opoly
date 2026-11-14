@@ -102,6 +102,17 @@ describe('aggregating block groups into a ring', () => {
     assert.equal(metrics.renterShare, 10.8)
   })
 
+  test('residents\' employment is summed, and the unemployment rate comes from the sums', () => {
+    const { metrics } = aggregate([
+      blockGroup({ laborForce: 1000, employed: 960, unemployed: 40 }),
+      blockGroup({ laborForce: 200, employed: 180, unemployed: 20 }),
+    ])
+    assert.equal(metrics.laborForce, 1200)
+    assert.equal(metrics.employed, 1140)
+    assert.equal(metrics.unemploymentRate, 5)
+    assert.equal(aggregate([blockGroup({})]).metrics.unemploymentRate, null)
+  })
+
   test('education counts every degree at or above a bachelor’s', () => {
     const { metrics } = aggregate([
       blockGroup({
