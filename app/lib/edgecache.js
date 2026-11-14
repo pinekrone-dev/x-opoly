@@ -85,6 +85,22 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
       const headers = new Headers(held.headers)
       headers.delete('x-edge-range')
       if (span) headers.set('content-range', span)
+      /*
+       * The copy is stored under the edge's own cache-control (how long the
+       * edge keeps it), and that header used to go on to the browser with
+       * every hit: "public, s-maxage=3600" on a file whose own header said
+       * "private, max-age=86400". A browser ignores s-maxage, so it kept
+       * nothing and asked again for every tile and every file on every
+       * visit, and a private file went out marked public. The answer's own
+       * cache-control is set aside when the copy is stored and put back
+       * here; none at all is put back as none.
+       */
+      const own = headers.get('x-edge-cc')
+      if (own != null) {
+        headers.delete('x-edge-cc')
+        if (own) headers.set('cache-control', own)
+        else headers.delete('cache-control')
+      }
       const answer = new Response(held.body, { status: span ? 206 : held.status, headers })
       answer.headers.set('x-edge-cache', 'hit')
       if (colo) answer.headers.set('x-edge-colo', colo)
@@ -99,6 +115,7 @@ export async function edgeCached(c, name, ttl, produce, { params = null, cacheab
   if (!keep) return fresh
   const [toUser, toCache] = fresh.body ? fresh.body.tee() : [null, null]
   const stored = new Response(toCache, { status: 200, headers: new Headers(fresh.headers) })
+  stored.headers.set('x-edge-cc', fresh.headers.get('cache-control') || '')
   stored.headers.set('cache-control', cacheControl(ttl))
   stored.headers.delete('set-cookie')
   if (status === 206) {

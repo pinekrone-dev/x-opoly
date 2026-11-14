@@ -4,6 +4,7 @@ import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../compon
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
+import { readManifest, readRow, type RowsManifest } from '../lib/parcelRows'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
@@ -1127,6 +1128,19 @@ export default function Gis({
   const [searching, setSearching] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [serverParcel, setServerParcel] = useState<ParcelRow | null>(null)
+  /*
+   * The market's packed rows, for a market outside the search store: one
+   * parcel read by byte range on a click, instead of the county's index and
+   * details downloaded whole. undefined while asking, null where the market
+   * was published before the pack existed (it reads the whole files then).
+   */
+  const [rowsManifest, setRowsManifest] = useState<RowsManifest | null | undefined>(undefined)
+  /*
+   * Whether the whole index is wanted. With packed rows a click needs none
+   * of it, so it is fetched only once something asks a question of the whole
+   * county: the search box, the query, the table.
+   */
+  const [wantIndex, setWantIndex] = useState(false)
   const [selected, setSelected] = useState<string | number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [stale, setStale] = useState(false)
@@ -1411,6 +1425,11 @@ export default function Gis({
   const [nearPicks, setNearPicks] = useState<NearPick[]>([])
   const [filterTab, setFilterTab] = useState<FilterTab>('property')
   const [tableOpen, setTableOpen] = useState(false)
+  // The query, the report and the table ask about the whole county, which a
+  // market read from packed rows has not downloaded until now.
+  useEffect(() => {
+    if (rail === 'filter' || rail === 'report' || tableOpen) setWantIndex(true)
+  }, [rail, tableOpen])
   /*
    * The query's radius. Switched on in the Query panel, the circle appears
    * at the middle of the view and a click on the map moves it while the
@@ -1576,6 +1595,8 @@ export default function Gis({
     setServer(null)
     setFound(null)
     setServerParcel(null)
+    setRowsManifest(undefined)
+    setWantIndex(false)
     setSelected(null)
     // Filters do not travel between markets: an asset type one county
     // publishes may not exist in the next, and a stale filter would show an
@@ -1668,6 +1689,11 @@ export default function Gis({
     // this download at all. `server` being null means the question is still
     // out, and starting the download before the answer arrives would defeat it.
     if (!server || server.ready) return
+    // A market with packed rows answers a click without the index, so the
+    // index waits until something needs the whole county; one without them
+    // downloads it as before. Not decided until the manifest has answered.
+    if (rowsManifest === undefined) return
+    if (rowsManifest && !wantIndex) return
     let cancelled = false
     fetch(`${CATALOG}/${active}/index.json`)
       .then((r) => r.json())
@@ -1687,7 +1713,25 @@ export default function Gis({
     return () => {
       cancelled = true
     }
-  }, [meta?.heavyBase, server])
+  }, [meta?.heavyBase, server, rowsManifest, wantIndex])
+
+  // The packed rows' manifest, asked once the server has said it cannot
+  // answer for this market itself.
+  useEffect(() => {
+    if (!active || !meta?.heavyBase || !server) return undefined
+    if (server.ready) {
+      setRowsManifest(null)
+      return undefined
+    }
+    let cancelled = false
+    const market = active
+    readManifest(CATALOG, market).then((manifest) => {
+      if (!cancelled && market === activeRef.current) setRowsManifest(manifest)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [active, meta?.heavyBase, server])
 
   /*
    * Whether this parcel is already in the CRM.
@@ -2350,7 +2394,7 @@ export default function Gis({
     // The same question of two sources: the fetched parcel where the server
     // answers, the downloaded column where it does not.
     let held = false
-    if (server?.ready) {
+    if (server?.ready || (rowsManifest && !index)) {
       held = serverParcel != null && (serverParcel.po != null || serverParcel.bo != null)
     } else {
       if (!index) return undefined
@@ -2369,7 +2413,7 @@ export default function Gis({
     return () => {
       cancelled = true
     }
-  }, [selected, owners, active, rowOf, index, server, serverParcel])
+  }, [selected, owners, active, rowOf, index, server, serverParcel, rowsManifest])
 
   /*
    * The census layer, fetched only once someone asks for it.
@@ -2485,6 +2529,8 @@ export default function Gis({
     // Computed once when the county was published, rather than by sorting
     // every assessed value in the browser on every market open.
     if (server?.ready && server.breaks?.length) return server.breaks
+    // The same, written beside the packed rows when the county was built.
+    if (rowsManifest?.breaks?.length) return rowsManifest.breaks
     if (!index) return null
     const values = (index.cols.mv || [])
       .map((v) => Number(v) || 0)
@@ -2494,11 +2540,11 @@ export default function Gis({
     const breaks: number[] = []
     for (let i = 1; i < 7; i += 1) breaks.push(values[Math.floor((i * values.length) / 7)])
     return breaks
-  }, [index, effectiveColorBy, server])
+  }, [index, effectiveColorBy, server, rowsManifest])
 
   const parcel = useMemo(() => {
     if (selected == null) return null
-    if (server?.ready) {
+    if (server?.ready || (rowsManifest && serverParcel && String(serverParcel.id) === String(selected))) {
       if (!serverParcel) return null
       // `bb` is the zoom target, not a field anyone wants read out on the
       // card, so it is kept off the record the panel renders.
@@ -2511,7 +2557,7 @@ export default function Gis({
     const out: Record<string, string | number | null> = {}
     for (const key of index.keys) out[key] = index.cols[key]?.[row] ?? null
     return out
-  }, [selected, index, rowOf, server, serverParcel])
+  }, [selected, index, rowOf, server, serverParcel, rowsManifest])
 
   /*
    * The county's full record, fetched the first time it is asked for.
@@ -2549,6 +2595,9 @@ export default function Gis({
      * fallback that keeps the map working when a publish fails.
      */
     if (!expanded || !base || !active || fetchingDetails.current) return
+    // Whether the market has packed rows is not known yet: wait rather than
+    // start a download that the answer would have spared.
+    if (server && !server.ready && rowsManifest === undefined) return
     fetchingDetails.current = true
     /*
      * Asked of the data, not assumed from the deploy.
@@ -2566,9 +2615,12 @@ export default function Gis({
       .filter((row) => row.always)
       .map((row) => row.k)
     const covered =
-      server?.ready === true &&
-      Array.isArray(server.keys) &&
-      promised.every((key) => server.keys!.includes(key))
+      // A packed row is the index row and the details entry together, so
+      // the details file has nothing to add to it either.
+      Boolean(rowsManifest) ||
+      (server?.ready === true &&
+        Array.isArray(server.keys) &&
+        promised.every((key) => server.keys!.includes(key)))
     const heavy = !covered
     // Only the heavy half is skipped. codes.json is under two kilobytes and
     // names the county's use codes, which the panel needs either way — losing
@@ -2594,7 +2646,7 @@ export default function Gis({
         fetchingDetails.current = false
         setDetailsLoading(false)
       })
-  }, [expanded, meta?.heavyBase, active, server?.ready])
+  }, [expanded, meta?.heavyBase, active, server?.ready, rowsManifest])
 
   /*
    * The filters, in the shape the server takes them.
@@ -2710,23 +2762,42 @@ export default function Gis({
    * a request per click instead of a county per visit.
    */
   useEffect(() => {
-    if (!active || !server?.ready || selected == null) {
+    if (!active || selected == null || !(server?.ready || rowsManifest)) {
       setServerParcel(null)
       return undefined
     }
     let cancelled = false
-    api.parcels
-      .one(active, selected)
-      .then((res) => {
-        if (!cancelled) setServerParcel(res.parcel)
-      })
-      .catch(() => {
-        if (!cancelled) setServerParcel(null)
-      })
+    if (server?.ready) {
+      api.parcels
+        .one(active, selected)
+        .then((res) => {
+          if (!cancelled) setServerParcel(res.parcel)
+        })
+        .catch(() => {
+          if (!cancelled) setServerParcel(null)
+        })
+    } else if (rowsManifest) {
+      // The same shape from the packed rows: the parcel's index row, its box
+      // and its details in one record, read as one shard by byte range.
+      const picked = selected
+      readRow(CATALOG, active, rowsManifest, picked)
+        .then((row) => {
+          if (cancelled) return
+          setServerParcel(row ? ({ ...row, id: (row.id as string | number | undefined) ?? picked } as ParcelRow) : null)
+          // A parcel the pack does not hold (a build newer than the pack):
+          // the whole index still has it.
+          if (!row) setWantIndex(true)
+        })
+        .catch(() => {
+          if (cancelled) return
+          setServerParcel(null)
+          setWantIndex(true)
+        })
+    }
     return () => {
       cancelled = true
     }
-  }, [active, server?.ready, selected])
+  }, [active, server?.ready, rowsManifest, selected])
 
   /** Rows as plain objects, built once per market rather than per keystroke. */
   const rows = useMemo(() => {
@@ -2803,6 +2874,17 @@ export default function Gis({
   const ownerFiltersReady = server?.ready
     ? Boolean(server.otagged)
     : Boolean(index?.keys?.includes('sy') || index?.keys?.includes('ms'))
+
+  // A filter set by any route (the query panel, a saved view, an owner
+  // picked from a card) is a question of the whole county.
+  useEffect(() => {
+    if (
+      query.trim() || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
+      nearPicks.length > 0 || value.min || value.max || acres.min || acres.max
+    ) {
+      setWantIndex(true)
+    }
+  }, [query, assets, ownerPick, ownerPicks, areaCircle, nearPicks, value, acres])
 
   const filtered = useMemo(() => {
     // Answered by the server where it can be. `ids` is null there for exactly
@@ -3239,7 +3321,7 @@ export default function Gis({
   /** The selected parcel's bounding box, west-south-east-north, from the index. */
   const selectedBox = useMemo<[number, number, number, number] | null>(() => {
     if (selected == null) return null
-    if (server?.ready) {
+    if (server?.ready || (rowsManifest && !index)) {
       // The fetched row lags the selection by one request, and for that
       // moment it is the previous parcel's box. The camera below flies to
       // whatever box it is handed, so a box has to be the selected parcel's.
@@ -3255,7 +3337,7 @@ export default function Gis({
     const [w, s, e, n] = index.bb.slice(row * 4, row * 4 + 4)
     if (![w, s, e, n].every(Number.isFinite)) return null
     return [w, s, e, n]
-  }, [selected, index, rowOf, server, serverParcel])
+  }, [selected, index, rowOf, server, serverParcel, rowsManifest])
 
   /** The centre of the selected parcel. */
   const centre = useMemo(() => {
@@ -3362,6 +3444,8 @@ export default function Gis({
       const parts = /^\s*(\d+)\s+(.*)$/.exec(hit.address ?? '')
       const words = (parts?.[2] ?? '').toLowerCase().split(/\s+/).filter((w) => w.length > 2 && !/^(n|s|e|w|ne|nw|se|sw)$/.test(w))
       pendingPoint.current = { lat: hit.lat, lng: hit.lng, number: parts?.[1] ?? '', street: words[0] ?? '' }
+      // Finding the lot under a geocoded point needs every parcel's box.
+      setWantIndex(true)
       const inMarket = extentsRef.current.some(
         (x) => hit.lng >= x.box[0] && hit.lng <= x.box[2] && hit.lat >= x.box[1] && hit.lat <= x.box[3],
       )
@@ -4601,6 +4685,7 @@ export default function Gis({
             onViewSave={saveCurrentView}
             onViewOpen={applyView}
             onViewDelete={removeView}
+            onNeedRows={() => setWantIndex(true)}
           />
         }
         badge={{
@@ -6576,6 +6661,7 @@ function AddressBar({
   onViewSave,
   onViewOpen,
   onViewDelete,
+  onNeedRows,
 }: {
   market: string | null
   serverReady: boolean
@@ -6596,6 +6682,8 @@ function AddressBar({
   onViewSave?: () => void
   onViewOpen?: (view: MapView) => void
   onViewDelete?: (id: string) => void
+  /** The box is about to be searched: the county's rows are wanted now. */
+  onNeedRows?: () => void
 }) {
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
@@ -6677,7 +6765,10 @@ function AddressBar({
             setText(event.target.value)
             setOpen(true)
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            setOpen(true)
+            onNeedRows?.()
+          }}
           onBlur={() => setTimeout(() => {
             setOpen(false)
             // The menu holds a field of its own (the view's name); focus
