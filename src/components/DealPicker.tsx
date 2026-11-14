@@ -172,6 +172,13 @@ export default function DealPicker({
       </button>
       {open ? (
         <div className="panel p-3 text-left shadow-lg" style={pop.style}>
+          {/* What is being put on a deal, by its address: the thing the
+              person is looking at, named before anything is asked of them. */}
+          {kind === 'place' && defaultName ? (
+            <p className="mb-2 truncate text-xs text-muted" title={defaultName}>
+              Add <span className="font-semibold text-ink">{defaultName}</span> to a deal
+            </p>
+          ) : null}
           <input
             className="field mb-2 w-full text-sm"
             placeholder="Find a deal"
@@ -210,15 +217,21 @@ export default function DealPicker({
               })}
             </ul>
           )}
-          <label className="mt-2 block border-t border-line pt-2 text-[11px] text-muted">
-            Role on the deal
-            <input
-              className="field mt-1 w-full text-sm"
-              placeholder={kind === 'place' ? 'Candidate' : 'Tenant, buyer, decision maker…'}
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-            />
-          </label>
+          {/* A person or a company has a part to play on a deal, and it is
+              asked for. A property is a candidate site until the deal says
+              otherwise, so nothing is asked: the box read as a name for the
+              property, which is its address, shown above. */}
+          {kind !== 'place' ? (
+            <label className="mt-2 block border-t border-line pt-2 text-[11px] text-muted">
+              Role on the deal
+              <input
+                className="field mt-1 w-full text-sm"
+                placeholder="Tenant, buyer, decision maker…"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+              />
+            </label>
+          ) : null}
           {making ? (
             <div className="mt-2 space-y-1.5">
               <input
@@ -245,10 +258,10 @@ export default function DealPicker({
           ) : (
             <button
               type="button"
-              className="mt-2 w-full text-left text-xs font-semibold text-brand hover:underline"
+              className={`mt-2 w-full text-left text-xs font-semibold text-brand hover:underline ${kind === 'place' ? 'border-t border-line pt-2' : ''}`}
               onClick={() => setMaking(true)}
             >
-              + New deal
+              {kind === 'place' && defaultName ? `+ New deal for ${defaultName}` : '+ New deal'}
             </button>
           )}
           {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
