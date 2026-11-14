@@ -23,10 +23,14 @@ export default function ListsLayerPicker({
   lists,
   chosen,
   onChange,
+  onNone,
 }: {
   lists: PlaceList[] | null
+  /** The lists shown; none named means every list. */
   chosen: string[]
   onChange: (ids: string[]) => void
+  /** The last list was unticked: nothing is left to show. */
+  onNone?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const pop = usePopover(open, 260)
@@ -43,14 +47,28 @@ export default function ListsLayerPicker({
     return () => window.removeEventListener('mousedown', close)
   }, [open, pop.anchor])
 
-  const toggle = (id: string) => onChange(chosen.includes(id) ? chosen.filter((c) => c !== id) : [...chosen, id])
+  /*
+   * Every list is ticked when all are shown, so the boxes say what is on the
+   * map. "All lists" used to be its own state with every list beside it
+   * unticked, which read as nothing chosen, and ticking it appeared to
+   * untick the one list that was. Unticking the last list leaves nothing to
+   * show, which is the layer switched off.
+   */
+  const every = (lists ?? []).map((l) => l.id)
+  const shown = chosen.length ? chosen.filter((id) => every.includes(id)) : every
+  const all = every.length > 0 && shown.length === every.length
+  const settle = (next: string[]) => {
+    if (next.length === 0) onNone ? onNone() : onChange([])
+    else onChange(next.length === every.length ? [] : next)
+  }
+  const toggle = (id: string) => settle(shown.includes(id) ? shown.filter((c) => c !== id) : [...shown, id])
 
   return (
     <div ref={pop.anchor}>
       <button
         type="button"
         className={`flex h-6 items-center gap-0.5 rounded-md border px-1.5 text-[10px] font-semibold ${
-          chosen.length ? 'border-brand/50 bg-brand/10 text-brand' : 'border-line bg-surface text-muted hover:text-ink'
+          !all && every.length ? 'border-brand/50 bg-brand/10 text-brand' : 'border-line bg-surface text-muted hover:text-ink'
         }`}
         aria-label="Choose which lists to show"
         title="Choose which lists to show"
@@ -59,7 +77,7 @@ export default function ListsLayerPicker({
           setOpen((v) => !v)
         }}
       >
-        {chosen.length ? chosen.length : 'All'}
+        {all || !every.length ? 'All' : shown.length}
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" aria-hidden>
           <path d="m6 9 6 6 6-6" />
         </svg>
@@ -75,14 +93,14 @@ export default function ListsLayerPicker({
             <ul className="max-h-64 overflow-y-auto">
               <li>
                 <label className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs hover:bg-sunken">
-                  <input type="checkbox" checked={chosen.length === 0} onChange={() => onChange([])} />
+                  <input type="checkbox" checked={all} onChange={() => settle(all ? [] : every)} />
                   <span className="font-medium text-ink">All lists</span>
                 </label>
               </li>
               {lists.map((l) => (
                 <li key={l.id}>
                   <label className="flex cursor-pointer items-start gap-2 rounded px-1 py-1 hover:bg-sunken">
-                    <input type="checkbox" className="mt-0.5" checked={chosen.includes(l.id)} onChange={() => toggle(l.id)} />
+                    <input type="checkbox" className="mt-0.5" checked={shown.includes(l.id)} onChange={() => toggle(l.id)} />
                     <span className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: listColor(lists, l.id) }} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-xs font-medium text-ink">{l.name}</span>
