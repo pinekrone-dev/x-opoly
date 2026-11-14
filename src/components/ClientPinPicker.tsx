@@ -26,13 +26,16 @@ export default function ClientPinPicker({
   prepare,
   buttonClassName = 'btn-secondary text-xs',
   onChanged,
+  inline = false,
 }: {
   placeId: string | null
   prepare: () => Promise<string>
   buttonClassName?: string
   onChanged?: (pins: ClientPin[]) => void
+  /** Only the chooser itself, to sit inside another picker (the deal picker). */
+  inline?: boolean
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(inline)
   const pop = usePopover(open, 300)
   const [place, setPlace] = useState<string | null>(placeId)
   const [clients, setClients] = useState<Client[] | null>(null)
@@ -139,13 +142,8 @@ export default function ClientPinPicker({
   const typed = filter.trim()
   const exact = typed && (clients ?? []).some((c) => c.name.toLowerCase() === typed.toLowerCase())
 
-  return (
-    <div className="relative" ref={pop.anchor}>
-      <button type="button" className={buttonClassName} onClick={() => setOpen((v) => !v)} data-testid="client-pin-button">
-        {count ? `Pinned for ${count} client${count === 1 ? '' : 's'}` : '+ Pin for client'}
-      </button>
-      {open ? (
-        <div className="panel p-3 text-left shadow-lg" style={pop.style}>
+  const chooser = (
+    <>
           <input
             className="field mb-2 w-full text-sm"
             placeholder="Find a client, or type a new name"
@@ -194,6 +192,18 @@ export default function ClientPinPicker({
             A pin puts this parcel on the client’s open deal, so it shows on the Client pins layer and on their CRM page.
           </p>
           {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
+    </>
+  )
+  if (inline) return chooser
+
+  return (
+    <div className="relative" ref={pop.anchor}>
+      <button type="button" className={buttonClassName} onClick={() => setOpen((v) => !v)} data-testid="client-pin-button">
+        {count ? `Pinned for ${count} client${count === 1 ? '' : 's'}` : '+ Pin for client'}
+      </button>
+      {open ? (
+        <div className="panel p-3 text-left shadow-lg" style={pop.style}>
+          {chooser}
         </div>
       ) : null}
     </div>

@@ -11,7 +11,7 @@ import { useCanEdit } from '../lib/access'
 import { downloadDealWorkbook } from '../lib/dealWorkbook'
 import { OBJECTS, objectFor, objectForSegment, subtitleOf, titleOf } from '../lib/crm'
 import type { DetailField, ObjectSpec } from '../lib/crm'
-import type { Account, BillingStatus, CrmRecord, Deal, RecordType } from '../types'
+import type { Account, BillingStatus, CrmRecord, Deal, RecordType, PlaceList } from '../types'
 
 /**
  * The workspace home.
@@ -79,6 +79,31 @@ export default function Home({
    * click still opens the record; the checks clear when the tab changes.
    */
   const [selecting, setSelecting] = useState(false)
+  /*
+   * A list as a filter on the Parcels tab. A list is the same parcels seen
+   * two ways: as pins on the map (the Lists layer) and as rows here.
+   */
+  const [lists, setLists] = useState<PlaceList[]>([])
+  const [listFilter, setListFilter] = useState('')
+  const [listed, setListed] = useState<Set<string> | null>(null)
+  useEffect(() => {
+    if (tab !== 'places') return
+    api.lists.all().then(({ lists: found }) => setLists(found)).catch(() => setLists([]))
+  }, [tab])
+  useEffect(() => {
+    if (!listFilter) {
+      setListed(null)
+      return undefined
+    }
+    let cancelled = false
+    api.lists
+      .pins([listFilter])
+      .then(({ places }) => !cancelled && setListed(new Set(places.map((place) => place.id))))
+      .catch(() => !cancelled && setListed(new Set()))
+    return () => {
+      cancelled = true
+    }
+  }, [listFilter])
   const [checked, setChecked] = useState<Set<string>>(new Set())
   useEffect(() => {
     setSelecting(false)
@@ -312,6 +337,21 @@ export default function Home({
                   {exporting ? 'Building…' : 'Export to Excel'}
                 </button>
               ) : null}
+              {spec.type === 'place' && lists.length > 0 && !search ? (
+                <span className="flex items-center gap-2">
+                  <select className="field h-9 w-auto py-0 text-sm" aria-label="Show the parcels on a list" value={listFilter} onChange={(event) => setListFilter(event.target.value)} data-testid="parcels-list-filter">
+                    <option value="">All parcels</option>
+                    {lists.map((list) => (
+                      <option key={list.id} value={list.id}>List: {list.name} ({list.count})</option>
+                    ))}
+                  </select>
+                  {listFilter ? (
+                    <button type="button" className="btn-secondary text-xs" onClick={() => navigate(`/gis?list=${encodeURIComponent(listFilter)}`)}>
+                      See the list on the map
+                    </button>
+                  ) : null}
+                </span>
+              ) : null}
               {spec.type === 'place' && records.length > 0 && !search && canEdit ? (
                 <div className="ml-auto flex items-center gap-2">
                   {selecting ? (
@@ -424,7 +464,7 @@ export default function Home({
             ) : (
               <RecordTable
                 spec={spec}
-                records={records}
+                records={spec.type === 'place' && listed ? records.filter((record) => listed.has((record as { id: string }).id)) : records}
                 truncated={truncated}
                 selecting={selecting}
                 checked={checked}

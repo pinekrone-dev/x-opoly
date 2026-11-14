@@ -8,7 +8,6 @@ import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
-import ClientPinPicker from '../components/ClientPinPicker'
 import LibraryButton from '../components/LibraryButton'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -5813,61 +5812,14 @@ export default function Gis({
             // until that answered. The three things a broker does next.
             parcel ? (
               <>
-                {known?.place ? (
-                  <button
-                    type="button"
-                    className="rounded-md border border-brand/40 bg-brand/5 px-2 py-1 text-[11px] font-semibold text-brand hover:bg-brand/10"
-                    onClick={() => navigate(`/places/${known.place?.id}`)}
-                  >
-                    In CRM ✓
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90 disabled:opacity-50"
-                    disabled={saving}
-                    onClick={addToCrm}
-                  >
-                    {saving ? 'Saving…' : '+ Add to CRM'}
-                  </button>
-                )}
-                <SendPlaceToSurvey
-                  key={`${active}:${selected}`}
-                  placeIds={known?.place ? [known.place.id] : []}
-                  prepare={async () => {
-                    const place = await ensurePlace()
-                    if (!place) throw new Error('Could not save that parcel.')
-                    return [place.id]
-                  }}
-                  label="+ Add to survey"
-                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
-                />
-                <LibraryButton
-                  key={`library:${active}:${selected}:${known?.place?.id ?? ''}`}
-                  placeId={known?.place?.id ?? null}
-                  prepare={async () => {
-                    const place = await ensurePlace()
-                    if (!place) throw new Error('Could not save that parcel.')
-                    return place.id
-                  }}
-                  className="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
-                />
-                <ClientPinPicker
-                  key={`client-pin:${active}:${selected}:${known?.place?.id ?? ''}`}
-                  placeId={known?.place?.id ?? null}
-                  prepare={async () => {
-                    const place = await ensurePlace()
-                    if (!place) throw new Error('Could not save that parcel.')
-                    return place.id
-                  }}
-                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
-                  onChanged={() => {
-                    // A pin made here should be on the map: the layer goes on
-                    // if it was off, and reads its pins again.
-                    setClientsOn(true)
-                    setClientPinsVersion((n) => n + 1)
-                  }}
-                />
+                {/*
+                  * Two things are done with a parcel that is worth keeping:
+                  * it goes on a deal, or on a list. Either saves it to the
+                  * CRM, so there is no separate "add to CRM"; a deal for a
+                  * client is made from the deal picker, so there is no
+                  * separate client pin. Then the two ways it is shown: on a
+                  * survey's tour, and as pieces in the Library.
+                  */}
                 <DealPicker
                   key={`deal:${active}:${selected}:${known?.place?.id ?? ''}`}
                   kind="place"
@@ -5879,9 +5831,11 @@ export default function Gis({
                   }}
                   defaultRole="Candidate"
                   defaultName={String(parcel.ad || `Parcel ${parcel.gid ?? selected}`)}
-                  label="+ Add to deal"
-                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
+                  label="+ Deal"
+                  clients
+                  buttonClassName="rounded-md bg-brand px-2 py-1 text-[11px] font-semibold text-white hover:bg-brand/90"
                   onChanged={() => {
+                    setClientPinsVersion((n) => n + 1)
                     // The card lists the deals this parcel is on; read them again.
                     if (!active || selected == null) return
                     api.crm
@@ -5900,13 +5854,36 @@ export default function Gis({
                   }}
                   buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
                 />
-                <button
-                  type="button"
-                  className="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken"
-                  onClick={openOm}
-                >
-                  Turn into OM
-                </button>
+                <SendPlaceToSurvey
+                  key={`${active}:${selected}`}
+                  placeIds={known?.place ? [known.place.id] : []}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return [place.id]
+                  }}
+                  label="+ Survey"
+                  buttonClassName="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
+                <LibraryButton
+                  key={`library:${active}:${selected}:${known?.place?.id ?? ''}`}
+                  placeId={known?.place?.id ?? null}
+                  prepare={async () => {
+                    const place = await ensurePlace()
+                    if (!place) throw new Error('Could not save that parcel.')
+                    return place.id
+                  }}
+                  className="rounded-md border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50"
+                />
+                {known?.place ? (
+                  <button
+                    type="button"
+                    className="px-1 py-1 text-[11px] font-medium text-muted underline decoration-dotted hover:text-ink"
+                    onClick={() => navigate(`/places/${known.place?.id}`)}
+                  >
+                    CRM record
+                  </button>
+                ) : null}
               </>
             ) : null
           }

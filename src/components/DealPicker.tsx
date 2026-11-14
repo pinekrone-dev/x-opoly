@@ -3,6 +3,7 @@ import { api } from '../api'
 import { usePopover } from '../lib/popover'
 import { navigate } from '../lib/router'
 import type { Deal, DealOn, RecordType } from '../types'
+import ClientPinPicker from './ClientPinPicker'
 
 /** A deal's stage as it is stored (`under_contract`), read as words. */
 export const stageWords = (stage: string) => stage.replace(/_/g, ' ')
@@ -37,6 +38,7 @@ export default function DealPicker({
   openNewDeal = false,
   buttonClassName = 'btn-secondary text-xs',
   label = '+ Deal',
+  clients = false,
   onChanged,
 }: {
   kind: 'person' | 'company' | 'place'
@@ -50,8 +52,11 @@ export default function DealPicker({
   openNewDeal?: boolean
   buttonClassName?: string
   label?: string
+  /** Offer "for a client": the place goes on that client's open deal, made if there is none. */
+  clients?: boolean
   onChanged?: () => void
 }) {
+  const [forClient, setForClient] = useState(false)
   const [open, setOpen] = useState(false)
   const pop = usePopover(open, 300)
   const [deals, setDeals] = useState<Deal[] | null>(null)
@@ -172,6 +177,27 @@ export default function DealPicker({
       </button>
       {open ? (
         <div className="panel p-3 text-left shadow-lg" style={pop.style}>
+          {forClient && prepare ? (
+            <>
+              <button type="button" className="mb-2 text-[11px] font-semibold text-brand hover:underline" onClick={() => setForClient(false)}>
+                ← All deals
+              </button>
+              <ClientPinPicker
+                inline
+                placeId={record}
+                prepare={ensure}
+                onChanged={async () => {
+                  // The client's deal now holds the place: read both lists again.
+                  const id = record ?? (await ensure())
+                  const [{ records }, { deals: fresh }] = await Promise.all([api.crm.list<Deal>('deals'), api.crm.dealsOf(SEGMENT[kind], id)])
+                  setDeals(records)
+                  setOn(new Map(fresh.map((d) => [d.id, d])))
+                  onChanged?.()
+                }}
+              />
+            </>
+          ) : (
+          <>
           {/* What is being put on a deal, by its address: the thing the
               person is looking at, named before anything is asked of them. */}
           {kind === 'place' && defaultName ? (
@@ -264,7 +290,19 @@ export default function DealPicker({
               {kind === 'place' && defaultName ? `+ New deal for ${defaultName}` : '+ New deal'}
             </button>
           )}
+          {clients && kind === 'place' && !making ? (
+            <button
+              type="button"
+              className="mt-1.5 w-full text-left text-xs font-semibold text-brand hover:underline"
+              onClick={() => setForClient(true)}
+              data-testid="deal-for-client"
+            >
+              + Deal for a client…
+            </button>
+          ) : null}
           {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
+          </>
+          )}
         </div>
       ) : null}
     </div>
