@@ -94,6 +94,11 @@ const VARIABLES = {
   B15003_023E: 'masters',
   B15003_024E: 'professional',
   B15003_025E: 'doctorate',
+  // Employment status of residents 16 and over (table B23025): who is in
+  // the civilian labor force, and who of them is working.
+  B23025_003E: 'laborForce',
+  B23025_004E: 'employed',
+  B23025_005E: 'unemployed',
 }
 
 /** Metrics that are counts, and so can legitimately be summed across a ring. */
@@ -107,6 +112,9 @@ const SUMMABLE = [
   'masters',
   'professional',
   'doctorate',
+  'laborForce',
+  'employed',
+  'unemployed',
 ]
 
 /** Medians, which can only be weighted — never added. */
@@ -456,6 +464,13 @@ export function aggregate(records) {
     totals.bachelors + totals.masters + totals.professional + totals.doctorate,
     totals.educationUniverse,
   )
+
+  // Residents' employment: counts, and the unemployment rate they give. These
+  // describe the people who live in the ring, not the jobs located in it.
+  metrics.laborForce = totals.laborForce
+  metrics.employed = totals.employed
+  metrics.unemployed = totals.unemployed
+  metrics.unemploymentRate = share(totals.unemployed, totals.laborForce)
 
   return { metrics, blockGroups: counted }
 }
