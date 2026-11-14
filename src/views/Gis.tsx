@@ -6,6 +6,7 @@ import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
+import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
@@ -14,7 +15,7 @@ import type { FilterSpecification } from 'maplibre-gl'
 import GisRail, {
   CheckList,
   LAYER_ICONS,
-  LayerGrid,
+  LayerSections,
   RangeInput,
   type LayerCard,
   type RailTab,
@@ -1306,6 +1307,22 @@ export default function Gis({
    * colour. No list chosen means every list; the card's corner chooses.
    */
   const [listsOn, setListsOn] = useState(false)
+  // The team's own starting points: saved views under a market of their own,
+  // so they are shared with the team and follow the person between devices.
+  const [ownPoints, setOwnPoints] = useState<StartingPoint[]>([])
+  const loadPoints = useCallback(() => {
+    api.views
+      .list(STARTING_POINT_MARKET)
+      .then((res) =>
+        setOwnPoints(
+          res.views
+            .map((view) => ({ id: view.id, name: view.name, layers: Array.isArray(view.state?.layers) ? (view.state.layers as unknown[]).map(String) : [] }))
+            .filter((point) => point.layers.length > 0),
+        ),
+      )
+      .catch(() => setOwnPoints([]))
+  }, [])
+  useEffect(() => { loadPoints() }, [loadPoints])
   const [listChoice, setListChoice] = useState<string[]>([])
   const [allLists, setAllLists] = useState<PlaceList[] | null>(null)
   const [listPlaces, setListPlaces] = useState<ListPin[]>([])
@@ -3182,7 +3199,7 @@ export default function Gis({
                 // Say so plainly. A bounded layer that reports only its own
                 // size reads as the whole city, and is not.
                 ? `${layer.count.toLocaleString()} of ${layer.total.toLocaleString()}`
-                : `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : 'areas'}`
+                : `${layer.count.toLocaleString()} ${layer.kind === 'point' ? 'points' : layer.kind === 'line' ? 'lines' : 'areas'}`
               : layer.note,
             icon: PUBLISHED_ICONS[layer.id] ?? LAYER_ICONS.parcels,
           }
@@ -3207,6 +3224,47 @@ export default function Gis({
       pending('Forecasts', LAYER_ICONS.forecasts),
     ]
   }, [showParcels, showOwners, showCensus, showZoning, coverage, meta?.count, ownerList.length, shownLayers, layerOn, layerBusy, listsOn, listChoice, allLists])
+
+  /* One card switched on or off: the same handler for a click on the card,
+   * its off button under "On now", and a starting point. */
+  const toggleLayerCard = (id: string) => {
+    if (id === 'parcels') setShowParcels((on) => !on)
+    if (id === 'ownership')
+      setShowOwners((on) => {
+        // Switching the layer off must not leave the map filtered
+        // to an owner with nothing on screen to explain why.
+        if (on) setOwnerPick(null)
+        return !on
+      })
+    if (id === 'demographics')
+      setShowCensus((on) => {
+        // Shading a county through opaque parcels shows nothing,
+        // so the first time it goes on the parcels step back —
+        // once, as a starting point the slider can undo.
+        if (!on) setOpacity((current) => (current > 0.2 ? 0.12 : current))
+        return !on
+      })
+    if (id === 'zoning') setShowZoning((on) => !on)
+    if (id === 'lists') setListsOn((on) => !on)
+    if (id.startsWith('x:')) {
+      const key = id.slice(2)
+      setLayerOn((current) => ({ ...current, [key]: !current[key] }))
+    }
+    if (id.startsWith('g:')) {
+      const members = shownLayers.filter((l) => layerGroup(l.id) === id.slice(2)).map((l) => l.id)
+      setLayerOn((current) => {
+        const on = !members.some((m) => current[m])
+        return { ...current, ...Object.fromEntries(members.map((m) => [m, on])) }
+      })
+    }
+  }
+  // Each card with the section it sits in: the catalogue's own say for a
+  // published layer, where it has one, else read from the layer's id.
+  const sectionedCards = layerCards.map((card) => {
+    const key = card.id.replace(/^[xg]:/, '')
+    const named = (shownLayers.find((l) => l.id === key || layerGroup(l.id) === key) as { section?: string } | undefined)?.section
+    return { ...card, section: sectionOf(card.id, named) }
+  })
 
   /*
    * Collecting the rows an export writes.
@@ -4600,38 +4658,20 @@ export default function Gis({
               <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted">
                 Layers
               </p>
-              <LayerGrid
-                cards={layerCards}
-                onToggle={(id) => {
-                  if (id === 'parcels') setShowParcels((on) => !on)
-                  if (id === 'ownership')
-                    setShowOwners((on) => {
-                      // Switching the layer off must not leave the map filtered
-                      // to an owner with nothing on screen to explain why.
-                      if (on) setOwnerPick(null)
-                      return !on
-                    })
-                  if (id === 'demographics')
-                    setShowCensus((on) => {
-                      // Shading a county through opaque parcels shows nothing,
-                      // so the first time it goes on the parcels step back —
-                      // once, as a starting point the slider can undo.
-                      if (!on) setOpacity((current) => (current > 0.2 ? 0.12 : current))
-                      return !on
-                    })
-                  if (id === 'zoning') setShowZoning((on) => !on)
-                  if (id === 'lists') setListsOn((on) => !on)
-                  if (id.startsWith('x:')) {
-                    const key = id.slice(2)
-                    setLayerOn((current) => ({ ...current, [key]: !current[key] }))
-                  }
-                  if (id.startsWith('g:')) {
-                    const members = shownLayers.filter((l) => layerGroup(l.id) === id.slice(2)).map((l) => l.id)
-                    setLayerOn((current) => {
-                      const on = !members.some((m) => current[m])
-                      return { ...current, ...Object.fromEntries(members.map((m) => [m, on])) }
-                    })
-                  }
+              <LayerSections
+                cards={sectionedCards}
+                onToggle={toggleLayerCard}
+                points={startingPoints(ownPoints)}
+                onApply={(point) => {
+                  for (const id of cardsToSwitch(sectionedCards, point.layers)) toggleLayerCard(id)
+                }}
+                onSavePoint={async (name, layers) => {
+                  await api.views.save({ market: STARTING_POINT_MARKET, name, state: { v: 1, layers } })
+                  loadPoints()
+                }}
+                onRemovePoint={async (point) => {
+                  if (point.id) await api.views.remove(point.id)
+                  loadPoints()
                 }}
               />
             </div>

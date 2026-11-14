@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { bySection, cardKey, sectionOf, type StartingPoint } from '../lib/layerSections'
 
 /*
  * The left rail.
@@ -230,6 +231,8 @@ export interface LayerCard {
   icon: JSX.Element
   /** A small control in the card's top corner (which lists, say). */
   corner?: React.ReactNode
+  /** Which section of the panel it sits in (lib/layerSections.ts). */
+  section?: string
 }
 
 export function LayerGrid({
@@ -288,6 +291,179 @@ export function LayerGrid({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+const OPEN_KEY = 'lq:layer-sections-open'
+
+function readOpen(): Record<string, boolean> | null {
+  try {
+    const raw = localStorage.getItem(OPEN_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : null
+  } catch {
+    return null
+  }
+}
+
+/*
+ * The layer catalogue, in sections.
+ *
+ * One flat grid of every layer a market publishes had grown past twenty
+ * cards. Here the cards sit under what they are for (boundaries, zoning,
+ * development, market research, infrastructure, risk), each section folded
+ * until it is wanted, so the panel opens short.
+ *
+ * Two things sit above the sections. "On now" lists what is switched on,
+ * each with its own off button, because a layer that is on inside a folded
+ * section would otherwise be on with nothing saying so. And the starting
+ * points switch a sensible handful on in one click: a few built in, and any
+ * the team has saved from its own "On now".
+ */
+export function LayerSections({
+  cards,
+  onToggle,
+  points,
+  onApply,
+  onSavePoint,
+  onRemovePoint,
+}: {
+  cards: LayerCard[]
+  onToggle: (id: string) => void
+  points: StartingPoint[]
+  onApply: (point: StartingPoint) => void
+  onSavePoint: (name: string, layers: string[]) => Promise<void> | void
+  onRemovePoint: (point: StartingPoint) => Promise<void> | void
+}) {
+  const groups = bySection(cards)
+  const on = cards.filter((card) => card.state === 'on')
+  // Folded or not, where the person has said; otherwise a section is open
+  // exactly when something in it is on.
+  const [open, setOpen] = useState<Record<string, boolean>>(() => readOpen() ?? {})
+  const [naming, setNaming] = useState(false)
+  const [name, setName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const flip = (id: string, now: boolean) => {
+    setOpen((current) => {
+      const next = { ...current, [id]: !now }
+      try { localStorage.setItem(OPEN_KEY, JSON.stringify(next)) } catch { /* private window: the fold is not remembered */ }
+      return next
+    })
+  }
+  // What a starting point would use here: the layers this market has.
+  const available = new Set(cards.filter((c) => c.state === 'on' || c.state === 'off').map((c) => cardKey(c.id)))
+  const usable = points.filter((point) => point.layers.some((key) => available.has(key)))
+  const saveable = on.filter((card) => (card.section ?? sectionOf(card.id)) !== 'workspace')
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const label = name.trim()
+    if (!label || saving) return
+    setSaving(true)
+    try {
+      await onSavePoint(label, saveable.map((card) => cardKey(card.id)))
+      setNaming(false)
+      setName('')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2.5">
+      <div data-testid="layers-on-now">
+        <div className="flex items-baseline justify-between">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">On now</p>
+          {saveable.length ? (
+            <button type="button" className="text-[10px] font-medium text-brand hover:underline" onClick={() => setNaming((v) => !v)}>
+              {naming ? 'Cancel' : 'Save as starting point'}
+            </button>
+          ) : null}
+        </div>
+        {on.length ? (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {on.map((card) => (
+              <span key={card.id} className="inline-flex items-center gap-1 rounded-full border border-brand/40 bg-brand/5 py-0.5 pl-2 pr-1 text-[11px] font-medium text-ink">
+                {card.label}
+                <button type="button" aria-label={`Switch off ${card.label}`} title="Switch off"
+                  className="flex h-4 w-4 items-center justify-center rounded-full text-muted hover:bg-brand/15 hover:text-ink"
+                  onClick={() => onToggle(card.id)}>
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="mt-1 text-[11px] text-faint">Nothing switched on. Pick a starting point or open a section.</p>
+        )}
+        {naming ? (
+          <form onSubmit={save} className="mt-1.5 flex gap-1.5">
+            <input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={40}
+              placeholder="Name it, e.g. Retail pads" aria-label="Starting point name"
+              className="min-w-0 flex-1 rounded border border-line bg-white px-2 py-1 text-[11px] text-ink placeholder:text-faint focus:border-ink focus:outline-none" />
+            <button type="submit" disabled={!name.trim() || saving}
+              className="rounded border border-line px-2 py-1 text-[11px] font-semibold text-ink hover:bg-sunken disabled:opacity-50">
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </form>
+        ) : null}
+      </div>
+
+      {usable.length ? (
+        <div data-testid="starting-points">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Starting points</p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {usable.map((point) => (
+              <span key={point.id ?? point.name} className="inline-flex items-center rounded-full border border-line bg-surface text-[11px] text-ink hover:border-muted">
+                <button type="button" className="py-0.5 pl-2 pr-1.5 font-medium" onClick={() => onApply(point)}
+                  title={point.note ?? `${point.layers.filter((key) => available.has(key)).length} layers`}>
+                  {point.name}
+                </button>
+                {point.id ? (
+                  <button type="button" aria-label={`Remove ${point.name}`} title="Remove this starting point"
+                    className="mr-1 flex h-4 w-4 items-center justify-center rounded-full text-faint hover:bg-sunken hover:text-ink"
+                    onClick={() => onRemovePoint(point)}>
+                    ×
+                  </button>
+                ) : null}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="divide-y divide-line rounded-lg border border-line">
+        {groups.map(({ section, cards: members }) => {
+          const live = members.filter((c) => c.state === 'on').length
+          const isOpen = open[section.id] ?? live > 0
+          return (
+            <div key={section.id} data-section={section.id}>
+              <button type="button" aria-expanded={isOpen} onClick={() => flip(section.id, isOpen)}
+                className="flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-sunken/50">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden
+                  className={`shrink-0 text-muted transition-transform ${isOpen ? 'rotate-90' : ''}`}>
+                  <path d="M9 6l6 6-6 6" />
+                </svg>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-xs font-semibold text-ink">{section.label}</span>
+                  {!isOpen ? <span className="block truncate text-[10px] text-faint">{section.hint}</span> : null}
+                </span>
+                {live ? (
+                  <span className="rounded-full bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold text-brand">{live} on</span>
+                ) : (
+                  <span className="text-[10px] text-faint">{members.length}</span>
+                )}
+              </button>
+              {isOpen ? (
+                <div className="px-2 pb-2">
+                  <LayerGrid cards={members} onToggle={onToggle} />
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
