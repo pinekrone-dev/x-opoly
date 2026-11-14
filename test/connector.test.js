@@ -296,3 +296,20 @@ describe('changes from another site', () => {
     assert.equal((await owner('/api/gis/views', json(view, { origin: 'http://localhost' }))).status, 201)
   })
 })
+
+describe('another assistant, allowed by its callback host', () => {
+  test('only the named host and what sits under it', async () => {
+    const { goodRedirect } = await import('../app/lib/oauth.js')
+    const env = { CONNECTOR_REDIRECT_HOSTS: 'agent.meta.ai' }
+    const muse = 'https://agent.meta.ai/api/hatch/oauth/callback'
+    assert.equal(goodRedirect(muse, env), true)
+    assert.equal(goodRedirect(muse, {}), false, 'refused until the host is named')
+    // The rest of the company's domain is not let in with it, and neither
+    // is a look-alike or the same host over plain http.
+    assert.equal(goodRedirect('https://www.meta.ai/callback', env), false)
+    assert.equal(goodRedirect('https://agent.meta.ai.evil.example/cb', env), false)
+    assert.equal(goodRedirect('https://notagent.meta.ai/cb', env), false)
+    assert.equal(goodRedirect('http://agent.meta.ai/api/hatch/oauth/callback', env), false)
+    assert.equal(goodRedirect('https://claude.ai/api/mcp/auth_callback', env), true)
+  })
+})
