@@ -19,7 +19,7 @@ export interface Section {
 
 export const SECTIONS: Section[] = [
   { id: 'property', label: 'Property & ownership', hint: 'Land use colours, who owns what' },
-  { id: 'workspace', label: 'My map', hint: 'Your own lists, and pins for clients' },
+  { id: 'workspace', label: 'My map', hint: 'Your own lists, each in its own colour' },
   { id: 'boundaries', label: 'Opportunity zones & boundaries', hint: 'Opportunity zones, school districts, incentive areas' },
   { id: 'zoning', label: 'Zoning & land use', hint: 'Districts, overlays, plans' },
   { id: 'development', label: 'Development activity', hint: 'Permits, entitlements, projects' },

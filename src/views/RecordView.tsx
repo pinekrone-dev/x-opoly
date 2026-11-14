@@ -3,6 +3,7 @@ import BrandMark from '../components/BrandMark'
 import ConfirmDelete from '../components/ConfirmDelete'
 import DealEconomics from '../components/DealEconomics'
 import DealPicker, { stageWords } from '../components/DealPicker'
+import ListPicker from '../components/ListPicker'
 import LibraryButton from '../components/LibraryButton'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import { api } from '../api'
@@ -12,7 +13,7 @@ import { OBJECTS, objectFor, subtitleOf, titleOf } from '../lib/crm'
 import { countyCounts, describeMismatch, listingCounts, mismatches } from '../lib/listingCheck'
 import type { PanelGroup } from '../components/ParcelPanel'
 import type { DetailField } from '../lib/crm'
-import type { ClientPin, CrmRecord, Deal, DealOn, DealParty, Place, RecordField, RecordType, Survey } from '../types'
+import type { ClientPin, CrmRecord, Deal, DealOn, DealParty, Place, PlaceList, RecordField, RecordType, Survey } from '../types'
 
 /**
  * One CRM record, and everything attached to it.
@@ -163,6 +164,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
           <div className="flex flex-wrap items-center gap-2">
             {deal ? <OpenSurvey deal={deal} canEdit={canEdit} onLinked={(updated) => setRecord(updated)} /> : null}
             {recordType === 'place' ? <SeeOnMap place={record as Place} /> : null}
+            {recordType === 'place' ? <ListPicker placeId={id} /> : null}
             {recordType === 'place' && canEdit ? <LibraryButton placeId={id} /> : null}
             {recordType === 'place' && canEdit ? <SendPlaceToSurvey placeIds={[id]} /> : null}
             {recordType !== 'deal' && canEdit ? (
@@ -198,7 +200,7 @@ export default function RecordView({ recordType, id }: { recordType: RecordType;
 
         {deal ? <Parties deal={deal} canEdit={canEdit} onChanged={load} /> : null}
 
-        {recordType === 'person' || recordType === 'company' ? <Opportunities kind={recordType} id={id} version={dealsVersion} canEdit={canEdit} /> : null}
+        {recordType === 'person' || recordType === 'company' ? <Opportunities kind={recordType} id={id} name={clientName(recordType, record)} version={dealsVersion} canEdit={canEdit} /> : null}
 
         {recordType !== 'deal' ? <DealsOn recordType={recordType} id={id} version={dealsVersion} /> : null}
 
@@ -565,6 +567,13 @@ function DealsOn({ recordType, id, version }: { recordType: RecordType; id: stri
  * the lot open. A record that is not tied to a county's parcel but has a
  * location opens the map there instead.
  */
+/** A client as a list names them: a person by their name (else email), a company by its name. */
+function clientName(recordType: RecordType, record: CrmRecord | null): string {
+  const r = (record ?? {}) as Record<string, unknown>
+  if (recordType === 'company') return String(r.name ?? '').trim()
+  return [r.firstName, r.lastName].filter(Boolean).join(' ').trim() || String(r.email ?? '').trim()
+}
+
 function SeeOnMap({ place }: { place: Place }) {
   const lat = Number(place.lat)
   const lng = Number(place.lng)
@@ -590,76 +599,114 @@ function SeeOnMap({ place }: { place: Place }) {
  * time; listed here with the deal each sits on, and opened on the map as a
  * set.
  */
-function Opportunities({ kind, id, version, canEdit }: { kind: 'person' | 'company'; id: string; version: number; canEdit: boolean }) {
-  const [pins, setPins] = useState<ClientPin[] | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const key = `${kind}:${id}`
+/*
+ * What is being looked at for this client: the lists kept for them.
+ *
+ * A list carries its client, so a client's lists are their opportunities:
+ * ten parcels on "Acme sites" are ten opportunities here, and the same ten
+ * pins on the map's Lists layer. There is one way to file a parcel for a
+ * client, the list, where there used to be two (a list and a "client pin").
+ * Parcels pinned the old way, through a deal, are offered a list to move to.
+ */
+function Opportunities({ kind, id, name, version, canEdit }: { kind: 'person' | 'company'; id: string; name: string; version: number; canEdit: boolean }) {
+  const [lists, setLists] = useState<PlaceList[] | null>(null)
+  const [legacy, setLegacy] = useState<ClientPin[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const wanted = name.trim().toLowerCase()
 
   const load = useCallback(() => {
+    api.lists
+      .all()
+      .then(({ lists: found }) => setLists(wanted ? found.filter((l) => (l.client ?? '').trim().toLowerCase() === wanted) : []))
+      .catch(() => setLists([]))
     api.crm
-      .pins({ client: key })
-      .then(({ pins: found }) => setPins(found))
-      .catch(() => setPins([]))
-  }, [key])
+      .pins({ client: `${kind}:${id}` })
+      .then(({ pins }) => setLegacy(pins))
+      .catch(() => setLegacy([]))
+  }, [wanted, kind, id])
   useEffect(() => { load() }, [load, version])
 
-  if (pins === null) return null
-  const markets = [...new Set(pins.map((p) => p.market).filter(Boolean))] as string[]
+  if (lists === null) return null
+  const total = lists.reduce((sum, list) => sum + (list.count || 0), 0)
+
+  const make = async (listName: string, placeIds: string[] = []) => {
+    setBusy(true)
+    setError(null)
+    try {
+      const { list } = await api.lists.create({ name: listName, client: name })
+      if (placeIds.length) await api.lists.add(list.id, placeIds)
+      load()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'That list could not be made.')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
     <section className="panel mt-4 p-4" data-testid="opportunities">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <p className="label">Opportunities{pins.length ? ` (${pins.length})` : ''}</p>
-        {markets.map((market) => (
-          <button key={market} type="button" className="btn-secondary text-xs" onClick={() => navigate(`/gis/${market}?client=${encodeURIComponent(key)}`)}>
-            {markets.length > 1 ? `Map: ${market}` : 'Open on the map'}
+        <p className="label">Opportunities{total ? ` (${total})` : ''}</p>
+        {canEdit ? (
+          <button
+            type="button"
+            className="btn-secondary text-xs"
+            disabled={busy || !wanted}
+            onClick={() => void make(lists.length ? `${name} list ${lists.length + 1}` : `${name} sites`)}
+          >
+            + New list
           </button>
-        ))}
+        ) : null}
       </div>
-      {pins.length === 0 ? (
+      {lists.length === 0 ? (
         <p className="text-sm text-muted">
-          Nothing pinned yet. On the map, open a parcel and choose “Pin for client” to add it here.
+          No list for {name || 'this client'} yet. On the map, open a parcel, choose “Add to list” and make a list with this client’s name: every parcel on it shows here.
         </p>
       ) : (
         <ul className="divide-y divide-line">
-          {pins.map((pin) => {
-            const mine = pin.clients.find((c) => `${c.kind}:${c.id}` === key)
-            return (
-              <li key={pin.id} className="flex items-center gap-3 py-2">
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => navigate(`/places/${pin.id}`)}>
-                  <span className="block truncate text-sm text-ink hover:text-brand-deep">{pin.name || pin.address || 'Place'}</span>
-                  <span className="block truncate text-xs text-muted">
-                    {[pin.address && pin.name ? pin.address : null, [pin.city, pin.state].filter(Boolean).join(', ') || null, pin.acreage ? `${Number(pin.acreage).toFixed(2)} ac` : null].filter(Boolean).join(' · ')}
-                  </span>
-                </button>
-                {mine ? (
-                  <button type="button" className="shrink-0 truncate text-xs text-muted hover:text-brand-deep" onClick={() => navigate(`/deals/${mine.deal.id}`)} title={mine.deal.name}>
-                    <span className="rounded-full bg-sunken px-2 py-0.5 text-[11px] capitalize text-body">{stageWords(mine.deal.stage)}</span>
-                  </button>
-                ) : null}
-                {canEdit ? (
-                  <button
-                    type="button"
-                    className="shrink-0 text-xs text-muted hover:text-rose-600"
-                    disabled={busy !== null}
-                    onClick={async () => {
-                      setBusy(pin.id)
-                      try {
-                        await api.crm.unpin({ kind, id }, pin.id)
-                        load()
-                      } finally {
-                        setBusy(null)
-                      }
-                    }}
-                  >
-                    {busy === pin.id ? 'Removing…' : 'Unpin'}
-                  </button>
-                ) : null}
-              </li>
-            )
-          })}
+          {lists.map((list) => (
+            <li key={list.id} className="flex items-center gap-3 py-2">
+              <button type="button" className="min-w-0 flex-1 text-left" onClick={() => navigate(`/lists/${list.id}`)}>
+                <span className="block truncate text-sm text-ink hover:text-brand-deep">{list.name}</span>
+                <span className="block truncate text-xs text-muted">
+                  {[`${list.count} ${list.count === 1 ? 'parcel' : 'parcels'}`, ...list.tags].join(' · ')}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="btn-secondary shrink-0 text-xs"
+                disabled={!list.count}
+                onClick={() => {
+                  // The map opens on the county the list's parcels are in.
+                  api.lists
+                    .get(list.id)
+                    .then(({ list: full }) => {
+                      const market = full.places.find((place) => place.market)?.market
+                      navigate(`/gis${market ? `/${market}` : ''}?list=${encodeURIComponent(list.id)}`)
+                    })
+                    .catch(() => navigate(`/gis?list=${encodeURIComponent(list.id)}`))
+                }}
+              >
+                On the map
+              </button>
+            </li>
+          ))}
         </ul>
       )}
+      {legacy.length ? (
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-sunken/40 p-2 text-xs text-body">
+          <span>
+            {legacy.length} {legacy.length === 1 ? 'parcel was' : 'parcels were'} pinned for {name || 'this client'} on a deal, before lists took over.
+          </span>
+          {canEdit ? (
+            <button type="button" className="btn-secondary text-xs" disabled={busy} onClick={() => void make(`${name} pinned parcels`, legacy.map((pin) => pin.id))}>
+              {busy ? 'Moving…' : 'Put them on a list'}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? <p className="mt-2 text-xs text-rose-600">{error}</p> : null}
     </section>
   )
 }
