@@ -403,6 +403,14 @@ const CATEGORY_COLORS = [
 const CATEGORY_LIMIT = 12
 
 /** A steady colour per client, so one client's pins read as a set. */
+/**
+ * A parcel id as the map holds it: a number where it is all digits, which
+ * is what a click on a lot yields, so an id kept as text in the CRM selects
+ * the same lot.
+ */
+const parcelKey = (raw: string | number): string | number =>
+  typeof raw === 'string' && /^\d{1,15}$/.test(raw) ? Number(raw) : raw
+
 const CLIENT_COLORS = ['#7048e8', '#0ca678', '#e8590c', '#1971c2', '#c2255c', '#5c940d', '#0b7285', '#9c36b5']
 function clientColor(key: string): string {
   let sum = 0
@@ -1407,6 +1415,22 @@ export default function Gis({
   const frameNext = useRef<string | null>(null)
   /** A parcel clicked in a neighbouring market, opened once that market has loaded. */
   const pendingPick = useRef<{ slug: string; id: string | number } | null>(null)
+  /*
+   * A parcel named in the address, ?parcel=<id>, from a CRM record's "See it
+   * on the map": opened once its market has loaded, with the camera on it.
+   */
+  const linkedParcel = useRef<string | null>(new URLSearchParams(window.location.search).get('parcel'))
+  if (linkedParcel.current && slug) {
+    pendingPick.current = { slug, id: parcelKey(linkedParcel.current) }
+    cameraOnSelect.current = true
+    linkedParcel.current = null
+  }
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (!url.searchParams.has('parcel')) return
+    url.searchParams.delete('parcel')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+  }, [])
   /*
    * Tilting the map is asking to see the city in 3D, so the buildings come on
    * with it. Lying it flat leaves them as the viewer has them; switching a
@@ -3848,6 +3872,7 @@ export default function Gis({
           label: String(p.name || p.address || 'Place'),
           detail: on.map((id) => names.get(id)).filter(Boolean).join(' · '),
           color: listColor(allLists, on[0] ?? p.lists[0]),
+          parcel: p.market && p.parcelId ? { market: p.market, id: p.parcelId } : undefined,
         }
       })
   }, [listsOn, allLists, listPlaces, listChoice])
@@ -3878,6 +3903,7 @@ export default function Gis({
         label: String(p.name || p.address || 'Place'),
         detail: [...new Set(p.clients.map((c) => c.name))].join(' · '),
         color: clientColor(`${p.clients[0]?.kind}:${p.clients[0]?.id}`),
+        parcel: p.market && p.parcelId ? { market: p.market, id: p.parcelId } : undefined,
       }))
   }, [clientsOn, clientPlaces])
   const mapPins = useMemo(
@@ -4601,6 +4627,19 @@ export default function Gis({
           places={places}
           placesUntilZoom={9}
           pins={mapPins}
+          onPinPick={(pin) => {
+            if (!pin.parcel) return
+            const id = parcelKey(pin.parcel.id)
+            if (pin.parcel.market === active) {
+              pickFromSearch(id)
+              return
+            }
+            // A pin in another county: go there, and open the lot once that
+            // county has loaded.
+            pendingPick.current = { slug: pin.parcel.market, id }
+            cameraOnSelect.current = true
+            setLayerView({ center: [pin.lng, pin.lat], zoom: 17, key: Date.now() })
+          }}
           onPlace={openMarket}
           // Drawing the Ask circle: the next click on the map is its centre,
           // and while it waits parcels are not picked.

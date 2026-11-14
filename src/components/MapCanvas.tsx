@@ -473,6 +473,8 @@ export interface MapPin {
   logo?: string
   /** The badge's colour (a list's colour); navy when not given. */
   color?: string
+  /** The parcel the pin stands on, when it is one the map can open. */
+  parcel?: { market: string; id: string }
 }
 
 /** Hosts a pin's logo may load from, as app/lib/logos.js LOGO_HOSTS. A saved map is a teammate's data. */
@@ -596,6 +598,8 @@ interface Props {
    * is none, and the name and detail on a click.
    */
   pins?: MapPin[] | null
+  /** A pin that stands on a parcel was clicked: open that parcel, rather than a label. */
+  onPinPick?: (pin: MapPin) => void
   onPlace?: (id: string) => void
   /** When set, pins are numbered and joined in this order. */
   routeIds?: string[]
@@ -781,6 +785,7 @@ export default function MapCanvas({
   places = null,
   placesUntilZoom = 8,
   pins = null,
+  onPinPick,
   onPlace,
   routeIds,
   routeGeometry,
@@ -1507,6 +1512,9 @@ export default function MapCanvas({
    * with the DOM, never HTML, since a pin's label came from a directory
    * anyone can edit. A logo that fails to load falls back to the initial.
    */
+  // Held in a ref so a new handler does not rebuild every marker.
+  const pinPick = useRef(onPinPick)
+  pinPick.current = onPinPick
   useEffect(() => {
     const instance = map.current
     if (!instance || !loaded || !pins?.length) return undefined
@@ -1544,6 +1552,12 @@ export default function MapCanvas({
       element.addEventListener('click', (event) => {
         event.stopPropagation()
         open?.remove()
+        // A pin on a parcel opens the parcel: its card says everything the
+        // label would, and the county's record besides.
+        if (pin.parcel && pinPick.current) {
+          pinPick.current(pin)
+          return
+        }
         const body = document.createElement('div')
         const name = document.createElement('strong')
         name.textContent = pin.label
