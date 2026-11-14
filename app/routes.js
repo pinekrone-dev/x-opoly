@@ -734,6 +734,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   const UNGATED = [/^\/api\/auth(\/|$)/, /^\/api\/billing(\/|$)/]
   const exemptTeams = new Map()
+  // Teams whose subscription was active when last asked, and until when
+  // that answer stands.
+  const paidTeams = new Map()
+  const PAID_RECHECK = 60 * 1000
 
   /**
    * Whether a team ever sees the paywall. Two doors out: the operator's own
@@ -796,8 +800,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
     if (await teamIsExempt(user.teamId, user.email)) return next()
 
+    // A paying team is remembered for a minute, as the catalogue remembers
+    // its viewer: without this every request a subscriber's page made asked
+    // the database whether they had paid, a dozen times to open one map.
+    const paidUntil = paidTeams.get(user.teamId)
+    if (paidUntil && paidUntil > Date.now()) return next()
     const state = await billingState(db, env, user.teamId)
-    if (state.active) return next()
+    if (state.active) {
+      if (paidTeams.size > 5000) paidTeams.clear()
+      paidTeams.set(user.teamId, Date.now() + PAID_RECHECK)
+      return next()
+    }
+    paidTeams.delete(user.teamId)
     return c.json(
       { error: 'This workspace needs an active subscription.', code: 'subscription_required' },
       402,
