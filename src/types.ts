@@ -570,6 +570,8 @@ export interface LibraryItem {
   }
   addedAt: string
   pieces: LibraryPiece[]
+  /** The deals the parcel is on: each deal is a folder in the library. */
+  deals: { id: string; name: string; stage: string }[]
 }
 
 /**

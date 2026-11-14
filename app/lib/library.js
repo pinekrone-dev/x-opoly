@@ -47,7 +47,23 @@ export async function listLibrary(db, teamId) {
     list.push({ kind: piece.kind, title: PIECES[piece.kind].title, path: piece.path, width: piece.width, height: piece.height, createdAt: piece.created_at })
     byPlace.set(piece.place_id, list)
   }
-  return rows.map((r) => ({ place: camelPlace(r), addedAt: r.added_at, pieces: byPlace.get(r.id) ?? [] }))
+  // The deals each parcel is on: a deal is a folder in the library, holding
+  // the pieces of every parcel on it.
+  const parties = await db.all(
+    `SELECT pp.ref_id AS place_id, d.id, d.name, d.stage
+       FROM deal_parties pp JOIN deals d ON d.id = pp.deal_id
+       JOIN library_items l ON l.place_id = pp.ref_id AND l.team_id = d.team_id
+      WHERE d.team_id = ? AND pp.kind = 'place'
+      ORDER BY d.updated_at DESC`,
+    [teamId],
+  )
+  const deals = new Map()
+  for (const row of parties) {
+    const list = deals.get(row.place_id) ?? []
+    list.push({ id: row.id, name: row.name, stage: row.stage })
+    deals.set(row.place_id, list)
+  }
+  return rows.map((r) => ({ place: camelPlace(r), addedAt: r.added_at, pieces: byPlace.get(r.id) ?? [], deals: deals.get(r.id) ?? [] }))
 }
 
 /** The place, when it is the team's and in the library. */
