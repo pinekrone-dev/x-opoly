@@ -1,4 +1,4 @@
-import type { AskCircle, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, BookStyle,
+import type { AskCircle, LandmarksResult, ListPin, PlaceList, PlaceListDetail, ParcelRecords, ZoningReport, ZoningCodeAnswer, BookStyle,
   Account,
   CrmRecord,
   Deal,
@@ -408,6 +408,14 @@ export const api = {
     /** What the zoning code allows on a City of Los Angeles lot, each line cited. */
     zoning: (market: string, apn: string) =>
       request<ZoningReport>('/api/gis/zoning-report', json({ market, apn })),
+
+    /**
+     * What a market's own published zoning rules say about a district, and
+     * what a lot of this size could carry; or, with a question, an answer
+     * from the same rules. `covered: false` where no code is indexed.
+     */
+    zoningCode: (market: string, body: { zone?: string; acres?: number | null; question?: string }) =>
+      request<ZoningCodeAnswer>('/api/gis/zoning-code', json({ market, ...body })),
 
     /** One parcel, whole, for the card. */
     one: (market: string, id: string | number) =>

@@ -818,6 +818,40 @@ export interface ZoningLine {
   bands?: { band: string; sf: number; rfar: number; rfa: number }[]
 }
 
+/** Ask the zoning code: a district read from a city's published rules. */
+export interface CodeSource { key: string; title: string; page: number | null; url: string | null }
+export interface CodeStandard {
+  key: string
+  label: string
+  value: number
+  unit: string
+  /** cited: the quoted words are in the page; check: only the figure is. */
+  status: 'cited' | 'check'
+  quote: string | null
+  source: CodeSource | null
+}
+export interface CodeYield { label: string; value: number; unit: string; basis: string; check: boolean }
+export interface ZoningCodeAnswer {
+  covered: boolean
+  about?: { title: string; publisher: string | null; jurisdiction: string | null; url: string | null; asOf: string | null; edition: string | null }
+  zone?: string | null
+  brief?: {
+    summary: string | null
+    highestUse: string | null
+    standards: CodeStandard[]
+    uses: { use: string; how: 'by right' | 'special exception' | 'not allowed'; source: CodeSource }[]
+    notes: string[]
+    sources: CodeSource[]
+  } | null
+  yield?: CodeYield[]
+  acres?: number | null
+  note?: string
+  /** A free question's answer, and the pages it read. */
+  question?: string
+  answer?: string
+  sources?: CodeSource[]
+}
+
 export interface ZoningReport {
   apn?: string
   zone?: string

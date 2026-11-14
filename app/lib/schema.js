@@ -412,6 +412,22 @@ export const SCHEMA_STATEMENTS = [
     rows       INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  // Ask the zoning code (zoningcode.js): how many AI Search queries this
+  // month, against the month's cap; and each district's brief, read once
+  // and kept until the market's code is published again (as_of changes).
+  `CREATE TABLE IF NOT EXISTS code_search_ledger (
+    month      TEXT PRIMARY KEY,
+    count      INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS zoning_briefs (
+    market     TEXT NOT NULL,
+    zone       TEXT NOT NULL,
+    as_of      TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (market, zone)
+  )`,
 ]
 
 /**

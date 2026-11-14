@@ -126,6 +126,17 @@ database_id = "7cae5cbf-7d2d-4f4e-9555-5be9c8490336"
 binding = "PROSPECTOR_DATA"
 bucket_name = "prospector-data"
 
+# Cloudflare AI Search: a city's own published zoning rules, indexed so a
+# district's standards can be asked for in plain words (app/lib/zoningcode.js).
+# The account's `default` namespace, which every account has; one instance
+# per market (zoning-<slug>), created by the app the first time the pipeline
+# loads that market's documents. Not given to staging, where the panel
+# simply does not appear. Without this binding nothing breaks: the route
+# answers "not covered".
+[[ai_search_namespaces]]
+binding = "AI_SEARCH"
+namespace = "default"
+
 # Cloudflare Email Service: the verification, reset and trial mail. Sends
 # only once landquotient.com is onboarded under Email Service > Email
 # Sending, which writes the domain's SPF and DKIM records itself; until then

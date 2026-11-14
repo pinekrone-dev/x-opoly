@@ -7,6 +7,7 @@ import ListPicker from '../components/ListPicker'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import ZoningReport from '../components/ZoningReport'
+import ZoningCode from '../components/ZoningCode'
 import GisSide, { type SideTab } from '../components/GisSide'
 import Coachmarks, { type Coachmark } from '../components/Coachmarks'
 import LayerFilter, { type PivotCity } from '../components/LayerFilter'
@@ -5704,6 +5705,12 @@ export default function Gis({
                 />
                 {active === 'los-angeles-ca' ? (
                   <ZoningReport key={`zoning:${selected}`} market={active} apn={String(selected).padStart(10, '0')} />
+                ) : null}
+                {/* Where the market's own zoning code is indexed and the
+                    county's row carries the lot's district: what the rules
+                    allow there. Renders nothing in any other market. */}
+                {active && parcel.zn ? (
+                  <ZoningCode key={`code:${selected}`} market={active} zone={String(parcel.zn)} acres={Number(parcel.ac) > 0 ? Number(parcel.ac) : null} />
                 ) : null}
                 {active && RECORD_MARKETS.has(active) ? (
                   <CityRecords

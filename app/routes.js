@@ -130,6 +130,7 @@ import { matchAddresses, parseAddress } from './lib/addresses.js'
 import { createJev, parcelState } from './lib/jev.js'
 import { checkParcels } from './lib/overlays.js'
 import { verifyActionsToken } from './lib/oidc.js'
+import { DAILY_QUESTIONS, askCode, chargeSearch, codeSearchBound, codeStatus, indexCode, lotYield, readBrief, routeFor, searchesThisMonth } from './lib/zoningcode.js'
 import { createZone, deleteZone, listZones, updateZone } from './lib/zones.js'
 import {
   BillingError,
@@ -577,6 +578,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
      * entry can widen to cover the other.
      */
     /^\/api\/gis\/ingest\/parcels$/,
+    // And for a city's zoning rules, loaded into AI Search: the same proof.
+    /^\/api\/gis\/ingest\/code$/,
   ]
 
   /**
@@ -2377,6 +2380,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   const INGEST_LOTFACTS_FILE = /^lotfacts-\d{4}\.json$/
 
+  /*
+   * A city's published zoning rules, as the pipeline read them: the list
+   * (zoning-code.json) and one short document per page or section
+   * (zoning-code-<key>.md). Loaded into AI Search by the code ingest below
+   * and read by the Worker; never served to a browser from the catalogue.
+   */
+  const INGEST_CODE_FILE = /^zoning-code(?:-[a-z0-9-]{1,60}\.md|\.json)$/
+
   // The one file that lives above the markets: the directory itself.
   const INGEST_ROOT_FILES = { 'markets.json': 'application/json' }
 
@@ -2841,7 +2852,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
       }
       if (!(file in INGEST_FILES) && !INGEST_LAYER_FILE.test(file) && !INGEST_TILE_FILE.test(file) &&
-          !INGEST_LOTFACTS_FILE.test(file)) {
+          !INGEST_LOTFACTS_FILE.test(file) && !INGEST_CODE_FILE.test(file)) {
         return c.json(
           {
             error: `file must be one of ${Object.keys(INGEST_FILES).join(', ')}, ` +
@@ -2854,7 +2865,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       contentType =
         INGEST_FILES[file] ??
         (INGEST_TILE_FILE.test(file) ? 'application/octet-stream'
-          : INGEST_LOTFACTS_FILE.test(file) ? 'application/json' : 'application/geo+json')
+          : INGEST_LOTFACTS_FILE.test(file) ? 'application/json'
+            : INGEST_CODE_FILE.test(file) ? (file.endsWith('.json') ? 'application/json' : 'text/markdown; charset=utf-8')
+              : 'application/geo+json')
     }
     const action = String(c.req.query('action') || 'put')
 
@@ -3354,6 +3367,158 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       ],
       note: 'Figures are estimates from public data and the code text; they are not a zoning determination. Q, D and T conditions, specific plans and overlays can change them.',
     })
+  })
+
+  /*
+   * Ask the zoning code: what a market's own published zoning rules allow
+   * in a district, and what a lot of this size could carry under them.
+   *
+   * The rules are indexed in AI Search (lib/zoningcode.js). A district's
+   * brief is read once and stored, so every lot in the district after the
+   * first costs nothing; a free question costs one search, counted against
+   * the workspace's day and the month's cap.
+   */
+  const codeIndex = async (market) => {
+    if (!/^[a-z0-9-]{2,40}$/.test(market)) return null
+    const index = await catalogJson(`${market}/zoning-code.json`).catch(() => null)
+    return index && Array.isArray(index.docs) && index.docs.length ? index : null
+  }
+  const codeAbout = (index) => ({
+    title: index.title, publisher: index.publisher ?? null, jurisdiction: index.jurisdiction ?? null,
+    url: index.source ?? null, asOf: index.as_of ?? null, edition: index.edition ?? null,
+  })
+  const briefFound = (brief) => Boolean(brief?.read && (brief.standards?.length || brief.uses?.length))
+
+  app.post('/api/gis/zoning-code', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    let body = {}
+    try { body = await c.req.json() } catch { body = {} }
+    const market = String(body.market || '')
+    const zone = String(body.zone || '').trim().slice(0, 40)
+    const question = String(body.question || '').trim().slice(0, 500)
+    const acres = Number(body.acres) > 0 && Number(body.acres) < 100000 ? Number(body.acres) : null
+    // Not ready is not covered: the pipeline marks the list ready only once
+    // every page is indexed, so a district is never read from half a code.
+    const index = codeSearchBound(env) ? await codeIndex(market) : null
+    if (!index || index.ready !== true) return c.json({ covered: false })
+    const about = codeAbout(index)
+    if (!zone && !question) return c.json({ covered: true, about })
+
+    if (question) {
+      const throttled = limited(c, 'zoning-code', 20, 10 * 60 * 1000)
+      if (throttled) return throttled
+      const day = await spendCount(db, { key: user.teamId, kind: 'code', cap: DAILY_QUESTIONS }).catch(() => ({ allowed: true }))
+      if (!day.allowed) {
+        return c.json({ error: `This workspace has asked its ${DAILY_QUESTIONS} zoning questions for today. The allowance resets at midnight UTC.` }, 429)
+      }
+      const month = await chargeSearch(db, env)
+      if (!month.allowed) return c.json({ error: 'The zoning code has answered all the questions it can this month. It opens again on the 1st.' }, 429)
+      try {
+        const answer = await askCode(env, market, question, zone, index)
+        return c.json({ covered: true, about, zone: zone || null, question, ...answer })
+      } catch (cause) {
+        console.error(JSON.stringify({ event: 'zoning_code_failed', market, message: String(cause?.message ?? cause).slice(0, 300) }))
+        return c.json({ error: 'The zoning code could not be read just now.' }, 502)
+      }
+    }
+
+    // A district with no general rules to read (a planned unit development)
+    // is answered from the list itself, at no cost.
+    const route = routeFor(zone, index)
+    if (route?.skip) return c.json({ covered: true, about, zone, brief: null, yield: [], acres, note: String(route.skip) })
+
+    // A district's brief: stored once read, and read again only when the
+    // market's code has been published anew.
+    const held = await db.get('SELECT as_of, body FROM zoning_briefs WHERE market = ? AND zone = ?', [market, zone])
+    let brief = null
+    if (held && held.as_of === String(index.as_of ?? '')) {
+      try { brief = JSON.parse(held.body) } catch { brief = null }
+    }
+    if (!brief) {
+      const throttled = limited(c, 'zoning-code', 20, 10 * 60 * 1000)
+      if (throttled) return throttled
+      const month = await chargeSearch(db, env)
+      if (!month.allowed) return c.json({ covered: true, about, zone, brief: null, note: 'This district has not been read yet, and the month\'s reading allowance is used. It opens again on the 1st.' })
+      try {
+        brief = await readBrief(env, market, zone, index)
+      } catch (cause) {
+        console.error(JSON.stringify({ event: 'zoning_code_failed', market, zone, message: String(cause?.message ?? cause).slice(0, 300) }))
+        return c.json({ error: 'The zoning code could not be read just now.' }, 502)
+      }
+      // A reply with nothing in it is not stored, so the district is tried
+      // again another day rather than left empty for good.
+      if (briefFound(brief)) {
+        await db.run(
+          `INSERT INTO zoning_briefs (market, zone, as_of, body, created_at) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(market, zone) DO UPDATE SET as_of = excluded.as_of, body = excluded.body, created_at = excluded.created_at`,
+          [market, zone, String(index.as_of ?? ''), JSON.stringify(brief), new Date().toISOString()],
+        )
+      }
+    }
+    const found = briefFound(brief)
+    return c.json({
+      covered: true, about, zone,
+      brief: found ? brief : null,
+      yield: found && acres ? lotYield(brief.standards, acres) : [],
+      acres,
+      note: found
+        ? 'Read by AI from the city\'s published rules and checked against the passages it quotes. Not a zoning determination: overlays, conditions and later amendments can change it. Confirm with the city before relying on it.'
+        : 'The indexed rules did not give a clear answer for this district.',
+    })
+  })
+
+  /*
+   * The pipeline's door for a city's zoning rules: after it has published
+   * the documents to the catalogue, it asks here for them to be loaded
+   * into AI Search, a page at a time, and can ask how the index stands or
+   * put one question to it to see that it answers. Same proof as the
+   * other ingest doors.
+   */
+  app.post('/api/gis/ingest/code', async (c) => {
+    const throttled = limited(c, 'ingest', 300, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const token = (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
+    try {
+      await verifyActionsToken(token, {
+        audience: INGEST_AUDIENCE, repositories: INGEST_REPOS, refs: INGEST_REFS, fetchImpl: env.JWKS_FETCH,
+      })
+    } catch (cause) {
+      return c.json({ error: `Ingest refused: ${cause.message}.` }, 401)
+    }
+    if (!codeSearchBound(env)) return c.json({ error: 'AI Search is not bound to this deployment.' }, 501)
+    const market = String(c.req.query('market') || '')
+    const index = await codeIndex(market)
+    if (!index) return c.json({ error: 'No zoning-code.json is published for that market.' }, 404)
+    const action = String(c.req.query('action') || 'index')
+    try {
+      if (action === 'status') {
+        return c.json({ ...(await codeStatus(env, market)), docs: index.docs.length, searchesThisMonth: await searchesThisMonth(db) })
+      }
+      if (action === 'ask') {
+        const body = await c.req.json().catch(() => ({}))
+        const zone = String(body.zone || '').trim().slice(0, 40)
+        const question = String(body.question || '').trim().slice(0, 500)
+        if (!zone && !question) return c.json({ error: 'ask needs a zone or a question.' }, 400)
+        const month = await chargeSearch(db, env)
+        if (!month.allowed) return c.json({ error: 'The month\'s search allowance is used.', ...month }, 429)
+        if (question) return c.json({ ...(await askCode(env, market, question, zone, index)), searches: month })
+        const brief = await readBrief(env, market, zone, index)
+        const acres = Number(body.acres) > 0 ? Number(body.acres) : null
+        return c.json({ brief, yield: brief.read && acres ? lotYield(brief.standards, acres) : [], searches: month })
+      }
+      const offset = Math.max(0, Number(c.req.query('offset')) || 0)
+      const limit = Math.min(40, Math.max(1, Number(c.req.query('limit')) || 25))
+      const bucket = env.PROSPECTOR_DATA
+      const readBundle = async (file) => {
+        if (!INGEST_CODE_FILE.test(file) || !file.endsWith('.md')) return null
+        const object = await bucket.get(`${market}/${file}`)
+        return object ? object.text() : null
+      }
+      return c.json(await indexCode(env, market, index, readBundle, { offset, limit }))
+    } catch (cause) {
+      return c.json({ error: String(cause?.message ?? cause).slice(0, 300) }, 502)
+    }
   })
 
   app.get('/api/gis/records', async (c) => {
