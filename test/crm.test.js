@@ -511,3 +511,20 @@ describe('a place pinned to a parcel', () => {
     assert.equal(found.status, 401)
   })
 })
+
+describe('a deal\'s next step', () => {
+  test('is kept on the deal, changed with its stage, and found by search', async () => {
+    const made = await alice('/api/crm/deals', asJson({ name: 'Harbor pad', nextStep: 'Tour Thursday' }))
+    assert.equal(made.status, 201)
+    assert.equal(made.body.record.nextStep, 'Tour Thursday')
+    const moved = await alice(`/api/crm/deals/${made.body.record.id}`, asJson({ stage: 'loi', nextStep: 'Send the LOI' }, 'PATCH'))
+    assert.equal(moved.status, 200)
+    assert.equal(moved.body.record.stage, 'loi')
+    assert.equal(moved.body.record.nextStep, 'Send the LOI')
+    const cleared = await alice(`/api/crm/deals/${made.body.record.id}`, asJson({ nextStep: null }, 'PATCH'))
+    assert.equal(cleared.body.record.nextStep ?? null, null)
+    await alice(`/api/crm/deals/${made.body.record.id}`, asJson({ nextStep: 'Call the owner' }, 'PATCH'))
+    const found = await alice('/api/crm/deals?q=call%20the%20owner')
+    assert.ok(found.body.records.some((d) => d.id === made.body.record.id))
+  })
+})

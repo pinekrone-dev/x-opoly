@@ -142,7 +142,7 @@ const WRITABLE = {
     // Where this place is on the county roll, when it came from the parcel map.
     'market', 'parcel_id',
   ],
-  deal: ['name', 'kind', 'stage', 'value', 'close_date', 'survey_id', 'notes', 'economics'],
+  deal: ['name', 'kind', 'stage', 'next_step', 'value', 'close_date', 'survey_id', 'notes', 'economics'],
 }
 
 /** The columns a search box looks in: what a person would type, not ids. */
@@ -150,7 +150,7 @@ const SEARCHABLE = {
   company: ['name', 'industry', 'website', 'phone', 'address', 'city', 'state', 'zip', 'notes'],
   person: ['first_name', 'last_name', 'email', 'phone', 'title', 'notes'],
   place: ['name', 'address', 'city', 'state', 'zip', 'property_type', 'availability', 'rate_unit', 'notes', 'market', 'parcel_id'],
-  deal: ['name', 'kind', 'stage', 'close_date', 'notes'],
+  deal: ['name', 'kind', 'stage', 'next_step', 'close_date', 'notes'],
 }
 
 const snake = (key) => key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)

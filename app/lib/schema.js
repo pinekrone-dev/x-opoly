@@ -602,6 +602,9 @@ export const COLUMN_ADDITIONS = [
    * read and written whole and grows with the model; see ECONOMICS_KEYS.
    */
   ['deals', 'economics', 'TEXT'],
+  // What happens next on a deal, in the broker's own words: the line a
+  // pipeline is read by.
+  ['deals', 'next_step', 'TEXT'],
 
   ['billing', 'trial_end', 'TEXT'],
   ['billing', 'cancel_at', 'TEXT'],
