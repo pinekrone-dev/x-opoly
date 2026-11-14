@@ -627,6 +627,8 @@ export interface Deal {
   name: string
   kind?: string | null
   stage: string
+  /** What happens next, in the broker's own words. */
+  nextStep?: string | null
   value?: number | null
   closeDate?: string | null
   surveyId?: string | null

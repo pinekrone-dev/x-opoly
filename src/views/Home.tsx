@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import SurveyList from './SurveyList'
 import { api } from '../api'
 import ConfirmDelete from '../components/ConfirmDelete'
+import DealsBoard from '../components/DealsBoard'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import ListsView from './ListsView'
 import WorkspaceNav, { navSection } from '../components/WorkspaceNav'
@@ -270,7 +271,7 @@ export default function Home({
               <input
                 className="field max-w-sm flex-1"
                 type="search"
-                placeholder="Search people, companies, places and deals"
+                placeholder="Search people, companies, parcels and deals"
                 aria-label="Search the CRM"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -281,7 +282,7 @@ export default function Home({
                     New person
                   </button>
                   <button type="button" className="btn-primary text-sm" onClick={() => startCreating('place')}>
-                    New place
+                    New parcel
                   </button>
                 </>
               ) : null}
@@ -412,6 +413,14 @@ export default function Home({
                 <p className="text-sm font-semibold text-ink">No {spec.label.toLowerCase()} yet</p>
                 <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted">{spec.empty}</p>
               </div>
+            ) : spec.type === 'deal' ? (
+              // Deals are worked, not just listed: active ones as rows or by
+              // pipeline stage, with stage and next step changed in place.
+              <DealsBoard
+                deals={records as Deal[]}
+                canEdit={canEdit}
+                onChange={(deal) => setRecords((current) => current.map((record) => ((record as { id: string }).id === deal.id ? { ...record, ...deal } : record)))}
+              />
             ) : (
               <RecordTable
                 spec={spec}

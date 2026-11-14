@@ -42,6 +42,7 @@ export const OBJECTS: ObjectSpec[] = [
       { key: 'name', label: 'Deal name' },
       { key: 'kind', label: 'Type', placeholder: 'Tenant Rep' },
       { key: 'stage', label: 'Stage', placeholder: 'prospect' },
+      { key: 'nextStep', label: 'Next step', placeholder: 'Tour Thursday, send LOI…' },
       { key: 'value', label: 'Value', type: 'number' },
       { key: 'closeDate', label: 'Expected close', type: 'date' },
       { key: 'notes', label: 'Notes', type: 'textarea' },
@@ -169,3 +170,19 @@ export function subtitleOf(type: RecordType, record: CrmRecord): string {
   const parties = deal.parties?.length ? `${deal.parties.length} parties` : ''
   return [deal.kind, deal.stage, parties].filter(Boolean).join(' · ')
 }
+
+/**
+ * A deal's pipeline, in order. `passed` is the one stage that is not active:
+ * a deal there is off the board unless it is asked for.
+ */
+export const DEAL_STAGES: { id: string; label: string }[] = [
+  { id: 'prospect', label: 'Prospect' },
+  { id: 'touring', label: 'Touring' },
+  { id: 'loi', label: 'LOI out' },
+  { id: 'under_contract', label: 'Under contract' },
+  { id: 'passed', label: 'Passed' },
+]
+
+/** The stage a deal sits in on the board: its own when it is one of the pipeline's, else the first. */
+export const dealStage = (stage: string | null | undefined): string =>
+  DEAL_STAGES.some((s) => s.id === stage) ? String(stage) : DEAL_STAGES[0].id
