@@ -219,6 +219,8 @@ import { handleRpc } from './lib/mcp.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
+import { MAX_HEIGHT, MAX_WIDTH, frameOf, renderMap, zoomToFit } from './lib/mapimage.js'
+import { featureReader, parcelShape } from './lib/shapes.js'
 import { EXTENSIONS, contentTypeFor } from './lib/storage.js'
 import { timingSafeEqual } from './lib/crypto.js'
 import { DAY, HOUR, coordinateKey, createLookupCache } from './lib/lookupcache.js'
@@ -580,6 +582,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     /^\/api\/gis\/ingest\/parcels$/,
     // And for a city's zoning rules, loaded into AI Search: the same proof.
     /^\/api\/gis\/ingest\/code$/,
+    // A drawn map, fetched by its own unguessable name (see /api/gis/map-image):
+    // the name is the permission, so a proposal can show the picture.
+    /^\/api\/map-exports\/[0-9]{8}-[0-9a-f]{32}\.png$/,
   ]
 
   /**
@@ -669,15 +674,22 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   })
 
   /*
-   * What a connector may change. Reading is everything the person can read;
+   * What a connector may change. Reading is everything the person can read,
+   * including the few reads that travel as a POST (CONNECTOR_READS);
    * writing is two things only: saving a map, always, and adding a place to
    * the CRM, when they ticked that box on approving. Anything else that is
    * not a read is refused, whatever the person's own role allows.
    */
+  const CONNECTOR_READS = ['/api/gis/zoning-report', '/api/gis/parcels/shapes', '/api/gis/map-image']
   app.use('/api/*', async (c, next) => {
     const granted = c.get('connector')
     if (!granted || ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) return next()
     const path = new URL(c.req.url).pathname
+    // Questions that are sent as a POST because they carry a body, and
+    // change nothing in the workspace: a zoning report, a parcel's outline,
+    // a map drawn as a picture. They are reads, and the tools that ask them
+    // (zoning_report, export_parcels_geojson, export_map_image) need them.
+    if (c.req.method === 'POST' && CONNECTOR_READS.includes(path)) return next()
     if (c.req.method === 'POST' && path === '/api/gis/views' && granted.scope.includes('maps')) return next()
     if (c.req.method === 'POST' && path === '/api/crm/places' && granted.scope.includes('crm')) return next()
     // Lists are part of the CRM: made and added to with the same permission.
@@ -2433,6 +2445,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   const archives = new Map()
   const archiveFor = (key) => {
     if (archives.has(key)) return archives.get(key)
+    // A test hands in its own archives, the way it hands in JWKS_FETCH.
+    if (typeof env.TILE_ARCHIVES === 'function') {
+      const given = env.TILE_ARCHIVES(key)
+      if (given) return given
+    }
     const bucket = env.PROSPECTOR_DATA
     const source =
       bucket && typeof bucket.get === 'function'
@@ -2933,7 +2950,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   }
 
   /** The filters, read off the query string exactly once. */
-  const parcelFilters = (c) => {
+  const parcelFilters = (c) => filtersFrom((name) => c.req.query(name))
+  // The same reading of the same names from any source of them: a request's
+  // query, or the criteria a saved map carries (the map image below).
+  const filtersFrom = (get) => {
+    const c = { req: { query: get } }
     const ownerId = (c.req.query('owner') ?? '').trim()
     const list = (name) =>
       (c.req.query(name) ?? '')
@@ -3854,6 +3875,186 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * how somebody framed a market, and framing is exactly the kind of thing a
    * brokerage wants to share rather than each person rebuilding.
    */
+  /*
+   * A map as a picture (lib/mapimage.js): the basemap, the county's lot
+   * lines, the lots the criteria match, the layers switched on, a circle
+   * and pins, drawn here and kept under an unguessable name for a month so
+   * it can be put in a document. Takes a saved map's state as the map
+   * itself keeps it, and the criteria as the search reads them.
+   */
+  const PNG_BASEMAPS = ['osm', 'osm-hot', 'opentopomap', 'carto-voyager', 'carto-light', 'carto-dark']
+  const EXPORT_DAYS = 30
+  const tileBytes = async (url) => {
+    const answer = await fetch(url, { headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' }, cf: { cacheTtl: 7 * 86400, cacheEverything: true } })
+    return answer.ok ? new Uint8Array(await answer.arrayBuffer()) : null
+  }
+
+  app.post('/api/gis/map-image', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'map-image', 30, 10 * 60 * 1000)
+    if (throttled) return throttled
+    let body = {}
+    try { body = await c.req.json() } catch { body = {} }
+    const market = String(body.market || '')
+    if (!/^[a-z0-9-]{2,40}$/.test(market)) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const state = body.state && typeof body.state === 'object' ? body.state : {}
+    const day = await spendCount(db, { key: user.teamId, kind: 'mapimage', cap: 200 }).catch(() => ({ allowed: true }))
+    if (!day.allowed) return c.json({ error: 'This workspace has drawn its 200 map images for today. The allowance resets at midnight UTC.' }, 429)
+
+    const notes = []
+    const width = Math.max(320, Math.min(MAX_WIDTH, Math.round(Number(body.width) || 1000)))
+    const height = Math.max(240, Math.min(MAX_HEIGHT, Math.round(Number(body.height) || 700)))
+    const archive = archiveFor(`${market}/parcels.pmtiles`)
+    const header = await archive.getHeader().catch(() => null)
+    if (!header) return c.json({ error: `No map is published for ${market}.` }, 404)
+
+    // Where the frame sits: where the saved map opens, else on its circle,
+    // else on the whole county.
+    const circle = readCircle(state.circle ?? {})
+    let center = Array.isArray(state.center) && state.center.length === 2 && state.center.every((v) => Number.isFinite(Number(v)))
+      ? state.center.map(Number) : null
+    let zoom = Number.isFinite(Number(state.zoom)) ? Number(state.zoom) : null
+    if (!center && circle) center = [circle.lng, circle.lat]
+    if (zoom == null && circle) zoom = zoomToFit(circle.miles, circle.lat, Math.min(width, height))
+    if (!center) {
+      center = [(header.minLon + header.maxLon) / 2, (header.minLat + header.maxLat) / 2]
+      const span = Math.max(header.maxLon - header.minLon, (header.maxLat - header.minLat) * 1.3)
+      zoom = Math.max(6, Math.min(12, Math.floor(Math.log2((360 * width) / (256 * Math.max(span, 0.01))))))
+    }
+    if (zoom == null) zoom = 14
+    const frame = frameOf({ center, zoom, width, height })
+
+    // The ground: the saved map's own basemap where its tiles are PNG.
+    const offered = availableBasemaps(env)
+    const wanted = offered.find((b) => b.provider === state.basemap) ?? resolveTiles(env)
+    let basemap = wanted
+    if (!PNG_BASEMAPS.includes(wanted.provider)) {
+      basemap = offered.find((b) => b.provider === 'osm') ?? wanted
+      if (state.basemap) notes.push(`The ${wanted.label} basemap cannot be drawn in an exported image yet, so this one is on the street map.`)
+    }
+
+    // The lots the criteria match, inside the frame.
+    let matches = null
+    let matchPoints = null
+    let matchTotal = null
+    const criteria = new URLSearchParams(String(body.criteria || ''))
+    const asked = [...criteria.keys()].some((key) => !['market', 'limit', 'offset', 'circle', 'match'].includes(key))
+    if (asked || criteria.has('circle')) {
+      const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
+      if (!summary) notes.push('This market cannot be searched yet, so no parcels are picked out.')
+      else {
+        try {
+          const filters = filtersFrom((name) => criteria.get(name) ?? undefined)
+          if (!filters.circle) filters.box = readArea(frame.box.map((v) => Math.round(v * 1e5) / 1e5))
+          filters.nearGrids = await nearGridsFor(market, readNear(criteria.get('near') ?? undefined))
+          const { found, refused } = await scannedSearch(c, parcelsFor(market), market, filters, { limit: 1000, summary })
+          if (refused) notes.push('The search behind this map is too wide to run for an image; narrow the criteria or the area.')
+          else {
+            matches = new Set((found.rows ?? []).map((row) => String(row.id)))
+            matchPoints = (found.rows ?? [])
+              .filter((row) => Array.isArray(row.bb) && row.bb.every((v) => Number.isFinite(Number(v))))
+              .map((row) => [(Number(row.bb[0]) + Number(row.bb[2])) / 2, (Number(row.bb[1]) + Number(row.bb[3])) / 2])
+            matchTotal = Number(found.count ?? matches.size)
+            if (matchTotal > matches.size) notes.push(`${matchTotal.toLocaleString('en-US')} parcels match in this frame; the ${matches.size.toLocaleString('en-US')} most valuable are picked out.`)
+          }
+        } catch (cause) {
+          notes.push('The search behind this map could not be run, so no parcels are picked out.')
+          console.error(JSON.stringify({ event: 'map_image_search_failed', market, message: String(cause?.message ?? cause).slice(0, 200) }))
+        }
+      }
+    }
+
+    // The layers switched on, each from its own tile archive.
+    const on = Object.entries(state.layerOn && typeof state.layerOn === 'object' ? state.layerOn : {}).filter(([, v]) => v).map(([id]) => id).slice(0, 6)
+    const layers = []
+    if (on.length) {
+      const catalogue = await catalogJson(`${market}/layers.json`).catch(() => null)
+      for (const id of on) {
+        const layer = (catalogue?.layers ?? []).find((l) => l.id === id)
+        if (!layer?.tiles || !INGEST_TILE_FILE.test(layer.tiles)) { notes.push(`The layer ${id} is not published for this market.`); continue }
+        const tiles = archiveFor(`${market}/${layer.tiles}`)
+        const head = await tiles.getHeader().catch(() => null)
+        if (!head) { notes.push(`${layer.label} could not be read.`); continue }
+        const coloured = (layer.categories ?? []).find((cat) => cat.colors && typeof cat.colors === 'object')
+        layers.push({
+          label: layer.label, kind: layer.kind, color: layer.color,
+          colors: coloured ? { field: coloured.field, map: coloured.colors } : null,
+          read: featureReader(tiles, layer.sourceLayer || id), minZoom: head.minZoom, maxZoom: head.maxZoom,
+        })
+      }
+    }
+
+    const pins = (Array.isArray(state.pins) ? state.pins : [])
+      .map((p) => ({ lat: Number(p.lat), lng: Number(p.lng), label: String(p.label ?? '').slice(0, 60) }))
+      .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+      .slice(0, 120)
+    let drawn
+    try {
+      drawn = await renderMap({
+        center, zoom, width, height, basemap, fetchTile: env.MAP_TILE_FETCH ?? tileBytes,
+        parcels: { read: featureReader(archive, 'parcels'), minZoom: header.minZoom, maxZoom: header.maxZoom },
+        showLandUse: Boolean(state.showParcels), matches, matchPoints,
+        matchLabel: matches ? `Search matches (${(matchTotal ?? matches.size).toLocaleString('en-US')} in view)` : null,
+        layers, circle, pins, title: String(body.title || '').slice(0, 90) || null,
+      })
+    } catch (cause) {
+      console.error(JSON.stringify({ event: 'map_image_failed', market, message: String(cause?.message ?? cause).slice(0, 300) }))
+      return c.json({ error: 'The map image could not be drawn just now.' }, 502)
+    }
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    const name = `${stamp}-${[...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, '0')).join('')}.png`
+    await storage.put(`map-export-${name}`, drawn.png, 'image/png')
+    return c.json({
+      path: `/api/map-exports/${name}`,
+      width: drawn.width, height: drawn.height, bytes: drawn.png.length,
+      center: { lng: center[0], lat: center[1] }, zoom: drawn.frame.z, box: drawn.frame.box,
+      shown: { ...drawn.shown, matchesInFrame: matchTotal },
+      keptDays: EXPORT_DAYS,
+      notes: [...notes, ...drawn.notes],
+    })
+  })
+
+  app.get('/api/map-exports/:name', async (c) => {
+    const name = c.req.param('name')
+    if (!/^[0-9]{8}-[0-9a-f]{32}\.png$/.test(name)) return c.notFound()
+    const made = Date.UTC(Number(name.slice(0, 4)), Number(name.slice(4, 6)) - 1, Number(name.slice(6, 8)))
+    if (!(Date.now() - made < (EXPORT_DAYS + 1) * 86400 * 1000)) return c.json({ error: 'This map image has expired. Export it again.' }, 410)
+    const file = await storage.get(`map-export-${name}`)
+    if (!file) return c.notFound()
+    return new Response(file.body, { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400', 'x-robots-tag': 'noindex' } })
+  })
+
+  /*
+   * Outlines for parcels a search already returned, as GeoJSON geometry,
+   * read from the same tiles the map draws them from (lib/shapes.js). The
+   * caller names each lot by its id and its box, both from a search result.
+   */
+  app.post('/api/gis/parcels/shapes', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'parcel-shapes', 60, 10 * 60 * 1000)
+    if (throttled) return throttled
+    let body = {}
+    try { body = await c.req.json() } catch { body = {} }
+    const market = String(body.market || '')
+    if (!/^[a-z0-9-]{2,40}$/.test(market)) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const wanted = (Array.isArray(body.parcels) ? body.parcels : []).slice(0, 200)
+    const archive = archiveFor(`${market}/parcels.pmtiles`)
+    const header = await archive.getHeader().catch(() => null)
+    if (!header) return c.json({ error: `No map is published for ${market}.` }, 404)
+    const read = featureReader(archive, 'parcels')
+    const shapes = {}
+    let missing = 0
+    for (const parcel of wanted) {
+      const box = Array.isArray(parcel?.bb) ? parcel.bb.map(Number) : null
+      const shape = box ? await parcelShape(read, parcel.id, box, { minZoom: header.minZoom, maxZoom: header.maxZoom }).catch(() => null) : null
+      if (shape) shapes[String(parcel.id)] = shape
+      else missing += 1
+    }
+    return c.json({ market, shapes, missing })
+  })
+
   app.get('/api/gis/views', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)

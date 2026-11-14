@@ -13,11 +13,13 @@ import { fullAddress } from '../../src/lib/address.ts'
 import { safeLogo } from './logos.js'
 import { squeeze } from './places.js'
 
+import { toBase64 } from './storage.js'
+
 export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files and cannot be searched here yet; the tool says so.`
 
@@ -234,6 +236,55 @@ export const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
   {
+    name: 'export_map_image',
+    title: 'Export a map as an image',
+    description: 'Draw a Land Quotient map as a PNG and return it with a link to the file, for a proposal or a deck: the street basemap, the county\'s parcel lines, the parcels the criteria match picked out in red, the layers switched on, a circle and pins, with a legend, scale bar and attribution. Give `map` (the name of a map saved with make_map) to draw that map, or describe the map here exactly as for make_map. The link works without signing in and is kept for 30 days. Parcel lines appear from zoom 11; pins are drawn as labelled dots (no logos).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        map: { type: 'string', maxLength: 80, description: 'The name (or id) of a saved map to draw. When given, the map\'s own layers, criteria, circle, pins and position are used.' },
+        title: { type: 'string', maxLength: 90, description: 'A title set in the top left corner. Defaults to the saved map\'s name.' },
+        width: { type: 'integer', minimum: 320, maximum: 1600, description: 'Pixels wide (default 1000).' },
+        height: { type: 'integer', minimum: 240, maximum: 1200, description: 'Pixels high (default 700).' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'Layer ids from market_layers to draw (up to six).' },
+        landUseColours: { type: 'boolean', description: 'Colour the parcels by land use.' },
+        ...CRITERIA,
+        center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } }, required: ['lat', 'lng'] },
+        zoom: { type: 'number', minimum: 3, maximum: 19, description: 'Whole zoom levels; 15 shows a few blocks, 12 a city.' },
+        pins: { type: 'array', maxItems: MAX_PINS, items: PIN, description: 'Points to pin, each with a label.' },
+        landmarks: { type: 'object', properties: LANDMARKS, description: 'Pin the landmarks around the centre or circle, as make_map does.' },
+        nearby: { type: 'object', properties: NEARBY, description: 'Pin the chains (or other businesses) around the centre or circle, as make_map does.' },
+        inline: { type: 'boolean', description: 'Also return the PNG itself in the reply (default true). Set false to get only the link.' },
+      },
+      required: ['market'],
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'export_parcels_geojson',
+    title: 'Export parcels as GeoJSON',
+    description: 'The parcels that meet the criteria as a GeoJSON FeatureCollection: each parcel\'s real outline (from the county\'s parcel geometry) with its record as properties, the most valuable first. Up to 200 a call; use offset for the next page. An outline is exact to about a foot. A parcel that crosses a map tile line at every zoom comes as a MultiPolygon of its pieces and says so in `pieces`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        ...CRITERIA,
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many parcels (default 50).' },
+        offset: { type: 'integer', minimum: 0, description: 'Skip this many matches, for the next page.' },
+      },
+      required: ['market'],
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'platform_stats',
+    title: 'Platform totals',
+    description: 'Headline totals across every live market, from the platform\'s own published figures: how many markets, parcels, acres and the total roll value, with each market\'s own line. Use these for KPIs rather than figures from the website.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'my_lists',
     title: 'My lists',
     description: "The team's lists of places (prospect lists, client shortlists), each with its client, tags and size; filter by client or tag. Give a list's id to read the places on it.",
@@ -302,6 +353,36 @@ export function searchParams(input = {}) {
   const c = input.circle
   if (c && [c.lat, c.lng, c.miles].every((v) => Number.isFinite(Number(v)))) p.set('circle', `${c.lat},${c.lng},${c.miles}`)
   if (input.match === 'any') p.set('match', 'any')
+  return p
+}
+
+/**
+ * The search a saved map's state describes, as the same query the parcel
+ * search reads: the other direction from viewState below.
+ */
+export function stateParams(state = {}, market = '') {
+  const p = new URLSearchParams({ market: String(market || '') })
+  const list = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : [])
+  const bound = (range, lo, hi) => {
+    if (range?.min !== '' && range?.min != null && Number.isFinite(Number(range.min))) p.set(lo, String(Number(range.min)))
+    if (range?.max !== '' && range?.max != null && Number.isFinite(Number(range.max))) p.set(hi, String(Number(range.max)))
+  }
+  if (state.query) p.set('q', String(state.query).slice(0, 120))
+  if (list(state.assets).length) p.set('at', list(state.assets).join(','))
+  bound(state.value, 'vmin', 'vmax')
+  bound(state.acres, 'amin', 'amax')
+  if (list(state.zoningKeep).length) p.set('zc', list(state.zoningKeep).join(','))
+  if (list(state.zoningDrop).length) p.set('znot', list(state.zoningDrop).join(','))
+  if (list(state.zoningCodes).length) p.set('zn', list(state.zoningCodes).join(','))
+  if (state.flood === 'in' || state.flood === 'out') p.set('flood', state.flood)
+  if (state.buildings === 'vacant' || state.buildings === 'built') p.set('bld', state.buildings)
+  if (list(state.ownerFilters).length) p.set('own', list(state.ownerFilters).join(','))
+  if (Array.isArray(state.near) && state.near.length) {
+    p.set('near', state.near.slice(0, 4).map((n) => `${n.layer}:${Number(n.miles)}`).join(','))
+  }
+  const c = state.circle
+  if (c && [c.lat, c.lng, c.miles].every((v) => Number.isFinite(Number(v)))) p.set('circle', `${c.lat},${c.lng},${c.miles}`)
+  if (state.match === 'any') p.set('match', 'any')
   return p
 }
 
@@ -531,6 +612,42 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
     return Number.isFinite(at.lat) && Number.isFinite(at.lng) ? at : { error: `No location found for "${args.address}".` }
   }
 
+  // The pins a map asks to have found for it (chains, landmarks), added to
+  // the state the way make_map has always added them.
+  const findPins = async (state) => {
+    let pinned = 0
+    let foundCount
+    let foundSource
+    if (input.nearby && typeof input.nearby === 'object') {
+      const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
+      if (!at) return { error: 'nearby needs a center or a circle to search around.' }
+      const options = { ...input.nearby, radiusMiles: input.nearby.radiusMiles ?? state.circle?.miles ?? 1 }
+      const found = await ask(`/api/places/nearby?${nearbyQuery(at.lat, at.lng, options)}`)
+      if (found.status !== 200) return { error: refusal(found) }
+      const businesses = Array.isArray(found.body?.results) ? found.body.results : []
+      foundCount = businesses.length
+      foundSource = found.body?.source
+      const pins = pinList([...(state.pins ?? []), ...businesses.map(businessPin)])
+      pinned = pins.length - (state.pins?.length ?? 0)
+      if (pins.length) state.pins = pins
+      if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 1)
+    }
+    let landmarksPinned
+    if (input.landmarks && typeof input.landmarks === 'object') {
+      const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
+      if (!at) return { error: 'landmarks needs a center or a circle to search around.' }
+      const options = { ...input.landmarks, radiusMiles: input.landmarks.radiusMiles ?? state.circle?.miles ?? 5 }
+      const found = await ask(`/api/places/landmarks?${landmarksQuery(at.lat, at.lng, options)}`)
+      if (found.status !== 200) return { error: refusal(found) }
+      const before = state.pins?.length ?? 0
+      const pins = pinList([...(state.pins ?? []), ...(found.body?.landmarks ?? []).map(landmarkPin)])
+      landmarksPinned = pins.length - before
+      if (pins.length) state.pins = pins
+      if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 5)
+    }
+    return { pinned, foundCount, foundSource, landmarksPinned }
+  }
+
   switch (name) {
     case 'list_markets': {
       const answer = await ask('/catalog/markets.json')
@@ -708,36 +825,9 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       if (!scope.includes('maps')) return failure('This connection was not given permission to save maps.')
       if (!input.market || !input.name) return failure('market and name are required.')
       const state = viewState(input)
-      let pinned = 0
-      let foundCount
-      let foundSource
-      if (input.nearby && typeof input.nearby === 'object') {
-        const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
-        if (!at) return failure('nearby needs a center or a circle to search around.')
-        const options = { ...input.nearby, radiusMiles: input.nearby.radiusMiles ?? state.circle?.miles ?? 1 }
-        const found = await ask(`/api/places/nearby?${nearbyQuery(at.lat, at.lng, options)}`)
-        if (found.status !== 200) return failure(refusal(found))
-        const businesses = Array.isArray(found.body?.results) ? found.body.results : []
-        foundCount = businesses.length
-        foundSource = found.body?.source
-        const pins = pinList([...(state.pins ?? []), ...businesses.map(businessPin)])
-        pinned = pins.length - (state.pins?.length ?? 0)
-        if (pins.length) state.pins = pins
-        if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 1)
-      }
-      let landmarksPinned
-      if (input.landmarks && typeof input.landmarks === 'object') {
-        const at = state.circle ?? (state.center ? { lat: state.center[1], lng: state.center[0] } : null)
-        if (!at) return failure('landmarks needs a center or a circle to search around.')
-        const options = { ...input.landmarks, radiusMiles: input.landmarks.radiusMiles ?? state.circle?.miles ?? 5 }
-        const found = await ask(`/api/places/landmarks?${landmarksQuery(at.lat, at.lng, options)}`)
-        if (found.status !== 200) return failure(refusal(found))
-        const before = state.pins?.length ?? 0
-        const pins = pinList([...(state.pins ?? []), ...(found.body?.landmarks ?? []).map(landmarkPin)])
-        landmarksPinned = pins.length - before
-        if (pins.length) state.pins = pins
-        if (!input.center && !state.circle) state.zoom = zoomFor(Number(options.radiusMiles) || 5)
-      }
+      const pinsFound = await findPins(state)
+      if (pinsFound.error) return failure(pinsFound.error)
+      const { pinned, foundCount, foundSource, landmarksPinned } = pinsFound
       const answer = await ask('/api/gis/views', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -753,6 +843,119 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
         nearbySource: input.nearby ? foundSource : undefined,
         landmarksPinned,
         link: `${origin}/gis/${encodeURIComponent(input.market)}?view=${encodeURIComponent(id)}`,
+      })
+    }
+
+    case 'export_map_image': {
+      if (!input.market) return failure('market is required.')
+      let state
+      let title = input.title ? String(input.title) : null
+      let criteria
+      if (input.map) {
+        const views = await ask(`/api/gis/views?market=${encodeURIComponent(input.market)}`)
+        if (views.status !== 200) return failure(refusal(views))
+        const want = String(input.map).trim().toLowerCase()
+        const saved = (views.body?.views ?? []).find((v) => String(v.id) === String(input.map) || String(v.name).trim().toLowerCase() === want)
+        if (!saved) {
+          const names = (views.body?.views ?? []).map((v) => v.name).slice(0, 20)
+          return failure(`No saved map called "${input.map}" in ${input.market}.${names.length ? ` Saved maps there: ${names.join('; ')}.` : ' Save one with make_map first, or describe the map here.'}`)
+        }
+        state = saved.state || {}
+        title = title ?? saved.name
+        criteria = stateParams(state, input.market)
+      } else {
+        state = viewState(input)
+        const pinsFound = await findPins(state)
+        if (pinsFound.error) return failure(pinsFound.error)
+        criteria = searchParams(input)
+      }
+      const answer = await ask('/api/gis/map-image', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ market: input.market, state, criteria: criteria.toString(), title, width: input.width, height: input.height }),
+      })
+      if (answer.status !== 200) return failure(refusal(answer))
+      const b = answer.body
+      const summary = {
+        image: `${origin}${b.path}`,
+        width: b.width, height: b.height, bytes: b.bytes,
+        center: b.center, zoom: b.zoom,
+        shown: b.shown,
+        notes: b.notes?.length ? b.notes : undefined,
+        keptDays: b.keptDays,
+        use: 'The image link is a plain PNG that opens without signing in; embed or download it. It is kept for 30 days.',
+      }
+      const content = [text(summary)]
+      // The picture itself, for a client that can take one, unless it is
+      // too large to carry in a reply or was not asked for.
+      if (input.inline !== false && Number(b.bytes) <= 1_500_000) {
+        const file = await call(b.path)
+        if (file.status === 200) content.push({ type: 'image', data: toBase64(new Uint8Array(await file.arrayBuffer())), mimeType: 'image/png' })
+      }
+      return { content, structuredContent: summary }
+    }
+
+    case 'export_parcels_geojson': {
+      if (!input.market) return failure('market is required.')
+      const params = searchParams(input)
+      const limit = Math.min(200, Math.max(1, Number(input.limit) || 50))
+      params.set('limit', String(limit))
+      if (Number(input.offset) > 0) params.set('offset', String(Math.floor(Number(input.offset))))
+      const found = await ask(`/api/gis/parcels?${params.toString()}`)
+      if (found.status === 404 && found.body?.ready === false) {
+        return failure(`${input.market} is served from county files and cannot be searched through the connector yet, so its parcels cannot be exported here.`)
+      }
+      if (found.status !== 200) return failure(refusal(found))
+      const rows = (found.body.rows || []).slice(0, limit)
+      const shapes = await ask('/api/gis/parcels/shapes', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ market: input.market, parcels: rows.map((row) => ({ id: row.id, bb: row.bb })) }),
+      })
+      if (shapes.status !== 200) return failure(refusal(shapes))
+      const features = []
+      let withoutShape = 0
+      for (const row of rows) {
+        const shape = shapes.body.shapes?.[String(row.id)]
+        if (!shape) withoutShape += 1
+        features.push({
+          type: 'Feature',
+          id: row.id,
+          geometry: shape?.geometry ?? null,
+          properties: { ...readable(row, input.market), ...(shape && shape.pieces > 1 ? { pieces: shape.pieces } : {}) },
+        })
+      }
+      return result({
+        type: 'FeatureCollection',
+        market: input.market,
+        matched: found.body.count,
+        returned: features.length,
+        offset: Number(input.offset) > 0 ? Math.floor(Number(input.offset)) : 0,
+        withoutShape: withoutShape || undefined,
+        crs: 'WGS 84 longitude, latitude (EPSG:4326)',
+        source: 'Outlines from the county\'s published parcel geometry, as drawn on the Land Quotient map; records from the county roll.',
+        features,
+      })
+    }
+
+    case 'platform_stats': {
+      const answer = await ask('/catalog/markets.json')
+      if (answer.status !== 200) return failure(refusal(answer))
+      const live = (answer.body?.markets ?? []).filter((m) => m.status === 'live')
+      const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+      const markets = live
+        .map((m) => ({ slug: m.slug, name: m.name, region: m.region, parcels: num(m.stats?.parcels), value: num(m.stats?.value), acres: num(m.stats?.acres), roll: m.roll ?? undefined }))
+        .sort((a, b) => b.parcels - a.parcels)
+      const states = new Set(live.map((m) => String(m.region || '').split(',').pop().trim()).filter(Boolean))
+      return result({
+        asOf: answer.body?.updated ?? undefined,
+        markets: markets.length,
+        states: states.size,
+        parcels: markets.reduce((n, m) => n + m.parcels, 0),
+        totalValue: markets.reduce((n, m) => n + m.value, 0),
+        acres: Math.round(markets.reduce((n, m) => n + m.acres, 0)),
+        note: 'Summed from each live market\'s published totals. Value is each county\'s own roll value (assessed or market, as the county states it), so the total is a sum of unlike figures and best quoted as "roll value".',
+        byMarket: markets,
       })
     }
 
