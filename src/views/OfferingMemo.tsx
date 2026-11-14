@@ -150,7 +150,32 @@ export default function OfferingMemo({ market, id }: { market: string; id: strin
           rows: panelRows(panel, flat, (rest as Record<string, unknown>) ?? null, {}),
         })
       })
-      .catch((error) => setFailed(error instanceof Error ? error.message : 'That parcel could not be read.'))
+      .catch(async (error) => {
+        /*
+         * A county served from its files has no record to fetch by id, so a
+         * memo opened on its own (from the Library, a reload, a pasted link)
+         * found nothing. The parcel is in the CRM whenever it was sent from
+         * there, and what the CRM holds is enough to place it and draw the
+         * memo's maps; the county's rows are the part left out.
+         */
+        const saved = await api.crm.parcel(market, id).then((r) => r.place).catch(() => null)
+        if (cancelled) return
+        const lat = Number(saved?.lat)
+        const lng = Number(saved?.lng)
+        if (!saved || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+          setFailed(error instanceof Error ? error.message : 'That parcel could not be read.')
+          return
+        }
+        const address = String(saved.address || saved.name || `Parcel ${id}`)
+        setHandoff({
+          market,
+          id,
+          record: { ad: address, gid: id, ac: saved.acreage ?? null },
+          address: [address, [saved.city, saved.state].filter(Boolean).join(', ')].filter(Boolean).join(', '),
+          center: { lat, lng },
+          rows: [],
+        })
+      })
     return () => {
       cancelled = true
     }
