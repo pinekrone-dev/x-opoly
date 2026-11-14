@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import WorkspaceNav from '../components/WorkspaceNav'
 import { api } from '../api'
 import { navigate } from '../lib/router'
-import type { Account, BillingStatus, LibraryItem, LibraryPiece } from '../types'
+import type { Account, BillingStatus, Deal, LibraryItem, LibraryPiece } from '../types'
 
 /*
  * The Library: the pieces of an offering memorandum, kept per parcel.
@@ -137,6 +137,17 @@ function Entry({ item, onChanged }: { item: LibraryItem; onChanged: () => void }
         </div>
       </div>
 
+      {item.deals.length ? (
+        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+          On
+          {item.deals.map((d) => (
+            <button key={d.id} type="button" className="rounded-full bg-sunken px-2 py-0.5 font-medium text-body hover:text-brand-deep" onClick={() => navigate(`/deals/${d.id}`)}>
+              {d.name}
+            </button>
+          ))}
+        </p>
+      ) : null}
+
       <p className="label mb-1.5 mt-4">Maps</p>
       {located ? (
         <div className="grid gap-3 sm:grid-cols-3">
@@ -231,6 +242,30 @@ export default function Library({
   const [items, setItems] = useState<LibraryItem[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [filter, setFilter] = useState('')
+  /*
+   * A deal is a folder: the parcels on it, with their pieces. The folder is
+   * named in the address (?deal=<id>), which is how a deal's own page opens
+   * it, and it also lists the deal's parcels that are not in the library
+   * yet, to be added in one click.
+   */
+  const [folder, setFolder] = useState<string>(() => new URLSearchParams(window.location.search).get('deal') ?? '')
+  const [deal, setDeal] = useState<Deal | null>(null)
+  const [adding, setAdding] = useState(false)
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    if (folder) url.searchParams.set('deal', folder)
+    else url.searchParams.delete('deal')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+    if (!folder) {
+      setDeal(null)
+      return undefined
+    }
+    let cancelled = false
+    api.crm.get<Deal>('deals', folder).then(({ record }) => !cancelled && setDeal(record)).catch(() => !cancelled && setDeal(null))
+    return () => {
+      cancelled = true
+    }
+  }, [folder])
 
   const load = useCallback(() => {
     api.library
@@ -243,11 +278,35 @@ export default function Library({
   }, [])
   useEffect(() => { load() }, [load])
 
+  const folders = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const item of items ?? []) for (const d of item.deals) seen.set(d.id, d.name)
+    if (deal) seen.set(deal.id, deal.name)
+    return [...seen.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [items, deal])
+
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase()
-    if (!items || !needle) return items ?? []
-    return items.filter(({ place }) => [place.name, place.address, place.city, place.market].some((t) => String(t ?? '').toLowerCase().includes(needle)))
-  }, [items, filter])
+    return (items ?? [])
+      .filter((item) => !folder || item.deals.some((d) => d.id === folder))
+      .filter(({ place }) => !needle || [place.name, place.address, place.city, place.market].some((t) => String(t ?? '').toLowerCase().includes(needle)))
+  }, [items, filter, folder])
+
+  // The folder's deal has parcels that are not in the library yet.
+  const missing = useMemo(() => {
+    if (!deal || deal.id !== folder) return []
+    const inside = new Set((items ?? []).map((item) => item.place.id))
+    return (deal.parties ?? []).filter((party) => party.kind === 'place' && !inside.has(party.record.id))
+  }, [deal, folder, items])
+  const addMissing = async () => {
+    setAdding(true)
+    try {
+      for (const party of missing) await api.library.add(party.record.id)
+      load()
+    } finally {
+      setAdding(false)
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-paper">
@@ -260,16 +319,46 @@ export default function Library({
               The pieces of an offering memorandum, kept per parcel: maps to drop into your own layout, the data behind its tables, and the one-page memo.
             </p>
           </div>
-          {items?.length ? (
-            <input className="field w-56 text-sm" placeholder="Find a parcel" aria-label="Find a parcel in the library" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {folders.length ? (
+              <select className="field w-56 text-sm" aria-label="Folder" value={folder} onChange={(e) => setFolder(e.target.value)} data-testid="library-folder">
+                <option value="">All parcels</option>
+                {folders.map((f) => <option key={f.id} value={f.id}>Deal: {f.name}</option>)}
+              </select>
+            ) : null}
+            {items?.length ? (
+              <input className="field w-56 text-sm" placeholder="Find a parcel" aria-label="Find a parcel in the library" value={filter} onChange={(e) => setFilter(e.target.value)} />
+            ) : null}
+          </div>
         </div>
+
+        {folder && deal ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface px-4 py-3" data-testid="library-deal">
+            <p className="text-sm text-body">
+              Folder for the deal{' '}
+              <button type="button" className="font-semibold text-ink hover:text-brand-deep" onClick={() => navigate(`/deals/${deal.id}`)}>{deal.name}</button>
+              {missing.length ? `: ${missing.length} of its parcels ${missing.length === 1 ? 'is' : 'are'} not in the library yet.` : '.'}
+            </p>
+            <div className="flex items-center gap-2">
+              {missing.length ? (
+                <button type="button" className="btn-primary text-xs" disabled={adding} onClick={() => void addMissing()}>
+                  {adding ? 'Adding…' : `Add ${missing.length === 1 ? 'it' : `all ${missing.length}`} to the library`}
+                </button>
+              ) : null}
+              <button type="button" className="btn-secondary text-xs" onClick={() => navigate(`/deals/${deal.id}`)}>Open the deal</button>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-6 space-y-4">
           {failed ? (
             <p className="text-sm text-rose-600">The library could not be read. Reload to try again.</p>
           ) : items === null ? (
             <p className="text-sm text-muted">Loading the library…</p>
+          ) : folder && shown.length === 0 ? (
+            <p className="text-sm text-muted">
+              {missing.length ? 'Add the deal\'s parcels above to start its folder.' : 'This deal has no parcels on it yet. Add one from the map with “Add to deal”.'}
+            </p>
           ) : items.length === 0 ? (
             <div className="panel p-6 text-sm text-muted" data-testid="library-empty">
               <p className="font-semibold text-ink">Nothing in the library yet.</p>

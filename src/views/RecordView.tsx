@@ -294,8 +294,9 @@ function OpenSurvey({
 }) {
   const [surveys, setSurveys] = useState<Survey[] | null>(null)
   const [failed, setFailed] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
   useEffect(() => {
-    if (deal.surveyId) return
+    if (!canEdit) return undefined
     let cancelled = false
     api
       .listSurveys()
@@ -308,41 +309,60 @@ function OpenSurvey({
     return () => {
       cancelled = true
     }
-  }, [deal.surveyId])
+  }, [canEdit, deal.surveyId])
 
-  if (deal.surveyId) {
-    return (
-      <button type="button" className="btn-primary text-xs" onClick={() => navigate(`/survey/${deal.surveyId}`)}>
-        Open survey
-      </button>
-    )
+  /*
+   * Which survey the deal opens can be changed at any time: another survey
+   * the team has, a new one made for the deal, or none. A deal used to keep
+   * the first survey it was linked to for good.
+   */
+  const assign = async (choice: string) => {
+    if (!choice) return
+    setFailed(null)
+    setBusy(true)
+    try {
+      let surveyId: string | null = choice
+      if (choice === '__none') surveyId = null
+      if (choice === '__new') surveyId = (await api.createSurvey({ name: deal.name })).survey.id
+      const { record } = await api.crm.update('deals', deal.id, { surveyId })
+      onLinked(record)
+    } catch (cause) {
+      setFailed(cause instanceof Error ? cause.message : 'That could not be changed.')
+    } finally {
+      setBusy(false)
+    }
   }
-  if (!surveys?.length || !canEdit) return null
+
+  const others = (surveys ?? []).filter((survey) => survey.id !== deal.surveyId)
   return (
-    <span className="inline-flex items-center gap-1.5">
-      <select
-        className="field h-8 w-auto py-0 text-xs"
-        aria-label="Link a survey to this deal"
-        value=""
-        onChange={async (event) => {
-          const surveyId = event.target.value
-          if (!surveyId) return
-          setFailed(null)
-          try {
-            const { record } = await api.crm.update('deals', deal.id, { surveyId })
-            onLinked(record)
-          } catch (cause) {
-            setFailed(cause instanceof Error ? cause.message : 'That could not be linked.')
-          }
-        }}
-      >
-        <option value="">Link a survey to open…</option>
-        {surveys.map((survey) => (
-          <option key={survey.id} value={survey.id}>
-            {survey.name}
-          </option>
-        ))}
-      </select>
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      {deal.surveyId ? (
+        <button type="button" className="btn-primary text-xs" onClick={() => navigate(`/survey/${deal.surveyId}`)}>
+          Open survey
+        </button>
+      ) : null}
+      {canEdit ? (
+        <select
+          className="field h-8 w-auto py-0 text-xs"
+          aria-label={deal.surveyId ? 'Change the survey this deal opens' : 'Link a survey to this deal'}
+          value=""
+          disabled={busy}
+          onChange={(event) => void assign(event.target.value)}
+        >
+          <option value="">{busy ? 'Saving…' : deal.surveyId ? 'Change survey…' : 'Link a survey…'}</option>
+          <option value="__new">+ New survey for this deal</option>
+          {others.map((survey) => (
+            <option key={survey.id} value={survey.id}>
+              {survey.name}
+            </option>
+          ))}
+          {deal.surveyId ? <option value="__none">No survey</option> : null}
+        </select>
+      ) : null}
+      {/* The deal's folder in the Library: its parcels' maps and data. */}
+      <button type="button" className="btn-secondary text-xs" onClick={() => navigate(`/library?deal=${encodeURIComponent(deal.id)}`)} data-testid="deal-library">
+        Library
+      </button>
       {failed ? <span className="text-xs text-rose-700">{failed}</span> : null}
     </span>
   )
