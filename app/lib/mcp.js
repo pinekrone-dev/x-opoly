@@ -691,6 +691,12 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       const b = answer.body
       return result({
         market: input.market,
+        // A market answered from county files says so, and what that leaves out.
+        ...(b.source === 'files'
+          ? { note: b.brief
+              ? 'Served from county files: these are the parcels whose address, owner or parcel number starts with the text, not a count of every match.'
+              : 'Served from county files: asset type, value, acres, the owner filters and a radius are answered; zoning, flood and building filters are not available in this market.' }
+          : {}),
         count: b.count,
         totalValue: b.total,
         acreage: Math.round(Number(b.acreage) || 0),

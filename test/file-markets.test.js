@@ -38,6 +38,19 @@ function packRows(records, shards, built = 1700000000) {
 }
 const rows = packRows(RECORDS, 2)
 const FILES = {
+  // The columns fixture is its own seven parcels (see parcel-cols.test.js),
+  // under another market so its ids are not confused with the three above.
+  'kent-de/cols.bin': fixture('cols.bin'),
+  'kent-de/rows.json': Buffer.from(JSON.stringify(packRows({
+    5: { id: 5, ad: '5 Mill Rd', ow: 'Vance Logistics', mv: 5200000, ac: 8.5, at: 'Industrial', bb: [-75.45, 39.15, -75.44, 39.16] },
+    2: { id: 2, ad: '2 High St', ow: 'Reyes Holdings', mv: 2500000, ac: 3.1, at: 'Retail', bb: [-75.4, 39.2, -75.39, 39.21] },
+    3: { id: 3, ad: '3 Farm Ln', ow: 'Okafor Trust', mv: 90000, ac: 12, at: 'Land', bb: [-75.3, 39.3, -75.29, 39.31] },
+  }, 1).manifest)),
+  'kent-de/rows.pack': packRows({
+    5: { id: 5, ad: '5 Mill Rd', ow: 'Vance Logistics', mv: 5200000, ac: 8.5, at: 'Industrial', bb: [-75.45, 39.15, -75.44, 39.16] },
+    2: { id: 2, ad: '2 High St', ow: 'Reyes Holdings', mv: 2500000, ac: 3.1, at: 'Retail', bb: [-75.4, 39.2, -75.39, 39.21] },
+    3: { id: 3, ad: '3 Farm Ln', ow: 'Okafor Trust', mv: 90000, ac: 12, at: 'Land', bb: [-75.3, 39.3, -75.29, 39.31] },
+  }, 1).bytes,
   'dover-de/rows.json': Buffer.from(JSON.stringify(rows.manifest)),
   'dover-de/rows.pack': rows.bytes,
   'dover-de/search.json': fixture('search.json'),
@@ -121,6 +134,70 @@ describe('a market served from county files', () => {
     await call('/api/gis/lookup?market=dover-de&q=smith%20mary')
     await call('/api/gis/parcel?market=dover-de&id=1')
     assert.equal(asked.filter((a) => /\.json$/.test(a)).length, before)
+  })
+
+  test('a filtered search is answered from the packed columns, in the store\'s shape', async () => {
+    const res = await call('/api/gis/parcels?market=kent-de&vmin=1000000&limit=10')
+    assert.equal(res.status, 200)
+    assert.equal(res.body.ready, true)
+    assert.equal(res.body.source, 'files')
+    assert.equal(res.body.count, 2)
+    assert.equal(res.body.total, 7700000)
+    assert.deepEqual(res.body.byAsset, [['Industrial', 1], ['Retail', 1]])
+    assert.deepEqual(res.body.ids, ['5', '2'], 'in order of value')
+    assert.deepEqual(res.body.rows.map((row) => row.ad), ['5 Mill Rd', '2 High St'])
+    const all = await call('/api/gis/parcels?market=kent-de')
+    assert.equal(all.body.count, 7)
+    assert.equal(all.body.ids, null, 'no highlight list when nothing narrows the market')
+    const area = await call('/api/gis/parcels?market=kent-de&circle=39.205,-75.395,0.2')
+    assert.deepEqual(area.body.ids, ['2'])
+    const held = await call('/api/gis/parcels?market=kent-de&own=outOfState&amin=5')
+    assert.deepEqual(held.body.ids, ['5'])
+  })
+
+  test('the columns are read from storage once, not once a search', async () => {
+    const reads = () => asked.filter((a) => a.startsWith('kent-de/cols.bin')).length
+    const before = reads()
+    await call('/api/gis/parcels?market=kent-de&amin=10')
+    await call('/api/gis/parcels?market=kent-de&at=Land')
+    assert.equal(reads(), before)
+    assert.equal(before, 1)
+  })
+
+  test('a filter the columns cannot answer is refused by name, and a market with nothing packed is not ready', async () => {
+    const zoning = await call('/api/gis/parcels?market=kent-de&zc=Industrial&vmin=1')
+    assert.equal(zoning.status, 400)
+    assert.equal(zoning.body.code, 'file_market')
+    assert.match(zoning.body.error, /cannot use zoning/)
+    const flood = await call('/api/gis/parcels?market=kent-de&flood=in')
+    assert.match(flood.body.error, /flood zone/)
+    const none = await call('/api/gis/parcels?market=nowhere-xx&vmin=1')
+    assert.equal(none.status, 404)
+    assert.equal(none.body.ready, false)
+  })
+
+  test('text alone on the search route is the search index', async () => {
+    const res = await call('/api/gis/parcels?market=dover-de&q=acme')
+    assert.equal(res.status, 200)
+    assert.equal(res.body.source, 'files')
+    assert.equal(res.body.brief, true)
+    assert.deepEqual(res.body.rows.map((row) => row.id), [2])
+  })
+
+  test('the connector answers a filtered search there and says what the market leaves out', async () => {
+    const tool = (name, input) => runTool(name, input, {
+      origin: 'http://localhost',
+      call: (path, init) => app.fetch(new Request(`http://localhost${path}`, { ...init, headers: { ...(init?.headers ?? {}), cookie } })),
+    })
+    const found = await tool('search_parcels', { market: 'kent-de', acresMin: 5, valueMin: 50000 })
+    assert.notEqual(found.isError, true)
+    assert.equal(found.structuredContent.count, 2)
+    assert.equal(found.structuredContent.totalValue, 5290000)
+    assert.match(found.structuredContent.note, /county files/)
+    assert.match(JSON.stringify(found.structuredContent.matches[0]), /5 Mill Rd/)
+    const zoned = await tool('search_parcels', { market: 'kent-de', zoning: ['Industrial'] })
+    assert.equal(zoned.isError, true)
+    assert.match(zoned.content[0].text, /cannot use zoning/)
   })
 
   test('the connector searches it by text and opens a lot, and says what it cannot do', async () => {
