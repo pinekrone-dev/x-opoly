@@ -2750,7 +2750,10 @@ export default function Gis({
     // typing stops, rather than once a keystroke.
     const timer = setTimeout(() => {
       api.parcels
-        .search(active, serverQuery, { limit: viaFile ? 50 : 200 })
+        // A file market's page is read a record at a time from storage, and
+        // the panel shows counts, not rows: one is asked for, enough to open
+        // the parcel when exactly one matches.
+        .search(active, serverQuery, { limit: viaFile ? 1 : 200 })
         .then((result) => {
           if (answered.current.size > 60) answered.current.clear()
           answered.current.set(key, { at: Date.now(), result })
