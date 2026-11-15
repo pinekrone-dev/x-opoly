@@ -221,10 +221,11 @@ describe('the zoning code route', () => {
   })
 
   test('a market whose index is not ready is not covered', async () => {
-    objects.set('denver-co/zoning-code.json', JSON.stringify({ ...INDEX, ready: false }))
-    const res = await call('/api/gis/zoning-code', { market: 'denver-co', zone: 'U-MX-3' })
+    // Another market: the route holds a market's index for five minutes, so
+    // Denver's, read by the tests above, would not be read again here.
+    objects.set('boulder-co/zoning-code.json', JSON.stringify({ ...INDEX, ready: false }))
+    const res = await call('/api/gis/zoning-code', { market: 'boulder-co', zone: 'U-MX-3' })
     assert.equal(res.body.covered, false)
-    objects.set('denver-co/zoning-code.json', JSON.stringify(INDEX))
   })
 
   test('the loading door refuses a caller without the pipeline\'s proof', async () => {
