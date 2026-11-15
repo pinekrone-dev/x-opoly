@@ -155,6 +155,22 @@ describe('a market served from county files', () => {
     assert.deepEqual(held.body.ids, ['5'])
   })
 
+  test('the market says its files can answer, with its own totals', async () => {
+    const res = await call('/api/gis/market?market=kent-de')
+    assert.equal(res.status, 200)
+    assert.equal(res.body.ready, false)
+    assert.equal(res.body.files, true)
+    assert.equal(res.body.count, 7)
+    assert.equal(res.body.total, 8800000)
+    assert.deepEqual(res.body.assets[0], { value: 'Residential', count: 3 })
+    assert.ok(!res.body.assets.some((a) => a.value === 'Unclassified'))
+    assert.equal(res.body.otagged, true)
+    // A market with rows and a search index but no columns answers as before.
+    const plain = await call('/api/gis/market?market=dover-de')
+    assert.equal(plain.body.ready, false)
+    assert.equal(plain.body.files, undefined)
+  })
+
   test('the columns are read from storage once, not once a search', async () => {
     const reads = () => asked.filter((a) => a.startsWith('kent-de/cols.bin')).length
     const before = reads()
