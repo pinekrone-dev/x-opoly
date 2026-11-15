@@ -3138,8 +3138,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     return edgeCached(c, `market/${market}`, 5 * 60, async () => {
       const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
-      if (!summary) return c.json({ ready: false, market })
-      return c.json({ ready: true, ...summary })
+      if (summary) return c.json({ ready: true, ...summary })
+      /*
+       * A market served from county files. Where its filter columns are
+       * published it still is not "ready" (the app reads its tiles, records
+       * and search index from the files), but it says `files`, with the
+       * market's own totals and asset types: the query panel then asks
+       * /api/gis/parcels instead of downloading the county's index to count.
+       */
+      const cols = await packedCols(market).catch(() => null)
+      if (!cols) return c.json({ ready: false, market })
+      return c.json({ ready: false, market, files: true, ...fileMarketSummary(market, cols) })
     })
   })
 
@@ -4549,6 +4558,27 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     colsHeld.set(market, { cols, until: Date.now() + (cols ? COLS_KEEP : 60 * 1000) })
     while (colsHeld.size > 3) colsHeld.delete(colsHeld.keys().next().value)
     return cols
+  }
+
+  /** What a file market adds up to with no filter set, walked once per file read. */
+  const fileSummaries = new WeakMap()
+  const fileMarketSummary = (market, cols) => {
+    const held = fileSummaries.get(cols)
+    if (held) return held
+    const all = scanCols(cols, {}, { home: marketState(market), keep: 0 })
+    let dated = false
+    for (let i = 0; i < cols.n && !dated; i += 1) dated = cols.sy[i] !== 0 || cols.ms[i] !== 0
+    const summary = {
+      count: all.count,
+      total: all.total,
+      acreage: all.acreage,
+      assets: all.byAsset.filter(([value]) => value !== 'Unclassified').map(([value, count]) => ({ value, count })),
+      // The owner filters (held ten years, mail out of state) have something to read.
+      otagged: dated,
+      builtAt: cols.built ? new Date(cols.built * 1000).toISOString() : null,
+    }
+    fileSummaries.set(cols, summary)
+    return summary
   }
 
   /*

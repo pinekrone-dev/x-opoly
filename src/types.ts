@@ -666,6 +666,12 @@ export type ParcelRow = Record<string, string | number | null | number[]> & {
 export interface MarketStatus {
   ready: boolean
   market: string
+  /**
+   * Not in the store, but its filter columns are published: the query panel
+   * asks the server, and count, total, acreage, assets and otagged are sent
+   * as they are for a ready market.
+   */
+  files?: boolean
   /** Present only when ready. */
   count?: number
   total?: number

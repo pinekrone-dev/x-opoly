@@ -1432,9 +1432,13 @@ export default function Gis({
   const [tableOpen, setTableOpen] = useState(false)
   // The query, the report and the table ask about the whole county, which a
   // market read from packed rows has not downloaded until now.
+  // Not the query in a market whose filter columns are published: there the
+  // server answers the count, the totals and the matches (see `viaFile`).
+  const fileAnswers = Boolean(server && !server.ready && server.files && rowsManifest)
   useEffect(() => {
-    if (rail === 'filter' || rail === 'report' || tableOpen) setWantIndex(true)
-  }, [rail, tableOpen])
+    if (rail === 'report' || tableOpen) setWantIndex(true)
+    else if (rail === 'filter' && server && !server.ready && !server.files) setWantIndex(true)
+  }, [rail, tableOpen, server])
   /*
    * The query's radius. Switched on in the Query panel, the circle appears
    * at the middle of the view and a click on the map moves it while the
@@ -2692,6 +2696,26 @@ export default function Gis({
   const queryKey = JSON.stringify(serverQuery)
 
   /*
+   * A market read from files, answered by the server all the same.
+   *
+   * Its filter columns are published (cols.bin), so "industrial, over five
+   * acres, over a million" is a few milliseconds on the server: the count,
+   * the totals, the mix and the matches come back as they do from the store,
+   * and the county's index, 56 to 180 MB, is not downloaded to count them.
+   * What the columns cannot answer (words in the address, one owner's
+   * holdings, distance to a layer) still downloads the index and is
+   * filtered here, as before; so does anything the server refuses, and once
+   * the index is in memory it is used.
+   */
+  const [fileOff, setFileOff] = useState<string | null>(null)
+  const filterSet =
+    Boolean(query.trim()) || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
+    nearPicks.length > 0 || Boolean(value.min || value.max || acres.min || acres.max)
+  const viaFile =
+    fileAnswers && !index && !query.trim() && ownerPick == null && nearPicks.length === 0 && fileOff !== `${active}|${queryKey}`
+  const viaServer = Boolean(server?.ready) || viaFile
+
+  /*
    * One round trip per settled filter.
    *
    * Debounced because the search box fires on every keystroke and a county is
@@ -2706,7 +2730,13 @@ export default function Gis({
    */
   const answered = useRef(new Map<string, { at: number; result: ParcelSearch }>())
   useEffect(() => {
-    if (!active || !server?.ready) return undefined
+    if (!active || !viaServer) return undefined
+    // A file market is asked only when the query panel is open or a filter
+    // is set: nobody has asked anything of it otherwise.
+    if (viaFile && !(rail === 'filter' || filterSet)) {
+      setFound(null)
+      return undefined
+    }
     const key = `${active}|${queryKey}`
     const held = answered.current.get(key)
     if (held && Date.now() - held.at < 5 * 60 * 1000) {
@@ -2720,13 +2750,22 @@ export default function Gis({
     // typing stops, rather than once a keystroke.
     const timer = setTimeout(() => {
       api.parcels
-        .search(active, serverQuery, { limit: 200 })
+        .search(active, serverQuery, { limit: viaFile ? 50 : 200 })
         .then((result) => {
           if (answered.current.size > 60) answered.current.clear()
           answered.current.set(key, { at: Date.now(), result })
           if (!cancelled) setFound(result)
         })
         .catch((cause: unknown) => {
+          // The files could not answer this one (a filter they do not carry,
+          // or no columns after all): the county's index is fetched and the
+          // filter runs here, as it always did.
+          const refused = cause as { status?: number } | null
+          if (viaFile && (refused?.status === 400 || refused?.status === 404)) {
+            setFileOff(key)
+            setWantIndex(true)
+            return
+          }
           // The store has spent its daily allowance and is closed until
           // midnight UTC: it says so with a 503 and `closed`. Not a failed
           // request, a closed door — so the market goes back to the
@@ -2757,7 +2796,7 @@ export default function Gis({
     // serverQuery is covered by queryKey, which is its value rather than its
     // identity — the object is rebuilt on every render and would loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, server?.ready, queryKey])
+  }, [active, viaServer, viaFile, queryKey, viaFile && (rail === 'filter' || filterSet)])
 
   /*
    * The selected parcel's full record, when the server holds it.
@@ -2821,7 +2860,7 @@ export default function Gis({
   const assetOptions = useMemo(() => {
     // Counted once at publish time when the server holds this market, rather
     // than by walking every parcel in the browser.
-    if (server?.ready && server.assets) {
+    if ((server?.ready || (server?.files && !rows.length)) && server.assets) {
       return server.assets.map((entry) => ({ value: entry.value, count: entry.count }))
     }
     const counts = new Map<string, number>()
@@ -2876,26 +2915,28 @@ export default function Gis({
     return counts
   }, [assets, value, acres, buildingPick, coverageMax, zoningKeep, zoningDrop, zoningCodes, floodPick, ownerPicks, nearPicks])
 
-  const ownerFiltersReady = server?.ready
+  const ownerFiltersReady = server?.ready || (server?.files && !index)
     ? Boolean(server.otagged)
     : Boolean(index?.keys?.includes('sy') || index?.keys?.includes('ms'))
 
   // A filter set by any route (the query panel, a saved view, an owner
   // picked from a card) is a question of the whole county.
   useEffect(() => {
+    const plain = !query.trim() && ownerPick == null && nearPicks.length === 0
     if (
-      query.trim() || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
-      nearPicks.length > 0 || value.min || value.max || acres.min || acres.max
+      (query.trim() || assets.size > 0 || ownerPick != null || ownerPicks.size > 0 || areaCircle != null ||
+        nearPicks.length > 0 || value.min || value.max || acres.min || acres.max) &&
+      !(fileAnswers && plain)
     ) {
       setWantIndex(true)
     }
-  }, [query, assets, ownerPick, ownerPicks, areaCircle, nearPicks, value, acres])
+  }, [query, assets, ownerPick, ownerPicks, areaCircle, nearPicks, value, acres, fileAnswers])
 
   const filtered = useMemo(() => {
     // Answered by the server where it can be. `ids` is null there for exactly
     // the same reason this returns null below: nothing is filtered, so the map
     // draws the whole market rather than a list of every parcel in it.
-    if (server?.ready) {
+    if (viaServer) {
       if (!found || found.ids == null) return null
       return found.rows as Record<string, string | number | null>[]
     }
@@ -2982,7 +3023,7 @@ export default function Gis({
       out.push(row)
     })
     return out
-  }, [rows, index, query, assets, value, acres, ownerPick, ownerPicks, areaCircle, matchMode, server, found, active, nearPicks, nearGrids])
+  }, [rows, index, query, assets, value, acres, ownerPick, ownerPicks, areaCircle, matchMode, server, found, active, nearPicks, nearGrids, viaServer])
 
   /*
    * What the map highlights.
@@ -2994,15 +3035,15 @@ export default function Gis({
   const filterIds = useMemo(() => {
     // An answer from the brain panel, while it is on the map, is the set.
     if (askShown && askAnswer?.mode === 'set') return askAnswer.ids ?? []
-    if (server?.ready) return found?.ids ?? null
+    if (viaServer) return found?.ids ?? null
     return filtered ? filtered.map((row) => row.id as number | string) : null
-  }, [filtered, server, found, askShown, askAnswer])
+  }, [filtered, viaServer, found, askShown, askAnswer])
 
   /** What the current set adds up to. The report is a reading, not a second query. */
   const summary = useMemo(() => {
     // Read off the same query that produced the map, so the report and the
     // map can never describe different sets.
-    if (server?.ready) {
+    if (viaServer) {
       if (found) {
         return {
           count: found.count,
@@ -3012,10 +3053,10 @@ export default function Gis({
         }
       }
       return {
-        count: server.count ?? 0,
-        total: server.total ?? 0,
-        acreage: server.acreage ?? 0,
-        byAsset: (server.assets ?? []).map((a) => [a.value, a.count] as [string, number]),
+        count: server?.count ?? 0,
+        total: server?.total ?? 0,
+        acreage: server?.acreage ?? 0,
+        byAsset: (server?.assets ?? []).map((a) => [a.value, a.count] as [string, number]),
       }
     }
     const set = filtered ?? rows
@@ -3034,7 +3075,7 @@ export default function Gis({
       acreage,
       byAsset: [...byAsset.entries()].sort((a, b) => b[1] - a[1]),
     }
-  }, [filtered, rows, server, found])
+  }, [filtered, rows, server, found, viaServer])
 
   /*
    * What this market can actually show.
@@ -3297,8 +3338,25 @@ export default function Gis({
    * because the county is no longer in the browser to slice. Both stop at the
    * same cap, so the file matches the count on the button either way.
    */
+  const exportWaiting = useRef(false)
+  useEffect(() => {
+    if (!exportWaiting.current || !active || viaFile || !index || !rows.length) return
+    exportWaiting.current = false
+    exportCsv((filtered ?? rows).slice(0, CSV_LIMIT), active)
+      .catch(() => setError('Could not collect the rows for that export.'))
+      .finally(() => setExporting(false))
+  }, [active, viaFile, index, rows, filtered])
   const exportRows = async () => {
     if (!active || exporting) return
+    if (viaFile) {
+      // The server holds this set fifty records at a time; a file of
+      // thousands is the county's index, fetched now and filtered here. The
+      // export runs as soon as it lands (see the effect below).
+      exportWaiting.current = true
+      setExporting(true)
+      setWantIndex(true)
+      return
+    }
     if (!server?.ready) {
       await exportCsv((filtered ?? rows).slice(0, CSV_LIMIT), active)
       return
@@ -4460,7 +4518,7 @@ export default function Gis({
       const composed = composeMapImage(frame, {
         title: market ? `${market.name} · ${market.region}` : 'Land Quotient',
         subtitle: `${
-          filtered ? `${filtered.length.toLocaleString()} parcels matching the filter` : 'Full market'
+          filtered ? `${(viaServer ? summary.count : filtered.length).toLocaleString()} parcels matching the filter` : 'Full market'
         } · ${stamp} · Land Quotient`,
         legend,
         attribution: (meta?.attribution ?? '').replace(/&amp;/g, '&'),
@@ -4744,7 +4802,7 @@ export default function Gis({
           />
         }
         badge={{
-          filter: filtered ? String(filtered.length.toLocaleString()) : undefined,
+          filter: filtered ? String((viaServer ? summary.count : filtered.length).toLocaleString()) : undefined,
         }}
       >
         {rail === 'layers' && (
@@ -5210,7 +5268,7 @@ export default function Gis({
 
         {rail === 'filter' && (
           <div className="space-y-3">
-            {!(server?.ready || index) ? (
+            {!(server?.ready || index || fileAnswers) ? (
               <p className="text-[11px] text-muted">Loading the market's records…</p>
             ) : (
               <>
@@ -5436,7 +5494,7 @@ export default function Gis({
                       * report a county as "200 of 200".
                       */}
                     {summary.count.toLocaleString()} of{' '}
-                    {(server?.ready ? (server.count ?? 0) : rows.length).toLocaleString()}
+                    {(server?.ready || (server?.files && !index) ? (server.count ?? 0) : rows.length).toLocaleString()}
                   </span>
                   <button
                     type="button"
