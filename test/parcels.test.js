@@ -15,6 +15,7 @@ import {
   getParcel,
   hydrate,
   listHashes,
+  ensureParcelSchema,
   marketSummary,
   parcelRow,
   putParcels,
@@ -164,6 +165,34 @@ describe('parcel search', () => {
 
   test('the highlight cap is high enough to be a real map and low enough to send', () => {
     assert.ok(MAX_HIGHLIGHT_IDS >= 10000 && MAX_HIGHLIGHT_IDS <= 100000)
+  })
+})
+
+describe('the schema sweep', () => {
+  test('a new app instance reads one row and runs nothing when the store is current', async () => {
+    const store = nodeAdapter(new DatabaseSync(':memory:'))
+    await store.migrate()
+    const asked = []
+    const watch = (name) => {
+      const real = store[name].bind(store)
+      store[name] = (sql, params) => (asked.push(sql.trim().split(/\s+/).slice(0, 3).join(' ')), real(sql, params))
+    }
+    watch('run')
+    watch('get')
+    forgetParcelSchema()
+    await ensureParcelSchema(store)
+    const first = asked.length
+    assert.ok(first > 20, `the first instance applies the schema (${first} statements)`)
+    // Another instance: the mark is in the store.
+    asked.length = 0
+    forgetParcelSchema()
+    await ensureParcelSchema(store)
+    assert.deepEqual(asked, ['SELECT value FROM'])
+    // And once ensured, an instance asks nothing at all.
+    asked.length = 0
+    await ensureParcelSchema(store)
+    assert.deepEqual(asked, [])
+    forgetParcelSchema()
   })
 })
 

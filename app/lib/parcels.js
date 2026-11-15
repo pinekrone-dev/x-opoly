@@ -242,8 +242,44 @@ function forgetSummary(market) {
   summaries.delete(market)
 }
 
+/*
+ * What the statements below add up to, kept in the store itself.
+ *
+ * The schema was applied on the first parcel request of every new app
+ * instance: every CREATE and nineteen ALTERs that fail because the column
+ * is there, twenty-eight round trips to the database, one after another,
+ * in front of whoever opened that parcel. An instance now reads one row; if
+ * it carries the mark these statements hash to, nothing is run. The mark is
+ * written once after the statements succeed, so a change to them is applied
+ * by the first instance to notice and by no other.
+ */
+const SCHEMA_MARK = (() => {
+  // FNV-1a, 32-bit: it only has to change when the statements do.
+  const text = JSON.stringify([PARCEL_SCHEMA, PARCEL_ADDED_COLUMNS])
+  let hash = 0x811c9dc5
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return `p1-${hash.toString(16).padStart(8, '0')}`
+})()
+
+async function parcelSchemaIsCurrent(db) {
+  try {
+    const row = await db.get("SELECT value FROM parcel_schema WHERE key = 'version'")
+    return row?.value === SCHEMA_MARK
+  } catch {
+    // No such table: a store from before the mark existed.
+    return false
+  }
+}
+
 export async function ensureParcelSchema(db) {
   if (ensured.has(db)) return
+  if (await parcelSchemaIsCurrent(db)) {
+    ensured.add(db)
+    return
+  }
   for (const statement of PARCEL_SCHEMA) await db.run(statement)
   for (const [table, column, type] of PARCEL_ADDED_COLUMNS) {
     try {
@@ -255,6 +291,12 @@ export async function ensureParcelSchema(db) {
       if (!/duplicate column/i.test(String(cause?.message ?? cause))) throw cause
     }
   }
+  // Two writes, once per change to the statements above per store.
+  await db.run('CREATE TABLE IF NOT EXISTS parcel_schema (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+  await db.run(
+    "INSERT INTO parcel_schema (key, value) VALUES ('version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    [SCHEMA_MARK],
+  )
   ensured.add(db)
 }
 
