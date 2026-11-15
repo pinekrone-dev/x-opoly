@@ -184,6 +184,7 @@ import {
   tagOwners,
   readCircle,
   filtersActive,
+  MAX_HIGHLIGHT_IDS,
   circleBox,
   CIRCLE_MAX_MILES,
   OWNER_TAG_BUDGET,
@@ -214,10 +215,11 @@ import { addToList, createList, deleteList, forgetPlace, getList, listLists, lis
 import { LANDMARK_KINDS, LandmarksUnavailable, nearbyLandmarks } from './lib/landmarks.js'
 import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
-import { OWNER_FILTERS } from '../src/lib/owners.ts'
+import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
+import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
 import { randomToken } from './lib/crypto.js'
 import { createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
@@ -2415,6 +2417,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // or here, and nothing is looked up in the database.
     'search.pack': 'application/octet-stream',
     'search.json': 'application/json',
+    // The columns a filter reads (asset type, value, acres, last sale, mail
+    // state, centre), as plain arrays in order of value: the Worker walks
+    // them to answer a filtered search in a market the database never held.
+    'cols.bin': 'application/octet-stream',
     'parcels.geojson': 'application/geo+json',
     // The catalog: light files the app reads to know what markets exist and
     // how to draw them. Publishing these through the same door makes a build
@@ -2622,7 +2628,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a whole county file is downloaded once a session, if at all.
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
-      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack)$/.test(parts[1])
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack|cols\.bin)$/.test(parts[1])
       const throttled = viewer.pipeline
         ? null
         : ranged
@@ -3319,7 +3325,35 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
 
     const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
-    if (!summary) return c.json({ ready: false, market }, 404)
+    if (!summary) {
+      // A market served from county files: answered from its packed columns
+      // and search index, kept at the edge like any other answer.
+      const answer = await edgeCached(c, `parcels-files/${market}`, 10 * 60, async () => {
+        const filters = parcelFilters(c)
+        if (readNear(c.req.query('near')).length) filters.nearGrids = [true]
+        const found = await fileSearch(c, market, filters, {
+          limit: Number(c.req.query('limit')) || undefined,
+          offset: Number(c.req.query('offset')) || 0,
+        }).catch(() => null)
+        if (!found) return c.json({ ready: false, market }, 404)
+        if (found.refused) {
+          return c.json(
+            {
+              error:
+                `${market} is served from county files. A search there can use asset type, value, acres, ` +
+                `how long a lot has been held, out-of-state mail, a radius or an area, or text alone; it cannot use ${found.refused.join(', ')}.`,
+              code: 'file_market',
+              market,
+            },
+            400,
+          )
+        }
+        c.header('x-rows', String(found.rows.length))
+        return c.json({ ready: true, market, source: 'files', ...found })
+      })
+      if (answer.status !== 200) return answer
+      return (await chargeRows(c, Number(answer.headers.get('x-rows')) || 0)) ?? answer
+    }
 
     /*
      * The same question from anyone gets the same answer, so the answer is
@@ -4311,6 +4345,98 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const hits = await searchPack('', market, list, text, limit, packRead)
     const found = await Promise.all(hits.map((hit) => readRow('', market, packed, hit.id, packRead).catch(() => null)))
     return found.filter(Boolean)
+  }
+
+  /*
+   * A market's filter columns (cols.bin), read whole and held.
+   *
+   * Twenty-six bytes a parcel: twenty megabytes for the largest counties.
+   * Read from the bucket once and walked in memory for every search after,
+   * so a filtered search in a market outside the database is one bucket
+   * read for the first asker and none for the next ten minutes. Three
+   * markets at most are held, the least recently asked for let go first,
+   * which bounds this at about sixty megabytes of an instance's memory.
+   */
+  const colsHeld = new Map()
+  const COLS_KEEP = 10 * 60 * 1000
+  const packedCols = async (market) => {
+    const held = colsHeld.get(market)
+    if (held && held.until > Date.now()) {
+      // Asked for again: it moves to the back of the queue to be let go.
+      colsHeld.delete(market)
+      colsHeld.set(market, held)
+      return held.cols
+    }
+    let buffer = null
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(`${market}/cols.bin`)
+      buffer = object ? await object.arrayBuffer() : null
+    } else if (CATALOG_ORIGIN) {
+      const answer = await fetch(`${CATALOG_ORIGIN}/${market}/cols.bin`, {
+        headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
+      })
+      buffer = answer.ok ? await answer.arrayBuffer() : null
+    }
+    const cols = buffer ? readCols(buffer) : null
+    colsHeld.delete(market)
+    // A market with no columns is remembered too, for a minute.
+    colsHeld.set(market, { cols, until: Date.now() + (cols ? COLS_KEEP : 60 * 1000) })
+    while (colsHeld.size > 3) colsHeld.delete(colsHeld.keys().next().value)
+    return cols
+  }
+
+  /*
+   * A search in a market the database does not hold, in the shape the store
+   * answers in. Text alone is the search index; anything else is the
+   * columns, walked once for the count, the total, the acreage, the mix by
+   * asset type and the ids in order of value, with the page's records read
+   * from the packed rows. A page is fifty at most here: each record is its
+   * own small read. What the columns cannot answer is refused by name.
+   */
+  const FILE_PAGE = 50
+  const fileSearch = async (c, market, filters, { limit, offset }) => {
+    const page = Math.min(Math.max(Number(limit) || 20, 1), FILE_PAGE)
+    const from = Math.max(Number(offset) || 0, 0)
+    const text = (filters.query || '').trim()
+    if (text && !filtersActive({ ...filters, query: '' })) {
+      const rows = await packedSearch(market, text, page)
+      if (!rows) return null
+      return {
+        count: rows.length,
+        total: rows.reduce((sum, row) => sum + (Number(row.mv) || 0), 0),
+        acreage: rows.reduce((sum, row) => sum + (Number(row.ac) || 0), 0),
+        byAsset: [],
+        rows,
+        ids: rows.map((row) => String(row.id)),
+        truncated: rows.length >= page,
+        offset: 0,
+        limit: page,
+        brief: true,
+      }
+    }
+    const cols = await packedCols(market)
+    if (!cols) return null
+    const cannot = unanswerable(filters)
+    if (cannot.length) return { refused: cannot }
+    const found = scanCols(cols, filters, { home: marketState(market), keep: MAX_HIGHLIGHT_IDS })
+    const manifest = validManifest(await catalogJson(`${market}/rows.json`).catch(() => null))
+    const wanted = found.ids.slice(from, from + page)
+    const rows = manifest
+      ? (await Promise.all(wanted.map((id) => readRow('', market, manifest, id, packRead).catch(() => null)))).filter(Boolean)
+      : []
+    return {
+      count: found.count,
+      total: found.total,
+      acreage: found.acreage,
+      byAsset: found.byAsset,
+      rows,
+      // As the store does: the highlight list only when something narrows the market.
+      ids: filtersActive(filters) ? found.ids.map(String) : null,
+      truncated: found.truncated,
+      offset: from,
+      limit: page,
+    }
   }
 
   /*
