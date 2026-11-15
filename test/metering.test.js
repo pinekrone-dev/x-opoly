@@ -33,13 +33,28 @@ describe('counters written in batches', () => {
     assert.ok(writes() <= 6, `${writes()} writes for 100 searches`)
   })
 
-  test('the tally reaches the database within the minute', async () => {
-    const { db } = await counted()
+  test('far from the allowance the tally reaches the database within five minutes', async () => {
+    const { db, writes } = await counted()
     const now = Date.UTC(2026, 9, 28, 12)
     await spendRows(db, { teamId: 't2', amount: 10, env: {}, now })
+    // A minute on, nothing is written yet: one write a minute for each
+    // counter of each active account was most of the rows the store billed.
     await spendRows(db, { teamId: 't2', amount: 10, env: {}, now: now + 61_000 })
+    assert.equal(writes(), 0)
+    await spendRows(db, { teamId: 't2', amount: 10, env: {}, now: now + 301_000 })
     const row = await db.get("SELECT count FROM ai_usage WHERE team_id = 't2'")
-    assert.equal(Number(row.count), 20)
+    assert.equal(Number(row.count), 30)
+  })
+
+  test('past half the allowance it reaches the database within the minute', async () => {
+    const { db } = await counted()
+    const now = Date.UTC(2026, 9, 28, 12)
+    // 50,000 is the allowance in these tests: 26,000 is past half of it.
+    await spendRows(db, { teamId: 't2b', amount: 26000, env: {}, now })
+    await spendRows(db, { teamId: 't2b', amount: 10, env: {}, now: now + 1000 })
+    await spendRows(db, { teamId: 't2b', amount: 10, env: {}, now: now + 62_000 })
+    const row = await db.get("SELECT count FROM ai_usage WHERE team_id = 't2b'")
+    assert.equal(Number(row.count), 26020)
   })
 
   test('near the allowance every spend is written, and the refusal lands on time', async () => {

@@ -1205,7 +1205,7 @@ export async function searchParcels(
   db,
   market,
   filters = {},
-  { limit = PAGE_SIZE, offset = 0, summary: given = undefined, tally = null } = {},
+  { limit = PAGE_SIZE, offset = 0, summary: given = undefined, tally = null, brief = false } = {},
 ) {
   await ensureParcelSchema(db)
   // Every query below goes through here, so a caller holding a tally learns
@@ -1227,6 +1227,30 @@ export async function searchParcels(
   })
   const page = Math.min(Math.max(Number(limit) || PAGE_SIZE, 1), 1000)
   const from = Math.max(Number(offset) || 0, 0)
+
+  /*
+   * A brief search is the address box: the first few parcels that match
+   * what is typed, and nothing about the rest. It used to be the report
+   * with a limit of six, which walked every match to total and rank them
+   * and listed up to 25,000 ids nobody read. Unordered and limited, the
+   * store stops at the sixth match.
+   */
+  if (brief) {
+    const few = Math.min(page, 50)
+    const rows = await all(`SELECT ${ROW_COLUMNS} FROM ${source} WHERE ${sql} LIMIT ?`, [...params, few])
+    return {
+      count: rows.length,
+      total: 0,
+      acreage: 0,
+      byAsset: [],
+      rows: rows.map(hydrate),
+      ids: null,
+      truncated: rows.length >= few,
+      offset: 0,
+      limit: few,
+      brief: true,
+    }
+  }
 
   /*
    * An empty form is the market itself, and the market already knows its

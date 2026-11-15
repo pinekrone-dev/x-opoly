@@ -114,6 +114,12 @@ export async function countUsers(db) {
   return Number(row?.total ?? 0)
 }
 
+/** Whether any account exists: one row read, where counting them reads the table. */
+export async function anyUser(db) {
+  const row = await db.get('SELECT 1 AS found FROM users LIMIT 1')
+  return Boolean(row)
+}
+
 export async function findByEmail(db, email) {
   return db.get('SELECT * FROM users WHERE email = ?', [normalizeEmail(email)])
 }

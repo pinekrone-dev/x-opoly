@@ -21,7 +21,7 @@ const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot wi
 
 Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
-Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files and cannot be searched here yet; the tool says so.`
+Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files: there, search_parcels finds a parcel by address, owner or parcel number (text alone) and get_parcel reads any lot, but filters and totals are not available; the tool says so.`
 
 const MARKET = { type: 'string', description: 'Market slug from list_markets, e.g. austin-tx.' }
 const CRITERIA = {
@@ -667,7 +667,25 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       params.set('limit', String(limit))
       const answer = await ask(`/api/gis/parcels?${params.toString()}`)
       if (answer.status === 404 && answer.body?.ready === false) {
-        return failure(`${input.market} is served from county files and cannot be searched through the connector yet. make_map can still open it on the map with these criteria.`)
+        /*
+         * A market served from county files has no totals to give and no
+         * filters to run, but a parcel can still be found in it by what
+         * someone would type: the lookup reads its search index.
+         */
+        const textOnly = input.text && [...params.keys()].every((key) => ['market', 'q', 'limit'].includes(key))
+        if (textOnly) {
+          const found = await ask(`/api/gis/lookup?market=${encodeURIComponent(input.market)}&q=${encodeURIComponent(String(input.text).slice(0, 120))}&limit=${Math.min(20, limit)}`)
+          if (found.status === 200) {
+            const rows = found.body?.rows || []
+            return result({
+              market: input.market,
+              note: 'This market is served from county files: these are the parcels whose address, owner or parcel number starts with the text. Totals and filters (value, acreage, asset type, zoning) are not available here; make_map can open the market with those criteria.',
+              shown: rows.length,
+              matches: rows.map((row) => readable(row, input.market)),
+            })
+          }
+        }
+        return failure(`${input.market} is served from county files: it can be searched by address, owner name or parcel number (text alone), and get_parcel reads any lot in it, but value, acreage, asset type and zoning filters need the search store. make_map can still open it on the map with these criteria.`)
       }
       if (answer.status !== 200) return failure(refusal(answer))
       const b = answer.body
