@@ -5,6 +5,7 @@ import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
 import { readManifest, readRow, type RowsManifest } from '../lib/parcelRows'
+import { readSearchManifest, searchPack, type SearchHit, type SearchManifest } from '../lib/parcelSearch'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
 import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
@@ -1135,6 +1136,10 @@ export default function Gis({
    * was published before the pack existed (it reads the whole files then).
    */
   const [rowsManifest, setRowsManifest] = useState<RowsManifest | null | undefined>(undefined)
+  // The market's search index: undefined until asked for, null where the
+  // market has none (then a search still downloads the county's index).
+  const [searchManifest, setSearchManifest] = useState<SearchManifest | null | undefined>(undefined)
+  const searchAsked = useRef<string | null>(null)
   /*
    * Whether the whole index is wanted. With packed rows a click needs none
    * of it, so it is fetched only once something asks a question of the whole
@@ -3417,6 +3422,35 @@ export default function Gis({
   }, [])
 
   /*
+   * The box is about to be searched. A market the server answers for needs
+   * nothing; one read from files asks for its search index, a list of a
+   * hundred kilobytes, and only a market published without one falls back to
+   * downloading the county's index whole.
+   */
+  const needSearch = useCallback(() => {
+    if (!active || server?.ready || !server) return
+    if (searchAsked.current === active) return
+    searchAsked.current = active
+    const market = active
+    readSearchManifest(CATALOG, market).then((manifest) => {
+      if (searchAsked.current !== market) return
+      setSearchManifest(manifest)
+      if (!manifest) setWantIndex(true)
+    })
+  }, [active, server])
+  useEffect(() => {
+    searchAsked.current = null
+    setSearchManifest(undefined)
+  }, [active])
+  const fileSearch = useMemo(
+    () =>
+      active && searchManifest && !server?.ready
+        ? (text: string, limit: number) => searchPack(CATALOG, active, searchManifest, text, limit)
+        : null,
+    [active, searchManifest, server?.ready],
+  )
+
+  /*
    * An address the county's records did not match as typed — "1600 W Main
    * Street, Mesa AZ 85201", with the city, state and ZIP the roll does not
    * carry — is looked up (the Census geocoder first, see app/lib/geocode.js)
@@ -3444,8 +3478,13 @@ export default function Gis({
       const parts = /^\s*(\d+)\s+(.*)$/.exec(hit.address ?? '')
       const words = (parts?.[2] ?? '').toLowerCase().split(/\s+/).filter((w) => w.length > 2 && !/^(n|s|e|w|ne|nw|se|sw)$/.test(w))
       pendingPoint.current = { lat: hit.lat, lng: hit.lng, number: parts?.[1] ?? '', street: words[0] ?? '' }
-      // Finding the lot under a geocoded point needs every parcel's box.
-      setWantIndex(true)
+      // Finding the lot under a geocoded point: a market with a search index
+      // and packed rows looks the house number and street up there and reads
+      // the few parcels that match; one without downloads every parcel's box.
+      if (server && !server.ready) {
+        if (searchManifest === undefined) needSearch()
+        if (searchManifest === null || !rowsManifest) setWantIndex(true)
+      }
       const inMarket = extentsRef.current.some(
         (x) => hit.lng >= x.box[0] && hit.lng <= x.box[2] && hit.lat >= x.box[1] && hit.lat <= x.box[3],
       )
@@ -3470,7 +3509,8 @@ export default function Gis({
     if (!point || !active) return
     const here = extentsRef.current.find((x) => x.slug === active)
     if (!here || point.lng < here.box[0] || point.lng > here.box[2] || point.lat < here.box[1] || point.lat > here.box[3]) return
-    if (!(server?.ready || index)) return
+    const packed = !server?.ready && rowsManifest && searchManifest ? { rows: rowsManifest, search: searchManifest } : null
+    if (!(server?.ready || index || packed)) return
     let cancelled = false
     const inside = (bb: number[] | null | undefined) =>
       Array.isArray(bb) && bb.length === 4 && point.lng >= bb[0] && point.lng <= bb[2] && point.lat >= bb[1] && point.lat <= bb[3]
@@ -3497,7 +3537,7 @@ export default function Gis({
     if (server?.ready) {
       if (!words) return finish(null)
       api.parcels
-        .search(active, { query: words }, { limit: 50 })
+        .search(active, { query: words }, { limit: 50, brief: true })
         .then((found) =>
           finish(
             choose(
@@ -3507,6 +3547,20 @@ export default function Gis({
             ),
           ),
         )
+        .catch(() => finish(null))
+    } else if (packed && !index?.bb) {
+      if (!words) return finish(null)
+      // The addresses that start with the number and street, then each one's
+      // record for its box: a dozen small reads at most, not the county.
+      searchPack(CATALOG, active, packed.search, words, 12)
+        .then((found) =>
+          Promise.all(
+            found
+              .filter((hit) => hit.kind === 'address')
+              .map((hit) => readRow(CATALOG, active, packed.rows, hit.id).then((row) => ({ id: hit.id, bb: row?.bb as number[] | undefined }))),
+          ),
+        )
+        .then((found) => finish(choose(found.filter((c): c is { id: number | string; bb: number[] } => Array.isArray(c.bb)))))
         .catch(() => finish(null))
     } else if (index?.bb) {
       const candidates: { id: number | string; bb: number[] }[] = []
@@ -3519,7 +3573,7 @@ export default function Gis({
     return () => {
       cancelled = true
     }
-  }, [pointTick, active, server?.ready, index, rows, pickFromSearch])
+  }, [pointTick, active, server?.ready, index, rows, pickFromSearch, rowsManifest, searchManifest])
 
   /*
    * An address typed in full is a parcel, not a list.
@@ -4685,7 +4739,8 @@ export default function Gis({
             onViewSave={saveCurrentView}
             onViewOpen={applyView}
             onViewDelete={removeView}
-            onNeedRows={() => setWantIndex(true)}
+            onNeedRows={needSearch}
+            search={fileSearch}
           />
         }
         badge={{
@@ -6662,6 +6717,7 @@ function AddressBar({
   onViewOpen,
   onViewDelete,
   onNeedRows,
+  search = null,
 }: {
   market: string | null
   serverReady: boolean
@@ -6684,6 +6740,8 @@ function AddressBar({
   onViewDelete?: (id: string) => void
   /** The box is about to be searched: the county's rows are wanted now. */
   onNeedRows?: () => void
+  /** A market read from files with a search index: the parcels matching what is typed. */
+  search?: ((text: string, limit: number) => Promise<SearchHit[]>) | null
 }) {
   const [text, setText] = useState('')
   const [open, setOpen] = useState(false)
@@ -6699,7 +6757,7 @@ function AddressBar({
       setHits([])
       return undefined
     }
-    if (!serverReady) {
+    if (!serverReady && !search) {
       const needle = wanted.toLowerCase()
       setHits(rows.filter((row) => String(row.ad ?? '').toLowerCase().includes(needle)).slice(0, 6))
       return undefined
@@ -6712,10 +6770,21 @@ function AddressBar({
     }
     let cancelled = false
     const timer = setTimeout(() => {
-      api.parcels
-        .search(market, { query: wanted }, { limit: 6 })
-        .then((page) => {
-          const got = page.rows as Record<string, string | number | null>[]
+      // A market read from files answers from its search index, a shard of a
+      // few kilobytes the edge keeps; one in the store asks the server.
+      const asked: Promise<Record<string, string | number | null>[]> = serverReady
+        ? api.parcels.search(market, { query: wanted }, { limit: 6, brief: true }).then((page) => page.rows as Record<string, string | number | null>[])
+        : search!(wanted, 6).then((found) =>
+            found.map((hit) =>
+              hit.kind === 'address'
+                ? { id: hit.id, ad: hit.label, ow: hit.under || ' ' }
+                : hit.kind === 'owner'
+                  ? { id: hit.id, ad: hit.under || 'No address published', ow: hit.label }
+                  : { id: hit.id, ad: hit.under || `Parcel ${hit.label}`, ow: `Parcel ${hit.label}` },
+            ),
+          )
+      asked
+        .then((got) => {
           if (suggested.current.size > 200) suggested.current.clear()
           suggested.current.set(key, got)
           if (!cancelled) setHits(got)
@@ -6723,12 +6792,12 @@ function AddressBar({
         .catch(() => {
           if (!cancelled) setHits([])
         })
-    }, 350)
+    }, serverReady ? 350 : 150)
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [market, serverReady, rows, wanted])
+  }, [market, serverReady, rows, wanted, search])
 
   const pick = (id: number | string) => {
     setOpen(false)

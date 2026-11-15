@@ -182,6 +182,7 @@ export async function spendCount(db, { key, kind, amount = 1, cap, now = Date.no
  * which is the price of not paying a write per click.
  */
 const TALLY_MS = 60 * 1000
+const FLUSH_MS = 5 * 60 * 1000
 const tallies = new WeakMap()
 
 function tallyFor(db) {
@@ -228,7 +229,12 @@ async function metered(db, { key, kind, amount, cap, now }) {
   const after = entry.stored + entry.pending + amount
   const near = after > cap * 0.8
   entry.pending += amount
-  if (near || entry.pending >= cap / 20 || now - entry.writtenAt > TALLY_MS) {
+  // Far from the cap a count is written every five minutes, not every one:
+  // each write is rows billed, an active account made one a minute for each
+  // of its two counters, and what is held in between is at most a twentieth
+  // of the cap. Past half the cap it is written every minute as before.
+  const due = after > cap * 0.5 ? TALLY_MS : FLUSH_MS
+  if (near || entry.pending >= cap / 20 || now - entry.writtenAt > due) {
     entry.stored = await addStored(db, key, day, kind, entry.pending)
     entry.pending = 0
     entry.readAt = now

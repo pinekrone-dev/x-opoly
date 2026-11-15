@@ -126,6 +126,30 @@ describe('parcel search', () => {
     assert.equal(new Set(ids).size, 4)
   })
 
+  test('a brief search is the first few matches and nothing about the rest', async () => {
+    const res = await searchParcels(db, 'austin-tx', { query: 'main st' }, { limit: 6, brief: true })
+    assert.deepEqual(res.rows.map((row) => String(row.id)).sort(), ['101', '102'])
+    assert.ok(Array.isArray(res.rows[0].bb), 'each row still carries its box, for the map to fly to')
+    assert.equal(res.ids, null, 'no highlight list: the address box does not read one')
+    assert.deepEqual(res.byAsset, [])
+    assert.equal(res.brief, true)
+    const one = await searchParcels(db, 'austin-tx', { query: 'main st' }, { limit: 1, brief: true })
+    assert.equal(one.rows.length, 1)
+    assert.equal(one.truncated, true, 'and says when it stopped at its limit')
+    assert.equal((await searchParcels(db, 'austin-tx', { query: 'no such street' }, { brief: true })).rows.length, 0)
+  })
+
+  test('a brief search is one statement with a limit and no ordering', async () => {
+    const seen = []
+    const watched = { ...db, all: (sql, params) => (seen.push(sql), db.all(sql, params)), get: (sql, params) => db.get(sql, params) }
+    Object.setPrototypeOf(watched, Object.getPrototypeOf(db))
+    await searchParcels(watched, 'austin-tx', { query: 'main st' }, { limit: 6, brief: true, summary: await marketSummary(db, 'austin-tx') })
+    const searches = seen.filter((sql) => /FROM .*parcels/.test(sql) && /WHERE/.test(sql))
+    assert.equal(searches.length, 1)
+    assert.match(searches[0], /LIMIT \?$/)
+    assert.doesNotMatch(searches[0], /ORDER BY|MATERIALIZED|json_group_array/)
+  })
+
   test('one market cannot see another', async () => {
     await putParcels(db, 'houston-tx', [{ id: 900, ad: '1 Bayou', mv: 1, ac: 1 }])
     assert.equal((await searchParcels(db, 'austin-tx', { query: 'bayou' })).count, 0)

@@ -59,6 +59,7 @@ import {
   confirmTotpEnrollment,
   createTotpChallenge,
   disableTotp,
+  anyUser,
   countUsers,
   createChallenge,
   createSession,
@@ -216,6 +217,8 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
+import { readRow, validManifest } from '../src/lib/parcelRows.ts'
+import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { randomToken } from './lib/crypto.js'
 import { createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
@@ -608,7 +611,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   let anyUsers = false
   const hasUsers = async () => {
-    if (!anyUsers) anyUsers = (await countUsers(db)) > 0
+    if (!anyUsers) anyUsers = await anyUser(db)
     return anyUsers
   }
 
@@ -753,6 +756,21 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * warm is let in within minutes.
    */
   const EXEMPT_RECHECK = 5 * 60 * 1000
+  /*
+   * The account that claimed the instance. It was read on every exemption
+   * check with ORDER BY created_at, which has no index: a sort of the whole
+   * users table every five minutes for every team, a cost that grew with
+   * the square of the accounts. The first account never changes, so it is
+   * read once for the life of this app instance.
+   */
+  let instanceOwnerId = null
+  const firstUserId = async () => {
+    if (instanceOwnerId === null) {
+      const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
+      instanceOwnerId = first?.id ?? null
+    }
+    return instanceOwnerId
+  }
   const teamIsExempt = async (teamId, fallbackEmail) => {
     const held = exemptTeams.get(teamId)
     if (held === true) return true
@@ -761,9 +779,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       'SELECT u.email, b.status FROM users u LEFT JOIN billing b ON b.team_id = u.id WHERE u.id = ?',
       [teamId],
     )
-    const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
     const exempt =
-      teamId === first?.id || owner?.status === 'comped' || isExemptEmail(env, owner?.email ?? fallbackEmail)
+      teamId === (await firstUserId()) || owner?.status === 'comped' || isExemptEmail(env, owner?.email ?? fallbackEmail)
     exemptTeams.set(teamId, exempt ? true : { until: Date.now() + EXEMPT_RECHECK })
     return exempt
   }
@@ -776,17 +793,13 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * claimed the instance, or, if FREE_CODE_MINTER names an email, exactly
    * that account instead. Nobody else, whatever team they sit on.
    */
-  let instanceOwnerId = null
   const canMintCodes = async (user) => {
     // An address nobody has proved is only a claim to be that person.
     if (!user || user.verified === false) return false
     const named = String(env.FREE_CODE_MINTER ?? '').trim().toLowerCase()
     if (named) return String(user.email ?? '').toLowerCase() === named
-    if (instanceOwnerId === null) {
-      const first = await db.get('SELECT id FROM users ORDER BY created_at, id LIMIT 1')
-      instanceOwnerId = first?.id ?? null
-    }
-    return instanceOwnerId !== null && user.id === instanceOwnerId
+    const owner = await firstUserId()
+    return owner !== null && user.id === owner
   }
 
   app.use('/api/*', async (c, next) => {
@@ -2399,6 +2412,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // the search store no longer downloads its index and details whole.
     'rows.pack': 'application/octet-stream',
     'rows.json': 'application/json',
+    // What people type (an address, an owner, a parcel number) as a sorted
+    // list of keys in gzipped shards (search.pack) and the least key of each
+    // (search.json): a search reads one shard by byte range, in the browser
+    // or here, and nothing is looked up in the database.
+    'search.pack': 'application/octet-stream',
+    'search.json': 'application/json',
     'parcels.geojson': 'application/geo+json',
     // The catalog: light files the app reads to know what markets exist and
     // how to draw them. Publishing these through the same door makes a build
@@ -2614,7 +2633,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a whole county file is downloaded once a session, if at all.
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
-      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack)$/.test(parts[1])
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack)$/.test(parts[1])
       const throttled = viewer.pipeline
         ? null
         : ranged
@@ -2737,7 +2756,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // (rows.pack?v=<built>), so a browser may keep a shard for the day; the
     // manifest that carries the stamp is kept for minutes, like the lists.
     const browserTtl =
-      key === 'markets.json' || /\/(layers|rows)\.json$/.test(key) || /\.pmtiles$/.test(key)
+      key === 'markets.json' || /\/(layers|rows|search)\.json$/.test(key) || /\.pmtiles$/.test(key)
         ? 300
         : /\/(index|details|codes|extras)\.json$/.test(key)
           ? 3600
@@ -3330,8 +3349,13 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           limit: Number(c.req.query('limit')) || undefined,
           offset: Number(c.req.query('offset')) || 0,
           summary,
+          // The address box wants six parcels, not the report.
+          brief: c.req.query('brief') === '1',
         })
         if (refused) return scanRefused(c, refused)
+        // How many rows this answer serves, so the allowance can be charged
+        // without parsing the answer again on every request.
+        c.header('x-rows', String(found.rows.length))
         return c.json({ ready: true, market, ...found })
       } catch (cause) {
         /*
@@ -3353,11 +3377,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       }
     })
     if (answer.status !== 200) return answer
-    const served = await answer
-      .clone()
-      .json()
-      .then((body) => (Array.isArray(body?.rows) ? body.rows.length : 0))
-      .catch(() => 0)
+    // The count rides on the answer (a copy kept at the edge keeps its
+    // headers); parsing up to 25,000 ids again to count 200 rows was most of
+    // this request's processor time.
+    const counted = answer.headers.get('x-rows')
+    const served =
+      counted != null
+        ? Number(counted) || 0
+        : await answer
+            .clone()
+            .json()
+            .then((body) => (Array.isArray(body?.rows) ? body.rows.length : 0))
+            .catch(() => 0)
     return (await chargeRows(c, served)) ?? answer
   })
 
@@ -3369,11 +3400,46 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
     const id = (c.req.query('id') ?? '').trim()
     if (!id) return c.json({ error: 'id is required.' }, 400)
-    const found = await getParcel(parcelsFor(market), market, id).catch(() => null)
+    // A market the store does not hold answers from its packed rows.
+    const found =
+      (await getParcel(parcelsFor(market), market, id).catch(() => null)) ?? (await packedParcel(market, id))
     if (!found) return notFound(c, 'No such parcel in that market.')
     const spent = await chargeRows(c, 1)
     if (spent) return spent
     return c.json({ parcel: found })
+  })
+
+  /*
+   * Find a parcel by what someone would type: an address, an owner's name or
+   * a parcel number. Works in every market: one the store holds answers from
+   * its text index, stopping at the limit; one served from county files
+   * answers from its search index and packed rows. No totals and no
+   * filters: that is /api/gis/parcels, which needs the store.
+   */
+  app.get('/api/gis/lookup', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'parcels', 600, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const text = (c.req.query('q') ?? '').trim().slice(0, 120)
+    if (text.length < 3) return c.json({ error: 'q must be at least three characters.' }, 400)
+    const limit = Math.min(20, Math.max(1, Number(c.req.query('limit')) || 8))
+    const answer = await edgeCached(c, `lookup/${market}`, 10 * 60, async () => {
+      const summary = await marketSummary(parcelsFor(market), market).catch(() => null)
+      if (summary) {
+        const found = await searchParcels(parcelsFor(market), market, { query: text }, { limit, brief: true, summary })
+        c.header('x-rows', String(found.rows.length))
+        return c.json({ market, source: 'store', rows: found.rows })
+      }
+      const rows = await packedSearch(market, text, limit)
+      if (!rows) return c.json({ error: `${market} has no search index yet.`, ready: false, market }, 404)
+      c.header('x-rows', String(rows.length))
+      return c.json({ market, source: 'files', rows })
+    })
+    if (answer.status !== 200) return answer
+    return (await chargeRows(c, Number(answer.headers.get('x-rows')) || 0)) ?? answer
   })
 
   /*
@@ -4319,17 +4385,97 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * are applied, and zoning and flood are read from the market's own tile
    * archives. Without an AI key the rules read the question instead.
    */
-  const catalogJson = async (key) => {
+  /*
+   * A catalogue file, parsed, and held for five minutes.
+   *
+   * Every click on a zoned parcel read the market's zoning-code.json from
+   * the bucket and parsed it again; the map image and the brain did the same
+   * with layers.json, and the public pages with markets.json. The bucket
+   * bills each read and the parse is this request's processor time, for a
+   * file that changes when a county is rebuilt. Held per app instance, the
+   * small ones only (a lot-facts book or a layer's GeoJSON is megabytes and
+   * is read as before), a few dozen at most, and for minutes, so a rebuild
+   * is seen as soon as the catalogue route's own five-minute lists.
+   */
+  const CATALOG_JSON_KEEP = 5 * 60 * 1000
+  const CATALOG_JSON_MAX = 512 * 1024
+  const catalogJsonHeld = new Map()
+  const catalogJsonRead = async (key) => {
     const bucket = env.PROSPECTOR_DATA
     if (bucket && typeof bucket.get === 'function') {
       const object = await bucket.get(key)
-      return object ? JSON.parse(await object.text()) : null
+      if (!object) return { value: null, size: 0 }
+      const text = await object.text()
+      return { value: JSON.parse(text), size: text.length }
     }
-    if (!CATALOG_ORIGIN) return null
+    if (!CATALOG_ORIGIN) return { value: null, size: 0 }
     const answer = await fetch(`${CATALOG_ORIGIN}/${key}`, {
       headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
     })
-    return answer.ok ? answer.json() : null
+    if (!answer.ok) return { value: null, size: 0 }
+    const text = await answer.text()
+    return { value: JSON.parse(text), size: text.length }
+  }
+  const catalogJson = async (key) => {
+    const held = catalogJsonHeld.get(key)
+    if (held && held.until > Date.now()) return held.value
+    const { value, size } = await catalogJsonRead(key)
+    // A missing file is remembered too, briefly: most markets have no
+    // zoning-code.json, and asking the bucket on every click is the same cost.
+    if (size <= CATALOG_JSON_MAX) {
+      if (catalogJsonHeld.size >= 64) catalogJsonHeld.delete(catalogJsonHeld.keys().next().value)
+      catalogJsonHeld.set(key, { value, until: Date.now() + (value == null ? 60 * 1000 : CATALOG_JSON_KEEP) })
+    }
+    return value
+  }
+
+  /*
+   * A market outside the search store, answered from its packed files.
+   *
+   * The pipeline publishes every market's records in shards read by byte
+   * range (rows.pack) and what people type as a sorted list (search.pack);
+   * the map reads both in the browser. The same reads here let the API and
+   * the connector open a parcel, and find one by address, owner or parcel
+   * number, in a market that was never loaded into the database: a few
+   * kilobytes from the bucket, no rows read and none written.
+   */
+  const packRead = async (url, init) => {
+    const at = /^\/([a-z0-9-]{2,40})\/((?:rows|search)\.pack)(?:\?|$)/.exec(url)
+    const range = /^bytes=(\d+)-(\d+)$/.exec(init?.headers?.range ?? '')
+    if (!at || !range) return new Response(null, { status: 400 })
+    const offset = Number(range[1])
+    const length = Number(range[2]) - offset + 1
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(`${at[1]}/${at[2]}`, { range: { offset, length } })
+      return object ? new Response(object.body, { status: 206 }) : new Response(null, { status: 404 })
+    }
+    if (!CATALOG_ORIGIN) return new Response(null, { status: 404 })
+    return fetch(`${CATALOG_ORIGIN}/${at[1]}/${at[2]}`, {
+      headers: { range: init.headers.range, 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
+    })
+  }
+  /** One parcel's record from a market's packed rows, or null where the market has none. */
+  const packedParcel = async (market, id) => {
+    const manifest = validManifest(await catalogJson(`${market}/rows.json`).catch(() => null))
+    if (!manifest) return null
+    return readRow('', market, manifest, id, packRead).catch(() => null)
+  }
+  /**
+   * The parcels whose address, owner or parcel number starts with the text,
+   * each with its record: null where the market has no search index.
+   */
+  const packedSearch = async (market, text, limit) => {
+    const [search, rows] = await Promise.all([
+      catalogJson(`${market}/search.json`).catch(() => null),
+      catalogJson(`${market}/rows.json`).catch(() => null),
+    ])
+    const list = validSearchManifest(search)
+    const packed = validManifest(rows)
+    if (!list || !packed) return null
+    const hits = await searchPack('', market, list, text, limit, packRead)
+    const found = await Promise.all(hits.map((hit) => readRow('', market, packed, hit.id, packRead).catch(() => null)))
+    return found.filter(Boolean)
   }
 
   /*

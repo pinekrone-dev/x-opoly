@@ -387,8 +387,10 @@ export const api = {
       request<MarketStatus>(`/api/gis/market?market=${encodeURIComponent(market)}`),
 
     /** One search: a page of parcels, the ids to highlight, and the totals. */
-    search: (market: string, filters: ParcelQuery = {}, page: { limit?: number; offset?: number } = {}) => {
+    search: (market: string, filters: ParcelQuery = {}, page: { limit?: number; offset?: number; brief?: boolean } = {}) => {
       const params = new URLSearchParams({ market })
+      // The address box: the first matches only, no totals and no highlight list.
+      if (page.brief) params.set('brief', '1')
       if (filters.query) params.set('q', filters.query)
       if (filters.assets?.length) params.set('at', filters.assets.join(','))
       if (filters.valueMin != null) params.set('vmin', String(filters.valueMin))
