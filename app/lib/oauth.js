@@ -46,17 +46,43 @@ export function readScope(value, { withCrm = false } = {}) {
  * listening on the loopback address). Registration is open, as connectors
  * require, so this list is what stops a stranger registering "Claude" with
  * a callback of their own and phishing an approval out of someone: the code
- * can only ever travel to Claude or to the computer the person is sitting
- * at. CONNECTOR_REDIRECT_HOSTS adds hosts for another trusted client.
+ * can only ever travel to an assistant named here or to the computer the
+ * person is sitting at.
+ *
+ * CONNECTOR_REDIRECT_HOSTS adds another trusted client, one entry each,
+ * comma-separated. A bare host ("agent.meta.ai") allows that host and what
+ * sits under it. An entry that starts with https:// is one return address
+ * and nothing else on its site: for an assistant whose callback lives on
+ * the same host as everything else it serves (Grok, on grok.com).
  */
 const CALLBACK_HOSTS = ['claude.ai', 'claude.com']
 
-export function redirectHosts(env = {}) {
-  const extra = String(env.CONNECTOR_REDIRECT_HOSTS || '')
+const extraEntries = (env = {}) =>
+  String(env.CONNECTOR_REDIRECT_HOSTS || '')
     .split(',')
-    .map((h) => h.trim().toLowerCase())
+    .map((entry) => entry.trim())
     .filter(Boolean)
+
+export function redirectHosts(env = {}) {
+  const extra = extraEntries(env)
+    .filter((entry) => !entry.includes('://'))
+    .map((host) => host.toLowerCase())
   return [...CALLBACK_HOSTS, ...extra]
+}
+
+/** The return addresses allowed whole: origin and path as written, no query. */
+export function redirectAddresses(env = {}) {
+  const out = []
+  for (const entry of extraEntries(env)) {
+    if (!entry.startsWith('https://')) continue
+    try {
+      const url = new URL(entry)
+      if (!url.search && !url.hash && !url.username && !url.password) out.push(url.origin + url.pathname)
+    } catch {
+      // An entry that is not an address allows nothing.
+    }
+  }
+  return out
 }
 
 export function goodRedirect(uri, env = {}) {
@@ -66,15 +92,21 @@ export function goodRedirect(uri, env = {}) {
     if (url.protocol === 'http:') return ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
     if (url.protocol !== 'https:') return false
     const host = url.hostname.toLowerCase()
-    return redirectHosts(env).some((allowed) => host === allowed || host.endsWith(`.${allowed}`))
+    if (redirectHosts(env).some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) return true
+    // A trailing slash is part of the address: Grok's has one.
+    return !url.search && redirectAddresses(env).includes(url.origin + url.pathname)
   } catch {
     return false
   }
 }
 
 export async function registerClient(db, body = {}, env = {}) {
-  const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
-  if (!uris.length || uris.length > 10 || !uris.every((uri) => goodRedirect(uri, env))) {
+  const asked = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
+  // Some assistants register with a list that also names other clients'
+  // callbacks. The ones allowed here are kept and the rest are left out, so
+  // an approval still has nowhere else to go; a list with none is refused.
+  const uris = asked.length <= 10 ? asked.filter((uri) => goodRedirect(uri, env)) : []
+  if (!uris.length) {
     return { error: 'invalid_redirect_uri', description: "redirect_uris must be the callback of an assistant this connector allows, or http on localhost." }
   }
   const name = String(body.client_name || 'An application').slice(0, 100)

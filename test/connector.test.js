@@ -324,3 +324,41 @@ describe('another assistant, allowed by its callback host', () => {
     assert.equal(goodRedirect('https://claude.ai/api/mcp/auth_callback', env), true)
   })
 })
+
+describe('Grok, allowed by its one return address', () => {
+  const GROK = 'https://grok.com/connectors-oauth-exchange-code/'
+  const env = { CONNECTOR_REDIRECT_HOSTS: `agent.meta.ai,${GROK}` }
+
+  test('that address and nothing else on grok.com', async () => {
+    const { goodRedirect } = await import('../app/lib/oauth.js')
+    assert.equal(goodRedirect(GROK, env), true)
+    assert.equal(goodRedirect(GROK, {}), false, 'refused until the address is named')
+    // The slash is part of it, and so is the absence of a query.
+    assert.equal(goodRedirect('https://grok.com/connectors-oauth-exchange-code', env), false)
+    assert.equal(goodRedirect(`${GROK}?next=https://evil.example`, env), false)
+    assert.equal(goodRedirect('https://grok.com/share/abc', env), false)
+    assert.equal(goodRedirect('https://grok.com/', env), false)
+    assert.equal(goodRedirect('https://sub.grok.com/connectors-oauth-exchange-code/', env), false)
+    assert.equal(goodRedirect('https://grok.com.evil.example/connectors-oauth-exchange-code/', env), false)
+    assert.equal(goodRedirect('http://grok.com/connectors-oauth-exchange-code/', env), false)
+    // The host entries beside it still work as hosts.
+    assert.equal(goodRedirect('https://agent.meta.ai/api/hatch/oauth/callback', env), true)
+    assert.equal(goodRedirect('https://claude.ai/api/mcp/auth_callback', env), true)
+  })
+
+  test('a registration that also lists callbacks not allowed here keeps only the allowed ones', async () => {
+    const { registerClient, getClient } = await import('../app/lib/oauth.js')
+    const rows = new Map()
+    const db = {
+      run: async (_sql, [id, name, uris]) => rows.set(id, { client_id: id, name, redirect_uris: uris }),
+      get: async (_sql, [id]) => rows.get(id),
+    }
+    const made = await registerClient(db, { client_name: 'Grok', redirect_uris: ['cursor://anysphere.cursor-mcp/oauth/callback', GROK, 'https://evil.example/cb'] }, env)
+    assert.deepEqual(made.client.redirect_uris, [GROK])
+    assert.deepEqual((await getClient(db, made.client.client_id)).redirectUris, [GROK])
+    const none = await registerClient(db, { client_name: 'Grok', redirect_uris: ['https://evil.example/cb', 'cursor://x/y'] }, env)
+    assert.equal(none.error, 'invalid_redirect_uri')
+    const many = await registerClient(db, { client_name: 'Grok', redirect_uris: Array(11).fill(GROK) }, env)
+    assert.equal(many.error, 'invalid_redirect_uri')
+  })
+})
