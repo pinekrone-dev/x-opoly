@@ -5651,7 +5651,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   }
   const oauthError = (c, title, text, status = 400) => {
     unframed(c)
-    return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from Claude.</p>`), status)
+    return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from the assistant you were connecting.</p>`), status)
   }
   const backTo = (redirectUri, values) => {
     const url = new URL(redirectUri)

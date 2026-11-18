@@ -48,7 +48,7 @@ export default function ConnectedApps() {
     <section className="panel mt-6 p-5">
       <h2 className="panel-title">Connected apps</h2>
       <p className="mt-1 text-xs leading-relaxed text-muted">
-        Apps you have let act as you, such as the Land Quotient connector in Claude. Changing your password
+        Apps you have let act as you, such as the Land Quotient connector in Claude or Grok. Changing your password
         also disconnects them all.
       </p>
       {rows === null ? (
