@@ -34,6 +34,7 @@ import type { AskCircle, ClientPin, LibraryItem, LibraryPiece, LandmarksResult, 
 } from './types'
 import type { VesselAnswer } from './lib/vessels'
 import type { ParcelGrid } from './lib/grid'
+import type { CrimeAnswer } from './lib/crime'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -426,6 +427,10 @@ export const api = {
       if (Array.isArray(parcel?.bb) && parcel.bb.length === 4) params.set('bb', parcel.bb.join(','))
       return request<ParcelRecords>(`/api/gis/records?${params.toString()}`)
     },
+
+    /** Reported violent and property crime within a quarter, a half and a mile of a place. */
+    crime: (market: string, lat: number, lng: number) =>
+      request<CrimeAnswer>(`/api/gis/crime?market=${encodeURIComponent(market)}&lat=${lat.toFixed(5)}&lng=${lng.toFixed(5)}`),
 
     /** What the zoning code allows on a City of Los Angeles lot, each line cited. */
     zoning: (market: string, apn: string) =>

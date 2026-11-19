@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
+import CrimeNearby from '../components/CrimeNearby'
+import { CRIME_MARKETS } from '../lib/crime'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
@@ -5914,6 +5916,14 @@ export default function Gis({
                   linked={known?.place?.fields ?? null}
                   linkedName={known?.place?.name ?? null}
                 />
+                {active && CRIME_MARKETS.has(active) && (parcel.bb ?? selectedBox) ? (
+                  <CrimeNearby
+                    key={`crime:${selected}`}
+                    market={active}
+                    lat={(((parcel.bb ?? selectedBox) as number[])[1] + ((parcel.bb ?? selectedBox) as number[])[3]) / 2}
+                    lng={(((parcel.bb ?? selectedBox) as number[])[0] + ((parcel.bb ?? selectedBox) as number[])[2]) / 2}
+                  />
+                ) : null}
                 {active === 'los-angeles-ca' ? (
                   <ZoningReport key={`zoning:${selected}`} market={active} apn={String(selected).padStart(10, '0')} />
                 ) : null}
