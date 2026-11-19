@@ -356,6 +356,18 @@ describe('Grok, allowed by its one return address', () => {
     const made = await registerClient(db, { client_name: 'Grok', redirect_uris: ['cursor://anysphere.cursor-mcp/oauth/callback', GROK, 'https://evil.example/cb'] }, env)
     assert.deepEqual(made.client.redirect_uris, [GROK])
     assert.deepEqual((await getClient(db, made.client.client_id)).redirectUris, [GROK])
+    // Grok registers as "Cursor", with Cursor's list: kept under a name the person knows.
+    const AGENTS = 'https://www.cursor.com/agents/mcp/oauth/callback'
+    const all = { CONNECTOR_REDIRECT_HOSTS: `${GROK},${AGENTS}` }
+    const asCursor = await registerClient(db, { client_name: 'Cursor', redirect_uris: [AGENTS, 'https://www.cursor.com/bot/mcp/oauth/callback', GROK, 'http://localhost:8787/callback'] }, all)
+    assert.deepEqual(asCursor.client.redirect_uris, [AGENTS, GROK, 'http://localhost:8787/callback'])
+    assert.equal(asCursor.client.client_name, 'Grok / Cursor')
+    const { namedAddress } = await import('../app/lib/oauth.js')
+    assert.equal(namedAddress(AGENTS, all), true)
+    assert.equal(namedAddress(`${AGENTS}?x=1`, all), false)
+    assert.equal(namedAddress('https://www.cursor.com/bot/mcp/oauth/callback', all), false)
+    assert.equal(namedAddress('http://localhost:8787/callback', all), false, 'this machine is not a named address')
+    assert.equal(namedAddress('https://claude.ai/api/mcp/auth_callback', all), false, 'nor is a host entry')
     const none = await registerClient(db, { client_name: 'Grok', redirect_uris: ['https://evil.example/cb', 'cursor://x/y'] }, env)
     assert.equal(none.error, 'invalid_redirect_uri')
     const many = await registerClient(db, { client_name: 'Grok', redirect_uris: Array(11).fill(GROK) }, env)

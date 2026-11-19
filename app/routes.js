@@ -221,7 +221,7 @@ import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
 import { randomToken } from './lib/crypto.js'
-import { assistantName, createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, metadataAddress, metadataClient, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
+import { assistantName, createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, metadataAddress, metadataClient, namedAddress, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
@@ -5519,7 +5519,12 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
     const asked = { client_id: q.client_id, redirect_uri: q.redirect_uri }
     if (!client) return { fatal: 'The application asking to connect is not registered here.', asked }
-    if (!client.redirectUris.includes(q.redirect_uri) || !goodRedirect(q.redirect_uri, env)) {
+    // An assistant's own address, named whole in the setting, is accepted
+    // for any application: one that registered before the address was
+    // allowed had it left out of what was kept, and goes on using the same
+    // registration. It is no wider than registering again would be.
+    const registered = client.redirectUris.includes(q.redirect_uri) || namedAddress(q.redirect_uri, env)
+    if (!registered || !goodRedirect(q.redirect_uri, env)) {
       return { fatal: 'The application asked to send you back to an address it did not register, or one this site does not accept.', asked }
     }
     if (q.response_type !== 'code') return { client, back: 'unsupported_response_type' }

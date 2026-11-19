@@ -165,8 +165,10 @@ PARCEL_WRITES_SPENT = "2026-10=27000000"
 #   Grok again, where it runs on Cursor's service (the Grok app said this is
 #   the address it returns to, 2026-11-19); it is one of the addresses in the
 #   description Grok names itself by, https://cursor.com/oauth/mcp-client.json.
-#   That one path only, not the rest of cursor.com.
-CONNECTOR_REDIRECT_HOSTS = "agent.meta.ai,https://grok.com/connectors-oauth-exchange-code/,https://www.cursor.com/bot/mcp/oauth/callback"
+#   And the third address in that description, which is the one the Grok app
+#   on a phone actually asked for (the refusal page printed it, 2026-11-19).
+#   Those two paths only, not the rest of cursor.com.
+CONNECTOR_REDIRECT_HOSTS = "agent.meta.ai,https://grok.com/connectors-oauth-exchange-code/,https://www.cursor.com/bot/mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.
