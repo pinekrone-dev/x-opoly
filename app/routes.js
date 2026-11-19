@@ -218,6 +218,7 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
+import { crimeNear, readCrime } from '../src/lib/crime.ts'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
@@ -2424,6 +2425,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     // state, centre), as plain arrays in order of value: the Worker walks
     // them to answer a filtered search in a market the database never held.
     'cols.bin': 'application/octet-stream',
+    // Each offence a police agency publishes (where, when, its category and
+    // kind), as plain arrays, latest first: the Worker walks them to count
+    // the violent and property crime within a quarter, a half and a mile of
+    // a site (src/lib/crime.ts; prospector's make_crime.py).
+    'crime.bin': 'application/octet-stream',
     'parcels.geojson': 'application/geo+json',
     // The catalog: light files the app reads to know what markets exist and
     // how to draw them. Publishing these through the same door makes a build
@@ -2639,7 +2645,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a whole county file is downloaded once a session, if at all.
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
-      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack|cols\.bin)$/.test(parts[1])
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack|cols\.bin|crime\.bin)$/.test(parts[1])
       const throttled = viewer.pipeline
         ? null
         : ranged
@@ -3459,6 +3465,42 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * answers from its search index and packed rows. No totals and no
    * filters: that is /api/gis/parcels, which needs the store.
    */
+  /*
+   * Reported crime round a site: violent and property offences within a
+   * quarter, a half and a mile over the last twelve months the agency has
+   * published, where they stand among the market's own parcels, and the
+   * agency's categories behind them. A site another agency polices is told
+   * so by name and given no figures. Counted from one packed file held in
+   * memory: no database, and the same place asked again within the hour is
+   * answered at the edge.
+   */
+  app.get('/api/gis/crime', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'parcels', 600, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like las-vegas-nv.' }, 400)
+    const lat = Number(c.req.query('lat'))
+    const lng = Number(c.req.query('lng'))
+    if (!(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180) || c.req.query('lat') == null || c.req.query('lng') == null) {
+      return c.json({ error: 'lat and lng are required.' }, 400)
+    }
+    // To the fifth place, about a yard: the same lot asks the same question.
+    const params = { market, lat: lat.toFixed(5), lng: lng.toFixed(5) }
+    return edgeCached(
+      c,
+      'crime-v1',
+      60 * 60,
+      async () => {
+        const crime = await packedCrime(market)
+        if (!crime) return c.json({ error: `No police agency's reported crime is published for ${market} yet.`, ready: false, market }, 404)
+        return c.json({ market, lat: Number(params.lat), lng: Number(params.lng), ...crimeNear(crime, { lat: Number(params.lat), lng: Number(params.lng) }) })
+      },
+      { params },
+    )
+  })
+
   app.get('/api/gis/lookup', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
@@ -4558,6 +4600,38 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     colsHeld.set(market, { cols, until: Date.now() + (cols ? COLS_KEEP : 60 * 1000) })
     while (colsHeld.size > 3) colsHeld.delete(colsHeld.keys().next().value)
     return cols
+  }
+
+  /*
+   * A market's reported crime (crime.bin), held the same way: two megabytes
+   * for Las Vegas, read from the bucket once and kept half an hour, since
+   * the agencies refresh weekly. A market with none is remembered for ten
+   * minutes, so asking about one costs a read now and then, not every time.
+   */
+  const crimeHeld = new Map()
+  const packedCrime = async (market) => {
+    const held = crimeHeld.get(market)
+    if (held && held.until > Date.now()) {
+      crimeHeld.delete(market)
+      crimeHeld.set(market, held)
+      return held.crime
+    }
+    let buffer = null
+    const bucket = env.PROSPECTOR_DATA
+    if (bucket && typeof bucket.get === 'function') {
+      const object = await bucket.get(`${market}/crime.bin`)
+      buffer = object ? await object.arrayBuffer() : null
+    } else if (CATALOG_ORIGIN) {
+      const answer = await fetch(`${CATALOG_ORIGIN}/${market}/crime.bin`, {
+        headers: { 'user-agent': 'LandQuotient/1.0 (+https://landquotient.com)' },
+      })
+      buffer = answer.ok ? await answer.arrayBuffer() : null
+    }
+    const crime = buffer ? readCrime(buffer) : null
+    crimeHeld.delete(market)
+    crimeHeld.set(market, { crime, until: Date.now() + (crime ? 30 : 10) * 60 * 1000 })
+    while (crimeHeld.size > 8) crimeHeld.delete(crimeHeld.keys().next().value)
+    return crime
   }
 
   /** What a file market adds up to with no filter set, walked once per file read. */

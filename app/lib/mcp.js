@@ -19,7 +19,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (Las Vegas so far; it says when a market or a site is not covered). nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files: there, search_parcels finds a parcel by address, owner or parcel number (text alone) and get_parcel reads any lot, but filters and totals are not available; the tool says so.`
 
@@ -199,6 +199,22 @@ export const TOOLS = [
       },
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'nearby_crime',
+    title: 'Crime near a site',
+    description: "Reported violent and property crime within a quarter mile, a half mile and a mile of a site over the last twelve months the police agency has published: the counts, how each stands among the market's own parcels (\"more violent crime nearby than 80% of parcels\"), and the agency's categories behind them (assault, larceny, vehicle theft, burglary...). Counted from each offense the agency publishes, with its own definition of violent and property crime. A site another agency polices is named as not covered, never given a zero. Las Vegas (las-vegas-nv, Las Vegas Metropolitan Police) is covered; a market with nothing published says so.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        lat: { type: 'number' },
+        lng: { type: 'number' },
+        address: { type: 'string', description: 'Used when lat and lng are not given.' },
+      },
+      required: ['market'],
+    },
+    annotations: { readOnlyHint: true },
   },
   {
     name: 'make_map',
@@ -552,6 +568,52 @@ const text = (value) => ({ type: 'text', text: typeof value === 'string' ? value
 const result = (value, extra = {}) => ({ content: [text(value)], structuredContent: typeof value === 'object' ? value : undefined, ...extra })
 const failure = (message) => ({ content: [text(message)], isError: true })
 
+/** The crime route's answer, said the way a person asking about a site would want it. */
+export function crimeReport(b, { market, place = null } = {}) {
+  const at = { market, place: place ?? undefined, lat: b.lat, lng: b.lng }
+  if (!b.covered) {
+    return {
+      ...at,
+      covered: false,
+      summary: b.elsewhere
+        ? `This site is in ${b.elsewhere}, which has its own police; their reported crime is not published here, so there are no figures for it. This is not a count of zero.`
+        : 'This site is outside the area of any police agency whose reported crime is published here, so there are no figures for it. This is not a count of zero.',
+    }
+  }
+  const day = (iso) => new Date(`${iso}T00:00:00Z`).toLocaleDateString('en-US', { timeZone: 'UTC', year: 'numeric', month: 'short', day: 'numeric' })
+  const miles = (m) => (m === 0.25 ? 'a quarter mile' : m === 0.5 ? 'a half mile' : m === 1 ? 'one mile' : `${m} miles`)
+  const rings = Array.isArray(b.rings) ? b.rings : []
+  const within = rings.map((r) => ({
+    miles: r.miles,
+    violent: r.violent,
+    property: r.property,
+    otherOffenses: r.other,
+    violentHigherThanPercentOfParcels: r.violentAbove ?? undefined,
+    propertyHigherThanPercentOfParcels: r.propertyAbove ?? undefined,
+    // Said only when it matters: a circle that runs into another agency's area undercounts.
+    shareOfCircleCovered: r.covered < 0.98 ? r.covered : undefined,
+  }))
+  const stand = (share) => (share == null ? '' : ` (more than ${share}% of parcels)`)
+  const lines = rings.map((r) => `Within ${miles(r.miles)}: ${r.violent.toLocaleString('en-US')} violent${stand(r.violentAbove)}, ${r.property.toLocaleString('en-US')} property${stand(r.propertyAbove)}.`)
+  const partial = rings.filter((r) => r.covered < 0.98)
+  return {
+    ...at,
+    covered: true,
+    policedBy: b.agency,
+    period: { from: b.from, to: b.to },
+    within,
+    categories: (b.categories || []).slice(0, 12).map((c) => ({ category: c.category, kind: c.kind, counts: Object.fromEntries(rings.map((r, i) => [`within${r.miles}mi`, c.counts[i]])) })),
+    comparedWith: b.compared ? `${b.compared.parcels.toLocaleString('en-US')} parcels in the area ${b.agency} polices, each counted the same way` : undefined,
+    definitions: b.definitions,
+    notes: [
+      ...(b.notes || []),
+      ...(partial.length ? [`Part of the ${partial.map((r) => miles(r.miles)).join(', ')} ${partial.length > 1 ? 'circles lie' : 'circle lies'} where another agency polices; offenses there are not counted, so those figures run low.`] : []),
+    ],
+    source: b.source,
+    summary: `Offenses reported to ${b.agency}, ${day(b.from)} to ${day(b.to)}. ${lines.join(' ')}`,
+  }
+}
+
 /**
  * Arguments as the tool's schema declares them. Some clients send an object
  * or array argument as a JSON string (a client holding an older copy of the
@@ -787,6 +849,14 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       })
     }
 
+    case 'nearby_crime': {
+      const point = await locate(input)
+      if (point.error) return failure(point.error)
+      const { lat, lng, place } = point
+      const answer = await ask(`/api/gis/crime?market=${input.market}&lat=${lat}&lng=${lng}`)
+      if (answer.status !== 200) return failure(refusal(answer))
+      return result(crimeReport(answer.body || {}, { market: input.market, place }))
+    }
     case 'nearby_retail': {
       const point = await locate(input)
       if (point.error) return failure(point.error)
