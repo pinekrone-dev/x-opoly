@@ -299,3 +299,106 @@ export function crimeNear(crime: Crime, place: { lat: number; lng: number }): Cr
   answer.compared = base ? { parcels: base.sample } : null
   return answer
 }
+
+export interface CrimeSummary {
+  agencies: string[]
+  from: string
+  to: string
+  violent: number
+  property: number
+}
+
+const summaries = new WeakMap<Crime, CrimeSummary>()
+
+/** What the file holds for the last twelve months, counted once a file. */
+export function crimeSummary(crime: Crime): CrimeSummary {
+  const held = summaries.get(crime)
+  if (held) return held
+  const fromDay = crime.lastDay - crime.windowDays + 1
+  let violent = 0
+  let property = 0
+  for (let i = 0; i < crime.n && crime.day[i] >= fromDay; i += 1) {
+    if (crime.kind[i] === 1) violent += 1
+    else if (crime.kind[i] === 2) property += 1
+  }
+  const out = {
+    agencies: crime.agencies.map((a) => a.name),
+    from: dateOf(crime.epoch, Math.max(fromDay, crime.firstDay)),
+    to: dateOf(crime.epoch, crime.lastDay),
+    violent,
+    property,
+  }
+  summaries.set(crime, out)
+  return out
+}
+
+export const CRIME_COLORS: Record<string, string> = { Violent: '#b91c1c', Property: '#d97706' }
+
+/**
+ * The last twelve months' violent and property offenses as points for the
+ * map, each with its kind, the agency's category and the day it was
+ * reported. The other offenses (drugs, weapons, the agency's lesser group)
+ * are left off the map: the layer is the two kinds a site is judged by.
+ */
+export function crimeFeatures(crime: Crime): GeoJSON.FeatureCollection {
+  const [west, south, east, north] = crime.box
+  const wide = east - west
+  const tall = north - south
+  const fromDay = crime.lastDay - crime.windowDays + 1
+  const features: GeoJSON.Feature[] = []
+  for (let i = 0; i < crime.n && crime.day[i] >= fromDay; i += 1) {
+    const kind = crime.kind[i]
+    if (kind !== 1 && kind !== 2) continue
+    features.push({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [
+          Math.round((west + (crime.x[i] / crime.steps) * wide) * 1e6) / 1e6,
+          Math.round((south + (crime.y[i] / crime.steps) * tall) * 1e6) / 1e6,
+        ],
+      },
+      properties: { Kind: kind === 1 ? 'Violent' : 'Property', Category: crime.categories[crime.cat[i]] || '', Reported: dateOf(crime.epoch, crime.day[i]) },
+    })
+  }
+  return { type: 'FeatureCollection', features }
+}
+
+/**
+ * The same points a tile at a time, for the map image the server draws: the
+ * shape a tile archive's reader hands back (features in tile units), cut
+ * from the packed file instead. A tile's box is turned into steps of the
+ * file's own box, so a row outside it costs four integer compares.
+ */
+export function crimeTileReader(crime: Crime, extent = 4096) {
+  const [west, south, east, north] = crime.box
+  const wide = east - west || 1e-9
+  const tall = north - south || 1e-9
+  const fromDay = crime.lastDay - crime.windowDays + 1
+  const lngOfTile = (x: number, z: number) => (x / 2 ** z) * 360 - 180
+  const latOfTile = (y: number, z: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / 2 ** z))) * 180) / Math.PI
+  return async (z: number, tx: number, ty: number) => {
+    const xLo = ((lngOfTile(tx, z) - west) / wide) * crime.steps
+    const xHi = ((lngOfTile(tx + 1, z) - west) / wide) * crime.steps
+    const yLo = ((latOfTile(ty + 1, z) - south) / tall) * crime.steps
+    const yHi = ((latOfTile(ty, z) - south) / tall) * crime.steps
+    const features: { type: 1; geometry: [number, number][][]; properties: { Kind: string } }[] = []
+    if (xHi < 0 || yHi < 0 || xLo > crime.steps || yLo > crime.steps) return { extent, features }
+    const size = 2 ** z
+    for (let i = 0; i < crime.n && crime.day[i] >= fromDay; i += 1) {
+      const kind = crime.kind[i]
+      if (kind !== 1 && kind !== 2) continue
+      const x = crime.x[i]
+      const y = crime.y[i]
+      if (x < xLo || x >= xHi || y < yLo || y >= yHi) continue
+      const lng = west + (x / crime.steps) * wide
+      const lat = south + (y / crime.steps) * tall
+      const rad = (lat * Math.PI) / 180
+      const wx = ((lng + 180) / 360) * size
+      const wy = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * size
+      features.push({ type: 1, geometry: [[[Math.round((wx - tx) * extent), Math.round((wy - ty) * extent)]]], properties: { Kind: kind === 1 ? 'Violent' : 'Property' } })
+    }
+    return { extent, features }
+  }
+}
+

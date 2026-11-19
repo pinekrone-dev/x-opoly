@@ -19,7 +19,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (Las Vegas so far; it says when a market or a site is not covered). nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (Las Vegas so far; it says when a market or a site is not covered), and where it is published market_layers lists a crime layer that make_map can switch on. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files: there, search_parcels finds a parcel by address, owner or parcel number (text alone) and get_parcel reads any lot, but filters and totals are not available; the tool says so.`
 
@@ -225,7 +225,7 @@ export const TOOLS = [
       properties: {
         market: MARKET,
         name: { type: 'string', maxLength: 80 },
-        layers: { type: 'array', items: { type: 'string' }, description: 'Layer ids from market_layers to switch on.' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'Layer ids from market_layers to switch on (crime, zoning, permits, transmission...).' },
         landUseColours: { type: 'boolean', description: 'Colour the parcels by land use.' },
         ...CRITERIA,
         center: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } }, required: ['lat', 'lng'] },
@@ -808,6 +808,19 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       const answer = await ask(`/catalog/${encodeURIComponent(input.market)}/layers.json`)
       if (answer.status !== 200) return failure(refusal(answer))
       const layers = (answer.body?.layers ?? []).map((l) => ({ id: l.id, label: l.label, kind: l.kind, count: l.count, note: l.note || undefined }))
+      // Reported crime is a layer the app draws from its own packed file,
+      // not one in the market's catalogue: listed first where it is published.
+      const crime = await ask(`/api/gis/crime?market=${input.market}`)
+      if (crime.status === 200 && crime.body?.ready) {
+        const c = crime.body
+        layers.unshift({
+          id: 'crime',
+          label: 'Crime',
+          kind: 'point',
+          count: c.violent + c.property,
+          note: `${c.violent.toLocaleString('en-US')} violent and ${c.property.toLocaleString('en-US')} property offenses reported to ${c.agencies.join(', ')}, ${c.from} to ${c.to}. Switch it on in make_map with layers: ["crime"]; nearby_crime counts them round a site.`,
+        })
+      }
       return result({ market: input.market, layers })
     }
 

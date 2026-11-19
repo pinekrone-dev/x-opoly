@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import CrimeNearby from '../components/CrimeNearby'
-import { CRIME_MARKETS } from '../lib/crime'
+import { CRIME_COLORS, CRIME_MARKETS, crimeFeatures, readCrime, type CrimeSummary } from '../lib/crime'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
 import ListPicker from '../components/ListPicker'
@@ -381,6 +381,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   txdot: LAYER_ICONS.absorption,
   comps: LAYER_ICONS.comps,
   vessels: LAYER_ICONS.ships,
+  crime: LAYER_ICONS.crime,
   ust: LAYER_ICONS.tank,
   lust: LAYER_ICONS.leak,
   transmission: LAYER_ICONS.pylon,
@@ -2097,6 +2098,63 @@ export default function Gis({
     // the next tick.
   }, [layerOn.vessels, active, coastal, viewKey])
 
+  /*
+   * Reported crime, as a layer: the last twelve months' violent and property
+   * offenses, in the markets whose police agency publishes each one with a
+   * place. Whether the market has it (and how many) is one small question
+   * asked with the market; the offenses themselves are one packed file, two
+   * megabytes for Las Vegas, fetched the first time the layer is switched on.
+   */
+  const [crimeInfo, setCrimeInfo] = useState<CrimeSummary | null>(null)
+  const [crimeGeo, setCrimeGeo] = useState<GeoJSON.FeatureCollection | null>(null)
+  useEffect(() => {
+    setCrimeInfo(null)
+    setCrimeGeo(null)
+    if (!active || !CRIME_MARKETS.has(active)) return undefined
+    let cancelled = false
+    api.parcels
+      .crimeSummary(active)
+      .then((info) => { if (!cancelled) setCrimeInfo(info) })
+      .catch(() => { /* not published here yet: no layer to offer */ })
+    return () => { cancelled = true }
+  }, [active])
+  useEffect(() => {
+    if (!active || !crimeInfo || !layerOn.crime || crimeGeo) return undefined
+    let cancelled = false
+    setLayerBusy((busy) => ({ ...busy, crime: true }))
+    fetch(`${CATALOG}/${active}/crime.bin`)
+      .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`crime.bin answered ${r.status}`))))
+      .then((buffer) => {
+        const crime = readCrime(buffer)
+        if (!cancelled && crime) setCrimeGeo(crimeFeatures(crime))
+      })
+      .catch(() => { /* the card stays, the points do not draw */ })
+      .finally(() => setLayerBusy((busy) => ({ ...busy, crime: false })))
+    return () => { cancelled = true }
+  }, [active, crimeInfo, layerOn.crime, crimeGeo])
+  const crimeLayer = useMemo((): PublishedLayer | null => {
+    if (!crimeInfo) return null
+    const categories = new Map<string, number>()
+    for (const feature of crimeGeo?.features ?? []) {
+      const name = String(feature.properties?.Category ?? '')
+      categories.set(name, (categories.get(name) ?? 0) + 1)
+    }
+    return {
+      id: 'crime',
+      label: 'Crime',
+      kind: 'point',
+      color: CRIME_COLORS.Violent,
+      file: '',
+      note: `${crimeInfo.violent.toLocaleString()} violent, ${crimeInfo.property.toLocaleString()} property in 12 months`,
+      categories: [
+        { field: 'Kind', values: [['Violent', crimeInfo.violent], ['Property', crimeInfo.property]], colors: CRIME_COLORS },
+        ...(categories.size ? [{ field: 'Category', values: [...categories.entries()].sort((a, b) => b[1] - a[1]) }] : []),
+      ],
+      fields: ['Kind', 'Category', 'Reported'],
+      attribution: `Offenses reported to ${crimeInfo.agencies.join(', ')}, ${crimeInfo.from} to ${crimeInfo.to}, placed to the block`,
+    }
+  }, [crimeInfo, crimeGeo])
+
   const vesselsGeo = useMemo(() => (vessels ? vesselFeatures(vessels.ships) : null), [vessels])
   const trailsGeo = useMemo(() => (vessels ? vesselTrails(vessels.ships) : null), [vessels])
 
@@ -2194,10 +2252,12 @@ export default function Gis({
   /** Every layer the panel and the map treat alike: published, comps, the summary, buildings and ships. */
   const shownLayers = useMemo(
     () =>
-      [...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])].map((layer) =>
+      // Crime leads the market's own layers where it is published: it is the
+      // one a site is asked about first.
+      [...(crimeLayer ? [crimeLayer] : []), ...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])].map((layer) =>
         layerGroup(layer.id) === 'traffic' ? { ...layer, label: trafficLabel(layer) } : layer,
       ),
-    [published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
+    [crimeLayer, published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
   )
 
   /** The same, for geometry: comps come from the workspace and ships from the feed, not the catalog. */
@@ -2205,9 +2265,10 @@ export default function Gis({
     const out = { ...layerData }
     if (compsGeo) out.comps = compsGeo
     if (vesselsGeo) out.vessels = vesselsGeo
+    if (crimeGeo) out.crime = crimeGeo
     if (gridDrawing) out.grid = gridDrawing.geo
     return out
-  }, [layerData, compsGeo, vesselsGeo, gridDrawing])
+  }, [layerData, compsGeo, vesselsGeo, crimeGeo, gridDrawing])
 
   /*
    * What each loaded layer could be coloured by, and how.
