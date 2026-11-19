@@ -139,6 +139,17 @@ describe('the packed file', () => {
     assert.equal((await read(3, 0, 0)).features.length, 0, 'a tile nowhere near the file')
   })
 
+  test('with two agencies in one file, a circle is covered wherever either polices', () => {
+    const second = { name: 'Henderson Police', short: 'HPD', rings: crime.elsewhere[0].rings, notes: [], definitions: {} }
+    const both = { ...crime, agencies: [...crime.agencies, second], elsewhere: [] }
+    // 0.1 mile inside the first agency's east edge, where the second begins.
+    const edge = crimeNear(both, { lat: 36.05, lng: -115.0018 })
+    assert.equal(edge.agency, 'Test Metropolitan Police')
+    assert.equal(edge.rings[0].covered, 1)
+    assert.equal(crimeNear(both, { lat: 36.05, lng: -114.95 }).agency, 'Henderson Police')
+    assert.ok(crimeNear(crime, { lat: 36.05, lng: -115.0018 }).rings[0].covered < 1, 'and not where only one is in the file')
+  })
+
   test('inside and outside, holes included', () => {
     const outer = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
     const hole = [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]]
@@ -251,6 +262,6 @@ describe('the route and the connector', () => {
     const crime = readCrime(buffer)
     const report = crimeReport({ lat: 36.15, lng: -115.0018, ...crimeNear(crime, { lat: 36.15, lng: -115.0018 }) }, { market: 'las-vegas-nv' })
     assert.ok(report.within[2].shareOfCircleCovered < 0.65)
-    assert.match(report.notes.join(' '), /circles? lies? where another agency polices/)
+    assert.match(report.notes.join(' '), /circles? lies? outside the area these figures cover/)
   })
 })
