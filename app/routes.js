@@ -221,7 +221,7 @@ import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
 import { randomToken } from './lib/crypto.js'
-import { createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
+import { assistantName, createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, metadataAddress, metadataClient, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
@@ -5458,6 +5458,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none'],
+      // An application may also name itself by the address of its own
+      // description (app/lib/oauth.js, metadataClient). Grok does.
+      client_id_metadata_document_supported: true,
       scopes_supported: SCOPES,
     })
   })
@@ -5484,9 +5487,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     c.header('Content-Security-Policy', "frame-ancestors 'none'; object-src 'none'; base-uri 'self'")
     c.header('Cache-Control', 'no-store')
   }
-  const oauthError = (c, title, text, status = 400) => {
+  // `asked` is what the application sent, shown small under the message: the
+  // person can do nothing about a refused link but pass it on, and this is
+  // what whoever they pass it to needs.
+  const oauthError = (c, title, text, status = 400, asked = null) => {
     unframed(c)
-    return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from the assistant you were connecting.</p>`), status)
+    const shown = (value) => esc(String(value || 'none given').slice(0, 300))
+    const detail = asked ? `<p class="small" style="word-break:break-all">Application: ${shown(asked.client_id)}<br>Return address: ${shown(asked.redirect_uri)}</p>` : ''
+    return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from the assistant you were connecting.</p>${detail}`), status)
   }
   const backTo = (redirectUri, values) => {
     const url = new URL(redirectUri)
@@ -5494,10 +5502,25 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return url.toString()
   }
   // The authorize request, checked the same way on the page and on the decision.
-  const checkAuthorize = async (q) => {
-    const client = await getClient(db, q.client_id)
-    if (!client || !client.redirectUris.includes(q.redirect_uri) || !goodRedirect(q.redirect_uri, env)) {
-      return { fatal: 'The application asking to connect is not registered here, or its return address does not match.' }
+  const checkAuthorize = async (c, q) => {
+    let client = await getClient(db, q.client_id)
+    // An application named by the address of its own description is read
+    // from there: the first time, and when it asks for a return address the
+    // copy kept here does not list. Only for a return address this site
+    // allows, and only so often from one address, so the page cannot be used
+    // to make this server fetch at will.
+    if (
+      metadataAddress(q.client_id) &&
+      goodRedirect(q.redirect_uri, env) &&
+      (!client || !client.redirectUris.includes(q.redirect_uri)) &&
+      rateLimit(`oauth-metadata:${clientAddress(c)}`, { limit: 30, windowMs: 10 * 60 * 1000 }).allowed
+    ) {
+      client = (await metadataClient(db, q.client_id, env)) || client
+    }
+    const asked = { client_id: q.client_id, redirect_uri: q.redirect_uri }
+    if (!client) return { fatal: 'The application asking to connect is not registered here.', asked }
+    if (!client.redirectUris.includes(q.redirect_uri) || !goodRedirect(q.redirect_uri, env)) {
+      return { fatal: 'The application asked to send you back to an address it did not register, or one this site does not accept.', asked }
     }
     if (q.response_type !== 'code') return { client, back: 'unsupported_response_type' }
     if (!q.code_challenge || q.code_challenge_method !== 'S256') return { client, back: 'invalid_request' }
@@ -5506,8 +5529,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
 
   app.get('/oauth/authorize', async (c) => {
     const q = c.req.query()
-    const checked = await checkAuthorize(q)
-    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal)
+    const checked = await checkAuthorize(c, q)
+    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal, 400, checked.asked)
     if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
     const user = await sessionUser(db, tokenFrom(c))
     if (!user) {
@@ -5522,7 +5545,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     return c.html(
       oauthPage(
         'Connect to Land Quotient',
-        `<h1>Connect ${esc(checked.client.name)} to Land Quotient?</h1>
+        `<h1>Connect ${esc(assistantName(q.redirect_uri, checked.client.name))} to Land Quotient?</h1>
 <p>It will act as <strong>${esc(user.email)}</strong> and be able to:</p>
 <ul><li>Search parcels and read county records, layers, permits and mortgages in your markets</li><li>Save maps to your workspace and link you to them</li></ul>
 <form method="post" action="/oauth/authorize">${hidden}
@@ -5541,8 +5564,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (from && from !== originOf(c)) return oauthError(c, 'Not allowed', 'That approval did not come from Land Quotient.', 403)
     const form = await c.req.parseBody()
     const q = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, typeof value === 'string' ? value : '']))
-    const checked = await checkAuthorize(q)
-    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal)
+    const checked = await checkAuthorize(c, q)
+    if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal, 400, checked.asked)
     if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
     const user = await sessionUser(db, tokenFrom(c))
     if (!user) return oauthError(c, 'Signed out', 'Sign in to Land Quotient and start the connection again.', 401)

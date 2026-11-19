@@ -362,3 +362,111 @@ describe('Grok, allowed by its one return address', () => {
     assert.equal(many.error, 'invalid_redirect_uri')
   })
 })
+
+describe('an application that names itself by the address of its description, as Grok does', () => {
+  const GROK = 'https://grok.com/connectors-oauth-exchange-code/'
+  const ADDRESS = 'https://cursor.com/oauth/mcp-client.json'
+  // What Cursor publishes there, which Grok connects under.
+  const DOCUMENT = {
+    client_id: ADDRESS,
+    client_name: 'Cursor',
+    redirect_uris: ['https://www.cursor.com/agents/mcp/oauth/callback', 'https://www.cursor.com/bot/mcp/oauth/callback', GROK, 'http://localhost:8787/callback', 'http://127.0.0.1:8787/callback'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+  }
+  const answer = (doc, status = 200) => async () => new Response(JSON.stringify(doc), { status, headers: { 'content-type': 'application/json' } })
+  const store = () => {
+    const rows = new Map()
+    return {
+      rows,
+      run: async (_sql, [id, name, uris]) => rows.set(id, { client_id: id, name, redirect_uris: uris }),
+      get: async (_sql, [id]) => rows.get(id),
+    }
+  }
+  const env = { CONNECTOR_REDIRECT_HOSTS: `agent.meta.ai,${GROK}` }
+
+  test('only a public https address with a path is taken for one', async () => {
+    const { metadataAddress } = await import('../app/lib/oauth.js')
+    assert.equal(metadataAddress(ADDRESS), ADDRESS)
+    for (const not of ['lqc_abc', 'http://cursor.com/x.json', 'https://cursor.com/', 'https://cursor.com/a/../b.json', 'https://10.0.0.1/x.json', 'https://localhost/x.json', 'https://box.internal/x.json', 'https://cursor.com/x.json?a=1', 'https://cursor.com/x.json#f', 'https://u:p@cursor.com/x.json', 'https://cursor.com:8443/x.json']) {
+      assert.equal(metadataAddress(not), null, not)
+    }
+  })
+
+  test('the description is read, and only the return addresses allowed here are kept', async () => {
+    const { metadataClient, getClient, assistantName } = await import('../app/lib/oauth.js')
+    const db = store()
+    const made = await metadataClient(db, ADDRESS, env, answer(DOCUMENT))
+    assert.deepEqual(made.redirectUris, [GROK, 'http://localhost:8787/callback', 'http://127.0.0.1:8787/callback'])
+    assert.equal(made.name, 'Grok / Cursor')
+    assert.deepEqual((await getClient(db, ADDRESS)).redirectUris, made.redirectUris)
+    // The approval page names the assistant by where the approval goes.
+    assert.equal(assistantName(GROK, 'Cursor'), 'Grok')
+    assert.equal(assistantName('http://127.0.0.1:8787/callback', 'Cursor'), 'Cursor')
+    // Without Grok's address allowed, the same description is Cursor on this machine only.
+    const plain = await metadataClient(store(), ADDRESS, {}, answer(DOCUMENT))
+    assert.deepEqual(plain.redirectUris, ['http://localhost:8787/callback', 'http://127.0.0.1:8787/callback'])
+    assert.equal(plain.name, 'Cursor')
+  })
+
+  test('a description that is not the one asked for is no client', async () => {
+    const { metadataClient } = await import('../app/lib/oauth.js')
+    const refuse = async (doc, status) => assert.equal(await metadataClient(store(), ADDRESS, env, answer(doc, status)), null)
+    await refuse({ ...DOCUMENT, client_id: 'https://cursor.com/other.json' }, 200)
+    await refuse(DOCUMENT, 404)
+    await refuse(DOCUMENT, 302)
+    await refuse({ ...DOCUMENT, redirect_uris: ['https://evil.example/cb'] }, 200)
+    await refuse({ ...DOCUMENT, token_endpoint_auth_method: 'client_secret_post' }, 200)
+    await refuse({ ...DOCUMENT, client_name: 'x'.repeat(30000) }, 200)
+    assert.equal(await metadataClient(store(), ADDRESS, env, async () => { throw new Error('unreachable') }), null)
+    assert.equal(await metadataClient(store(), 'https://10.0.0.1/x.json', env, answer(DOCUMENT)), null)
+  })
+
+  test('through the door: discovery says so, the approval page appears, and the tokens are issued to that address', async () => {
+    const server = await claude('/.well-known/oauth-authorization-server')
+    assert.equal(server.body.client_id_metadata_document_supported, true)
+
+    const real = globalThis.fetch
+    let fetched = 0
+    globalThis.fetch = async (input, init) => {
+      if (String(input?.url || input) !== ADDRESS) return real(input, init)
+      fetched += 1
+      return new Response(JSON.stringify(DOCUMENT), { status: 200, headers: { 'content-type': 'application/json' } })
+    }
+    try {
+      const back = 'http://127.0.0.1:8787/callback'
+      const proof = b64url(randomBytes(32))
+      const q = new URLSearchParams({ response_type: 'code', client_id: ADDRESS, redirect_uri: back, code_challenge: b64url(createHash('sha256').update(proof).digest()), code_challenge_method: 'S256', state: 's1' })
+      const page = await owner(`/oauth/authorize?${q}`)
+      assert.equal(page.status, 200)
+      assert.match(page.body, /Connect Cursor to Land Quotient\?/)
+      const decided = await owner('/oauth/authorize', form({ ...Object.fromEntries(q), decision: 'allow' }, { origin: 'http://localhost' }))
+      assert.equal(decided.status, 302)
+      assert.equal(fetched, 1, 'the description is read once, then kept')
+      const code = new URL(decided.headers.get('location')).searchParams.get('code')
+      const issued = await claude('/oauth/token', form({ grant_type: 'authorization_code', code, client_id: ADDRESS, redirect_uri: back, code_verifier: proof }))
+      assert.equal(issued.status, 200)
+      assert.match(issued.body.access_token, /^lqt_/)
+      const again = await claude('/oauth/token', form({ grant_type: 'refresh_token', refresh_token: issued.body.refresh_token, client_id: ADDRESS }))
+      assert.equal(again.status, 200)
+      const used = await claude('/mcp', json({ jsonrpc: '2.0', id: 1, method: 'ping' }, { authorization: `Bearer ${again.body.access_token}` }))
+      assert.equal(used.status, 200)
+
+      // A return address the description does not list is refused, and the
+      // page says what was asked so it can be passed on.
+      q.set('redirect_uri', 'http://127.0.0.1:9999/other')
+      const refused = await owner(`/oauth/authorize?${q}`)
+      assert.equal(refused.status, 400)
+      assert.match(refused.body, /Application: https:\/\/cursor\.com\/oauth\/mcp-client\.json/)
+      assert.match(refused.body, /Return address: http:\/\/127\.0\.0\.1:9999\/other/)
+    } finally {
+      globalThis.fetch = real
+    }
+    const unknown = await owner('/oauth/authorize?client_id=lqc_nobody&redirect_uri=https%3A%2F%2Fclaude.ai%2Fcb&response_type=code')
+    assert.equal(unknown.status, 400)
+    assert.match(unknown.body, /is not registered here/)
+    assert.match(unknown.body, /Application: lqc_nobody/)
+  })
+})
+
