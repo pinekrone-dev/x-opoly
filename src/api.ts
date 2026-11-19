@@ -34,7 +34,7 @@ import type { AskCircle, ClientPin, LibraryItem, LibraryPiece, LandmarksResult, 
 } from './types'
 import type { VesselAnswer } from './lib/vessels'
 import type { ParcelGrid } from './lib/grid'
-import type { CrimeAnswer } from './lib/crime'
+import type { CrimeAnswer, CrimeSummary } from './lib/crime'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -431,6 +431,10 @@ export const api = {
     /** Reported violent and property crime within a quarter, a half and a mile of a place. */
     crime: (market: string, lat: number, lng: number) =>
       request<CrimeAnswer>(`/api/gis/crime?market=${encodeURIComponent(market)}&lat=${lat.toFixed(5)}&lng=${lng.toFixed(5)}`),
+
+    /** Whether a market has reported crime published, and what its last twelve months hold. */
+    crimeSummary: (market: string) =>
+      request<{ market: string; ready: true } & CrimeSummary>(`/api/gis/crime?market=${encodeURIComponent(market)}`),
 
     /** What the zoning code allows on a City of Los Angeles lot, each line cited. */
     zoning: (market: string, apn: string) =>

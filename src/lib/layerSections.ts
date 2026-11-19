@@ -25,7 +25,7 @@ export const SECTIONS: Section[] = [
   { id: 'development', label: 'Development activity', hint: 'Permits, entitlements, projects' },
   { id: 'market', label: 'Market research', hint: 'Demographics, traffic, schools' },
   { id: 'infrastructure', label: 'Infrastructure', hint: 'Power lines, substations, plants' },
-  { id: 'risk', label: 'Risk', hint: 'Flood zones, fuel tanks' },
+  { id: 'risk', label: 'Risk', hint: 'Crime, flood zones, fuel tanks' },
   { id: 'more', label: 'More', hint: 'Everything else this market publishes' },
 ]
 
@@ -43,7 +43,7 @@ const BY_KEY: Record<string, string> = {
   'parks-rec': 'market', 'rail-stations': 'market', 'business-licenses': 'market', comps: 'market',
   'Market surveys': 'market', Absorption: 'market', 'Rent trends': 'market', Forecasts: 'market',
   transmission: 'infrastructure', substations: 'infrastructure', 'power-plants': 'infrastructure', ships: 'infrastructure', vessels: 'infrastructure',
-  'flood-zones': 'risk', ust: 'risk', lust: 'risk',
+  crime: 'risk', 'flood-zones': 'risk', ust: 'risk', lust: 'risk',
 }
 
 /** A card's layer key: its id without the panel's `x:` or `g:` prefix. */
@@ -80,9 +80,9 @@ export interface StartingPoint {
  * takes a built-in one's place; deleting it brings the built-in back.
  */
 export const STARTING_POINTS: StartingPoint[] = [
-  { name: 'Site selection', note: 'Who lives here and what drives by', layers: ['demographics', 'traffic', 'schools', 'zoning'] },
+  { name: 'Site selection', note: 'Who lives here, what drives by and what is reported', layers: ['demographics', 'traffic', 'schools', 'zoning', 'crime'] },
   { name: 'Development pipeline', note: 'What is being built and entitled', layers: ['permits', 'plan-review', 'zoning', 'opportunity-zones', 'opportunity-zones-2027', 'occupancy', 'txdot'] },
-  { name: 'Risk check', note: 'Flood and contamination', layers: ['flood-zones', 'ust', 'lust'] },
+  { name: 'Risk check', note: 'Crime, flood and contamination', layers: ['crime', 'flood-zones', 'ust', 'lust'] },
   { name: 'Power & industrial', note: 'Lines, substations and industrial zoning', layers: ['transmission', 'substations', 'power-plants', 'zoning'] },
 ]
 

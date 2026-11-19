@@ -217,7 +217,7 @@ import { buildItinerary, legs, planTour } from './lib/tour.js'
 import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
-import { crimeNear, readCrime } from '../src/lib/crime.ts'
+import { CRIME_COLORS, crimeNear, crimeSummary, crimeTileReader, readCrime } from '../src/lib/crime.ts'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
@@ -2634,7 +2634,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
        * a whole county file is downloaded once a session, if at all.
        */
       const ranged = Boolean(c.req.header('range')) || parts[1] === 'lite'
-      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack|cols\.bin|crime\.bin)$/.test(parts[1])
+      const whole = parts.length === 2 && /^(index\.json|details\.json|parcels\.geojson|parcels\.pmtiles|rows\.pack|search\.pack|cols\.bin)$/.test(parts[1])
       const throttled = viewer.pipeline
         ? null
         : ranged
@@ -3468,10 +3468,26 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (throttled) return throttled
     const market = marketSlug(c)
     if (!market) return c.json({ error: 'market must be a slug like las-vegas-nv.' }, 400)
+    // With no place: whether the market has reported crime at all, and what
+    // the last twelve months hold. The map's Crime layer and the connector's
+    // list of layers ask this before offering it.
+    if (c.req.query('lat') == null && c.req.query('lng') == null) {
+      return edgeCached(
+        c,
+        'crime-market-v1',
+        30 * 60,
+        async () => {
+          const crime = await packedCrime(market)
+          if (!crime) return c.json({ error: `No police agency's reported crime is published for ${market} yet.`, ready: false, market }, 404)
+          return c.json({ market, ready: true, ...crimeSummary(crime) })
+        },
+        { params: { market } },
+      )
+    }
     const lat = Number(c.req.query('lat'))
     const lng = Number(c.req.query('lng'))
     if (!(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180) || c.req.query('lat') == null || c.req.query('lng') == null) {
-      return c.json({ error: 'lat and lng are required.' }, 400)
+      return c.json({ error: 'lat and lng are required together.' }, 400)
     }
     // To the fifth place, about a yard: the same lot asks the same question.
     const params = { market, lat: lat.toFixed(5), lng: lng.toFixed(5) }
@@ -4025,6 +4041,16 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (on.length) {
       const catalogue = await catalogJson(`${market}/layers.json`).catch(() => null)
       for (const id of on) {
+        // Reported crime is drawn from its own packed file, not a tile archive.
+        if (id === 'crime') {
+          const crime = await packedCrime(market).catch(() => null)
+          if (!crime) { notes.push('Reported crime is not published for this market.'); continue }
+          layers.push({
+            label: 'Crime, last 12 months (red violent, orange property)', kind: 'point', color: CRIME_COLORS.Violent,
+            colors: { field: 'Kind', map: CRIME_COLORS }, read: crimeTileReader(crime), minZoom: 0, maxZoom: 14,
+          })
+          continue
+        }
         const layer = (catalogue?.layers ?? []).find((l) => l.id === id)
         if (!layer?.tiles || !INGEST_TILE_FILE.test(layer.tiles)) { notes.push(`The layer ${id} is not published for this market.`); continue }
         const tiles = archiveFor(`${market}/${layer.tiles}`)

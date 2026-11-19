@@ -17,7 +17,7 @@ import test, { after, before, describe } from 'node:test'
 import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
 import { crimeReport, runTool } from '../app/lib/mcp.js'
-import { crimeNear, inRings, readCrime, shareBelow } from '../src/lib/crime.ts'
+import { crimeFeatures, crimeNear, crimeSummary, crimeTileReader, inRings, readCrime, shareBelow } from '../src/lib/crime.ts'
 
 const bytes = fs.readFileSync(new URL('./fixtures/crime.bin', import.meta.url))
 const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
@@ -101,6 +101,44 @@ describe('the packed file', () => {
     assert.equal(crimeNear(crime, SITE).rings[2].covered, 1)
   })
 
+  test('the last twelve months as a layer: violent and property points, the rest left off', () => {
+    assert.deepEqual(crimeSummary(crime), { agencies: ['Test Metropolitan Police'], from: '2025-11-02', to: '2026-11-01', violent: 3, property: 2 })
+    const geo = crimeFeatures(crime)
+    // Five of the seven: not the drug offense, not the one of two years ago.
+    assert.equal(geo.features.length, 5)
+    assert.deepEqual(geo.features.map((f) => f.properties.Kind).sort(), ['Property', 'Property', 'Violent', 'Violent', 'Violent'])
+    const robbery = geo.features.find((f) => f.properties.Category === 'ROBBERY')
+    assert.equal(robbery.properties.Kind, 'Violent')
+    assert.equal(robbery.properties.Reported, '2026-11-01')
+    // 0.30 mile east of the site, to within a few yards.
+    assert.ok(Math.abs(robbery.geometry.coordinates[0] - -115.14463) < 0.0002)
+    assert.ok(Math.abs(robbery.geometry.coordinates[1] - 36.15) < 0.0002)
+  })
+
+  test('the same points a tile at a time, for the image the server draws', async () => {
+    const read = crimeTileReader(crime)
+    // The tile at zoom 12 that holds the site, and where the site falls in it.
+    const z = 12
+    const size = 2 ** z
+    const wx = ((SITE.lng + 180) / 360) * size
+    const rad = (SITE.lat * Math.PI) / 180
+    const wy = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * size
+    const [tx, ty] = [Math.floor(wx), Math.floor(wy)]
+    const tile = await read(z, tx, ty)
+    assert.equal(tile.extent, 4096)
+    const all = [tile, await read(z, tx + 1, ty), await read(z, tx - 1, ty)].flatMap((t) => t.features)
+    assert.equal(all.length, 5, 'the five on the map, each in one tile only')
+    // Every point is on the site's own latitude, east of it.
+    for (const f of tile.features) {
+      const [px, py] = f.geometry[0][0]
+      assert.ok(Math.abs(py - (wy - ty) * 4096) <= 2)
+      assert.ok(px >= Math.floor((wx - tx) * 4096))
+      assert.match(f.properties.Kind, /^(Violent|Property)$/)
+    }
+    assert.equal((await read(z, tx, ty + 40)).features.length, 0)
+    assert.equal((await read(3, 0, 0)).features.length, 0, 'a tile nowhere near the file')
+  })
+
   test('inside and outside, holes included', () => {
     const outer = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
     const hole = [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]]
@@ -125,7 +163,9 @@ describe('the route and the connector', () => {
     globalThis.fetch = async (url) => {
       const key = String(url).replace('https://catalogue.test/', '')
       asked.push(key)
-      return key === 'las-vegas-nv/crime.bin' ? new Response(bytes, { status: 200 }) : new Response('not found', { status: 404 })
+      if (key === 'las-vegas-nv/crime.bin') return new Response(bytes, { status: 200 })
+      if (/^(las-vegas-nv|austin-tx)\/layers\.json$/.test(key)) return new Response(JSON.stringify({ layers: [{ id: 'permits', label: 'Permits', kind: 'point', count: 12 }] }), { status: 200 })
+      return new Response('not found', { status: 404 })
     }
     app = await createServer({ DATA_DIR: temp.directory, DB_FILE: `${temp.directory}/test.db`, PARCEL_CATALOG_ORIGIN: 'https://catalogue.test' })
     const res = await app.fetch(new Request('http://localhost/api/auth/register', {
@@ -187,6 +227,24 @@ describe('the route and the connector', () => {
     assert.equal(unpublished.isError, true)
     assert.match(unpublished.content[0].text, /No police agency's reported crime is published for austin-tx/)
     assert.equal((await tool({ market: 'las-vegas-nv' })).isError, true, 'a place is needed')
+  })
+
+  test('with no place, the route says what the market holds; the connector lists crime first among its layers', async () => {
+    const info = await call('/api/gis/crime?market=las-vegas-nv')
+    assert.equal(info.status, 200)
+    assert.deepEqual([info.body.ready, info.body.violent, info.body.property, info.body.to], [true, 3, 2, '2026-11-01'])
+    assert.equal((await call('/api/gis/crime?market=austin-tx')).status, 404)
+    const tool = (input) => runTool('market_layers', input, {
+      origin: 'http://localhost',
+      scope: ['read', 'maps'],
+      call: (path, init = {}) => app.fetch(new Request(`http://localhost${path}`, { ...init, headers: { ...(init.headers || {}), cookie } })),
+    })
+    const vegas = (await tool({ market: 'las-vegas-nv' })).structuredContent
+    assert.deepEqual(vegas.layers.map((l) => l.id), ['crime', 'permits'])
+    assert.equal(vegas.layers[0].count, 5)
+    assert.match(vegas.layers[0].note, /3 violent and 2 property offenses reported to Test Metropolitan Police/)
+    const austin = (await tool({ market: 'austin-tx' })).structuredContent
+    assert.deepEqual(austin.layers.map((l) => l.id), ['permits'], 'no crime layer where none is published')
   })
 
   test('a circle that leaves the agency\'s area is flagged in the notes', () => {
