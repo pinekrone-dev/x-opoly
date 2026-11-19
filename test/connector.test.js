@@ -404,6 +404,11 @@ describe('an application that names itself by the address of its description, as
     // The approval page names the assistant by where the approval goes.
     assert.equal(assistantName(GROK, 'Cursor'), 'Grok')
     assert.equal(assistantName('http://127.0.0.1:8787/callback', 'Cursor'), 'Cursor')
+    // Grok's other return address, on Cursor's service: that path and no other there.
+    const both = { CONNECTOR_REDIRECT_HOSTS: `${env.CONNECTOR_REDIRECT_HOSTS},https://www.cursor.com/bot/mcp/oauth/callback` }
+    const wider = await metadataClient(store(), ADDRESS, both, answer(DOCUMENT))
+    assert.deepEqual(wider.redirectUris, ['https://www.cursor.com/bot/mcp/oauth/callback', GROK, 'http://localhost:8787/callback', 'http://127.0.0.1:8787/callback'])
+    assert.equal(assistantName('https://www.cursor.com/bot/mcp/oauth/callback', wider.name), 'Grok / Cursor')
     // Without Grok's address allowed, the same description is Cursor on this machine only.
     const plain = await metadataClient(store(), ADDRESS, {}, answer(DOCUMENT))
     assert.deepEqual(plain.redirectUris, ['http://localhost:8787/callback', 'http://127.0.0.1:8787/callback'])
