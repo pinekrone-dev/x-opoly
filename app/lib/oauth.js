@@ -109,7 +109,7 @@ export async function registerClient(db, body = {}, env = {}) {
   if (!uris.length) {
     return { error: 'invalid_redirect_uri', description: "redirect_uris must be the callback of an assistant this connector allows, or http on localhost." }
   }
-  const name = String(body.client_name || 'An application').slice(0, 100)
+  const name = nameFor(body.client_name, uris)
   const id = `lqc_${randomToken(16)}`
   await db.run('INSERT INTO oauth_clients (client_id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)', [
     id,
@@ -210,6 +210,27 @@ const namedBy = (uri) => {
   }
 }
 
+/**
+ * What an application is kept as: the name it gives, led by any assistant
+ * its return addresses belong to. Grok connects as "Cursor", registered or
+ * described; kept as "Grok / Cursor" the person recognises it either way.
+ */
+function nameFor(given, uris) {
+  const own = String(given || 'An application').slice(0, 100)
+  const others = [...new Set(uris.map(namedBy).filter((name) => name && name !== own))]
+  return [...others, own].join(' / ').slice(0, 100)
+}
+
+/** Whether a return address is one named whole in CONNECTOR_REDIRECT_HOSTS. */
+export function namedAddress(uri, env = {}) {
+  try {
+    const url = new URL(uri)
+    return !url.search && !url.hash && redirectAddresses(env).includes(url.origin + url.pathname)
+  } catch {
+    return false
+  }
+}
+
 /** What to call the application on the approval page. */
 export function assistantName(redirectUri, clientName) {
   return namedBy(redirectUri) || clientName
@@ -236,9 +257,7 @@ export async function metadataClient(db, clientId, env = {}, fetcher = fetch) {
   const asked = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.slice(0, 50).map(String) : []
   const uris = asked.filter((uri) => goodRedirect(uri, env))
   if (!uris.length) return null
-  const own = String(doc.client_name || 'An application').slice(0, 100)
-  const others = [...new Set(uris.map(namedBy).filter((name) => name && name !== own))]
-  const name = [...others, own].join(' / ').slice(0, 100)
+  const name = nameFor(doc.client_name, uris)
   const stored = JSON.stringify(uris)
   const known = await db.get('SELECT name, redirect_uris FROM oauth_clients WHERE client_id = ?', [address])
   if (!known || known.name !== name || known.redirect_uris !== stored) {
