@@ -76,7 +76,7 @@ export default function CrimeNearby({ market, lat, lng }: { market: string; lat:
           </table>
           {answer.rings.some((r) => r.covered < 0.98) ? (
             <p className="mt-1 text-[11px] leading-snug text-amber-700">
-              Part of the {answer.rings.filter((r) => r.covered < 0.98).map((r) => MILES[r.miles] ?? `${r.miles} mi`).join(', ')} {answer.rings.filter((r) => r.covered < 0.98).length > 1 ? 'circles lie' : 'circle lies'} where another agency polices. Offenses there are not counted, so those figures run low.
+              Part of the {answer.rings.filter((r) => r.covered < 0.98).map((r) => MILES[r.miles] ?? `${r.miles} mi`).join(', ')} {answer.rings.filter((r) => r.covered < 0.98).length > 1 ? 'circles lie' : 'circle lies'} outside the area these figures cover (another police agency's, or water). Nothing is counted there, so those figures may run low.
             </p>
           ) : null}
           <p className="mt-1.5 text-[10px] leading-snug text-faint">

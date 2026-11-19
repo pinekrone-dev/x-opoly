@@ -17,8 +17,16 @@
  *    parcels, so a number comes with where it stands among them.
  */
 
-/** The markets with an agency's reported crime published: where the map's lot card asks. */
-export const CRIME_MARKETS = new Set(['las-vegas-nv'])
+/**
+ * The markets with a police agency's reported crime declared (prospector's
+ * crime_sources.py): where the map asks whether a crime file is published.
+ * A market named here with no file yet shows nothing.
+ */
+export const CRIME_MARKETS = new Set([
+  'las-vegas-nv', 'chicago-il', 'new-york-ny', 'los-angeles-ca', 'dallas-tx', 'kansas-city-mo', 'cincinnati-oh',
+  'suburban-maryland-md', 'washington-dc', 'minneapolis-mn', 'charlotte-nc', 'san-diego-ca', 'detroit-mi',
+  'nashville-tn', 'raleigh-nc', 'fort-worth-tx', 'cleveland-oh',
+])
 
 export type Ring = [number, number][]
 
@@ -203,6 +211,16 @@ export function shareBelow(marks: number[] | undefined, count: number): number |
   return Math.min(99, Math.round((i + part) * 5))
 }
 
+// A market can hold more than one agency (Las Vegas: Metro and Henderson).
+// A circle is covered wherever any of them polices, since all their offenses
+// are in the one file and are counted.
+const unions = new WeakMap<Crime, Ring[]>()
+function everyRing(crime: Crime): Ring[] {
+  let rings = unions.get(crime)
+  if (!rings) unions.set(crime, (rings = crime.agencies.flatMap((a) => a.rings)))
+  return rings
+}
+
 /** How much of a circle lies inside the rings, from a few dozen points spread across it. */
 function coveredShare(rings: Ring[], lng: number, lat: number, radiusDeg: number, k: number): number {
   let inside = 0
@@ -286,7 +304,7 @@ export function crimeNear(crime: Crime, place: { lat: number; lng: number }): Cr
       violent: counts[r][1],
       property: counts[r][2],
       other: counts[r][0],
-      covered: Math.round(coveredShare(agency.rings, lng, lat, Math.sqrt(limits[r]), k) * 100) / 100,
+      covered: Math.round(coveredShare(everyRing(crime), lng, lat, Math.sqrt(limits[r]), k) * 100) / 100,
       violentAbove: at >= 0 ? shareBelow(base!.violent[at], counts[r][1]) : null,
       propertyAbove: at >= 0 ? shareBelow(base!.property[at], counts[r][2]) : null,
     }
