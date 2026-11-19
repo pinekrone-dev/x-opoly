@@ -143,6 +143,114 @@ export async function getClient(db, clientId) {
   return { id: row.client_id, name: row.name, redirectUris: uris }
 }
 
+/*
+ * An application that names itself by an address instead of registering: the
+ * client_id is the https address of a short JSON description it publishes (a
+ * client ID metadata document), and that description lists where approvals
+ * may be sent. Grok connects this way, under the description Cursor
+ * publishes for both. The description is read from that address, checked to
+ * name itself, and kept beside the registered clients, so codes, tokens and
+ * the Connected apps list treat it as any other.
+ *
+ * It widens nothing: registration was already open to anyone, and an
+ * approval still only travels to an address goodRedirect allows.
+ */
+export function metadataAddress(clientId) {
+  const text = String(clientId || '')
+  if (text.length > 300 || !text.startsWith('https://')) return null
+  try {
+    const url = new URL(text)
+    if (url.username || url.password || url.hash || url.search || url.port) return null
+    // As written, with a path: no dot segments, and not a site's front page.
+    if (url.href !== text || url.pathname === '/') return null
+    const host = url.hostname.toLowerCase()
+    // A public name only: nothing on this machine or a private network.
+    if (!host.includes('.') || /^[\d.]+$/.test(host) || host.startsWith('[')) return null
+    if (host === 'localhost' || /\.(local|internal|localhost|lan|home|corp)$/.test(host)) return null
+    return text
+  } catch {
+    return null
+  }
+}
+
+const METADATA_BYTES = 20000
+
+/** The body of a response, up to a limit: more than that is not a client description. */
+async function readCapped(res, limit) {
+  if (Number(res.headers.get('content-length') || 0) > limit) return null
+  if (!res.body || !res.body.getReader) {
+    const text = await res.text()
+    return text.length > limit ? null : text
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => undefined)
+      return null
+    }
+    text += decoder.decode(value, { stream: true })
+  }
+  return text + decoder.decode()
+}
+
+// One description serves several assistants; the one an approval is going to
+// is named by where it goes.
+const NAMED_BY_HOST = { 'grok.com': 'Grok' }
+const namedBy = (uri) => {
+  try {
+    return NAMED_BY_HOST[new URL(uri).hostname.toLowerCase()] || null
+  } catch {
+    return null
+  }
+}
+
+/** What to call the application on the approval page. */
+export function assistantName(redirectUri, clientName) {
+  return namedBy(redirectUri) || clientName
+}
+
+/** Reads a client's published description and keeps it; null when there is none to trust. */
+export async function metadataClient(db, clientId, env = {}, fetcher = fetch) {
+  const address = metadataAddress(clientId)
+  if (!address) return null
+  let doc
+  try {
+    // Not followed anywhere else: the description is at its address or it is nowhere.
+    const res = await fetcher(address, { headers: { accept: 'application/json' }, redirect: 'manual', signal: AbortSignal.timeout(5000) })
+    if (res.status !== 200) return null
+    const text = await readCapped(res, METADATA_BYTES)
+    if (!text) return null
+    doc = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!doc || typeof doc !== 'object' || doc.client_id !== address) return null
+  // Public clients only, as with registration.
+  if (doc.token_endpoint_auth_method && doc.token_endpoint_auth_method !== 'none') return null
+  const asked = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.slice(0, 50).map(String) : []
+  const uris = asked.filter((uri) => goodRedirect(uri, env))
+  if (!uris.length) return null
+  const own = String(doc.client_name || 'An application').slice(0, 100)
+  const others = [...new Set(uris.map(namedBy).filter((name) => name && name !== own))]
+  const name = [...others, own].join(' / ').slice(0, 100)
+  const stored = JSON.stringify(uris)
+  const known = await db.get('SELECT name, redirect_uris FROM oauth_clients WHERE client_id = ?', [address])
+  if (!known || known.name !== name || known.redirect_uris !== stored) {
+    await db.run(
+      `INSERT INTO oauth_clients (client_id, name, redirect_uris, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(client_id) DO UPDATE SET name = excluded.name, redirect_uris = excluded.redirect_uris`,
+      [address, name, stored, new Date().toISOString()],
+    )
+  }
+  return { id: address, name, redirectUris: uris }
+}
+
 /** The approval, as a one-time code bound to the client, the URI and the PKCE challenge. */
 export async function createCode(db, { clientId, userId, redirectUri, challenge, scope }) {
   const code = `lqa_${randomToken(24)}`
