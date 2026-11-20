@@ -3478,10 +3478,36 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * terrain and flood maps do not move by the day. One with a service
    * missing is not kept, so the next asker tries again.
    */
+  /** The screen for one parcel: its outline from the map's tiles (its box where they do not hold it), then the four services. */
+  const screenParcel = async (market, id, maxSlope = 15) => {
+    const found = (await getParcel(parcelsFor(market), market, id).catch(() => null)) ?? (await packedParcel(market, id))
+    if (!found) return { status: 404, payload: { error: 'No such parcel in that market.' } }
+    const box = Array.isArray(found.bb) ? found.bb.map(Number) : null
+    if (!box || box.length !== 4 || !box.every(Number.isFinite)) return { status: 422, payload: { error: 'That parcel has no place on the map to screen.' } }
+    let geometry = null
+    const archive = archiveFor(`${market}/parcels.pmtiles`)
+    const header = await archive.getHeader().catch(() => null)
+    if (header) {
+      const shape = await parcelShape(featureReader(archive, 'parcels'), found.id ?? id, box, { minZoom: header.minZoom, maxZoom: header.maxZoom }).catch(() => null)
+      geometry = shape?.geometry ?? null
+    }
+    const outline = geometry ? 'parcel' : 'box'
+    if (!geometry) {
+      const [w, s, e, n] = box
+      geometry = { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] }
+    }
+    const screen = await siteFeasibility({ geometry, maxSlopePercent: maxSlope, fetcher: env.FEASIBILITY_FETCH ?? fetch })
+    return {
+      status: 200,
+      complete: screen.buildable.notScreened.length === 0,
+      payload: { market, id: String(found.id ?? id), address: found.ad || null, countyAcres: Number(found.ac) > 0 ? Number(found.ac) : null, outline, ...screen },
+    }
+  }
+
   app.get('/api/gis/feasibility', async (c) => {
     const user = c.get('user')
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
-    const throttled = limited(c, 'feasibility', 60, 10 * 60 * 1000)
+    const throttled = limited(c, 'feasibility', 120, 10 * 60 * 1000)
     if (throttled) return throttled
     const market = marketSlug(c)
     if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
@@ -3494,26 +3520,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       'feasibility-v2',
       7 * 24 * 60 * 60,
       async () => {
-        const found = (await getParcel(parcelsFor(market), market, id).catch(() => null)) ?? (await packedParcel(market, id))
-        if (!found) return notFound(c, 'No such parcel in that market.')
-        const box = Array.isArray(found.bb) ? found.bb.map(Number) : null
-        if (!box || box.length !== 4 || !box.every(Number.isFinite)) return c.json({ error: 'That parcel has no place on the map to screen.' }, 422)
-        // The lot's own outline from the map's tiles; its box where the tiles do not hold it.
-        let geometry = null
-        const archive = archiveFor(`${market}/parcels.pmtiles`)
-        const header = await archive.getHeader().catch(() => null)
-        if (header) {
-          const shape = await parcelShape(featureReader(archive, 'parcels'), found.id ?? id, box, { minZoom: header.minZoom, maxZoom: header.maxZoom }).catch(() => null)
-          geometry = shape?.geometry ?? null
-        }
-        const outline = geometry ? 'parcel' : 'box'
-        if (!geometry) {
-          const [w, s, e, n] = box
-          geometry = { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] }
-        }
-        const screen = await siteFeasibility({ geometry, maxSlopePercent: maxSlope, fetcher: env.FEASIBILITY_FETCH ?? fetch })
-        c.header('x-screen-complete', screen.buildable.notScreened.length ? '0' : '1')
-        return c.json({ market, id: String(found.id ?? id), address: found.ad || null, countyAcres: Number(found.ac) > 0 ? Number(found.ac) : null, outline, ...screen })
+        const screened = await screenParcel(market, id, maxSlope)
+        if (screened.status !== 200) return c.json(screened.payload, screened.status)
+        c.header('x-screen-complete', screened.complete ? '1' : '0')
+        return c.json(screened.payload)
       },
       { params: { market, id, maxSlope }, cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-screen-complete') === '1' },
     )
@@ -4410,6 +4420,18 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!day.allowed) return c.json({ error: 'This workspace has drawn its 200 map images for today. The allowance resets at midnight UTC.' }, 429)
 
     const name = String(place.name || place.address || 'Parcel').slice(0, 60)
+    // The feasibility map is the lot's own screen, drawn: each cell in the
+    // colour of what stands in the way, framed on the lot.
+    if (kind === 'feasibility-map') {
+      if (!place.parcelId) return c.json({ error: 'This record is not tied to a parcel, so it cannot be screened.' }, 400)
+      const screened = await screenParcel(place.market, String(place.parcelId))
+      if (screened.status !== 200) return c.json(screened.payload, screened.status)
+      const made = await drawMapImage(c, place.market, {}, { title: `${name}: site feasibility`, width: 1200, height: 800, cells: screened.payload.map })
+      if (made.status !== 200) return c.json(made.payload, made.status)
+      const kept = await savePiece(db, user.teamId, place.id, { kind, path: made.payload.path, width: made.payload.width, height: made.payload.height }, user.id)
+      if (kept.error) return c.json({ error: kept.error }, 400)
+      return c.json({ piece: kept, notes: [...made.payload.notes, ...screened.payload.buildable.notScreened.map((what) => `Not screened: ${what}.`)] }, 201)
+    }
     const pins = (Array.isArray(body?.pins) ? body.pins : []).slice(0, 60)
     const subject = { lat, lng, label: name }
     const state =

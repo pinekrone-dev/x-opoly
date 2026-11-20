@@ -7,8 +7,10 @@
  * built in; a team saves its own.
  */
 import type { Demographics, Landmark, NearbyBusiness } from '../types'
+import type { CrimeAnswer } from './crime'
+import type { Feasibility } from './feasibility'
 
-export type PieceId = 'parcel-map' | 'location-map' | 'retail-map' | 'demographics' | 'employment' | 'chains'
+export type PieceId = 'parcel-map' | 'location-map' | 'retail-map' | 'feasibility-map' | 'feasibility' | 'crime' | 'demographics' | 'employment' | 'chains'
 
 export interface PieceSpec {
   id: PieceId
@@ -23,12 +25,15 @@ export const PIECE_SPECS: PieceSpec[] = [
   { id: 'parcel-map', label: 'Parcel map', group: 'Maps', what: 'The lot outlined on the street map, with its neighbours', file: 'maps/parcel-map.png' },
   { id: 'location-map', label: 'Location map', group: 'Maps', what: 'A three-mile ring with the landmarks inside it', file: 'maps/location-map.png' },
   { id: 'retail-map', label: 'Retail map', group: 'Maps', what: 'The national chains within a mile', file: 'maps/retail-map.png' },
+  { id: 'feasibility-map', label: 'Site feasibility map', group: 'Maps', what: 'The lot in cells, each coloured by what stands in the way: slope, flood hazard, wetland, protected land', file: 'maps/site-feasibility-map.png' },
+  { id: 'feasibility', label: 'Site feasibility', group: 'Data', what: 'Slope, flood hazard, wetlands and protected land on the lot, and the acres that pass all four', file: 'data/site-feasibility.csv' },
+  { id: 'crime', label: 'Crime nearby', group: 'Data', what: 'Violent and property crime reported within a quarter, a half and a mile in the last twelve months, where the police publish it', file: 'data/crime-nearby.csv' },
   { id: 'demographics', label: 'Demographics', group: 'Data', what: 'Population, households, income, age and education at 1, 3 and 5 miles', file: 'data/demographics.csv' },
   { id: 'employment', label: 'Employment', group: 'Data', what: 'Residents in work and the unemployment rate by ring, and the major employers within five miles', file: 'data/employment.csv' },
   { id: 'chains', label: 'Chains nearby', group: 'Data', what: 'Every national chain within a mile, by sector', file: 'data/chains-within-1-mile.csv' },
 ]
 
-export const MAP_PIECES = PIECE_SPECS.filter((p) => p.group === 'Maps').map((p) => p.id) as ('parcel-map' | 'location-map' | 'retail-map')[]
+export const MAP_PIECES = PIECE_SPECS.filter((p) => p.group === 'Maps').map((p) => p.id) as ('parcel-map' | 'location-map' | 'retail-map' | 'feasibility-map')[]
 
 export interface Package {
   /** Its saved-view id when it is the team's own; absent for the built-in ones. */
@@ -39,6 +44,7 @@ export interface Package {
 
 export const PACKAGES: Package[] = [
   { name: 'Site', pieces: ['parcel-map', 'location-map'] },
+  { name: 'Feasibility', pieces: ['parcel-map', 'feasibility-map', 'feasibility'] },
   { name: 'Retail', pieces: ['retail-map', 'chains', 'demographics'] },
   { name: 'Market', pieces: ['location-map', 'demographics', 'employment'] },
   { name: 'Everything', pieces: PIECE_SPECS.map((p) => p.id) },
@@ -61,7 +67,7 @@ export function cleanPieces(ids: unknown): PieceId[] {
   return PIECE_SPECS.filter((p) => wanted.has(p.id)).map((p) => p.id)
 }
 
-type Cell = string | number | null
+export type Cell = string | number | null
 const EMPLOYMENT_KEYS = ['laborForce', 'employed', 'unemployed', 'unemploymentRate']
 const LABELS: Record<string, string> = {
   population: 'Population',
@@ -106,6 +112,83 @@ export function employmentRows(data: Demographics | null, employers: Landmark[])
   return rows
 }
 
+const percent = (share: number) => Math.round(share * 1000) / 10
+
+/**
+ * The feasibility table: what the screen found, a line a finding, with how
+ * it was made and what it is not. A service that did not answer is a line
+ * saying so, never a blank read as none.
+ */
+export function feasibilityRows(screen: Feasibility & { outline?: string; sources?: { name: string }[] }): Cell[][] {
+  const rows: Cell[][] = [
+    ['Measure', 'Value'],
+    ['Lot area (acres, from its outline)', screen.acres],
+    ['Acres passing the screen', screen.buildable.acres],
+    ['Share of the lot passing (%)', percent(screen.buildable.share)],
+    [],
+  ]
+  if (screen.slope.available) {
+    rows.push(
+      ['Mean slope (%)', screen.slope.meanPercent],
+      ['Steepest slope (%)', screen.slope.maxPercent],
+      [`Share steeper than ${screen.slope.limitPercent}% (%)`, percent(screen.slope.shareOverLimit)],
+      ['Lowest ground (ft)', screen.slope.elevationMinFeet],
+      ['Highest ground (ft)', screen.slope.elevationMaxFeet],
+    )
+  } else rows.push(['Slope', `Not screened: ${screen.slope.reason}`])
+  if (screen.flood.available) {
+    rows.push(['Share in FEMA special flood hazard area (%)', screen.flood.mapped ? percent(screen.flood.shareInHazardArea) : 'Not mapped by FEMA here'])
+    for (const zone of screen.flood.zones) rows.push([`Flood zone ${zone.zone}${zone.subtype ? ` (${zone.subtype.toLowerCase()})` : ''} (%)`, percent(zone.share)])
+  } else rows.push(['Flood hazard', `Not screened: ${screen.flood.reason}`])
+  if (screen.wetlands.available) {
+    rows.push(['Share mapped wetland (%)', percent(screen.wetlands.share)])
+    for (const type of screen.wetlands.types) rows.push([`${type.type}${type.code ? ` (${type.code})` : ''} (%)`, percent(type.share)])
+  } else rows.push(['Wetlands', `Not screened: ${screen.wetlands.reason}`])
+  if (screen.protectedLand.available) {
+    rows.push(['Share protected or publicly held land (%)', percent(screen.protectedLand.share)])
+    for (const unit of screen.protectedLand.units) {
+      rows.push([`${unit.counted ? '' : 'Inside the boundary of '}${unit.name}${unit.manager ? `, ${unit.manager}` : ''}${unit.designation ? ` (${unit.designation})` : ''} (%)`, percent(unit.share)])
+    }
+  } else rows.push(['Protected land', `Not screened: ${screen.protectedLand.reason}`])
+  rows.push(
+    [],
+    ['Method', `${screen.cells.count} cells about ${screen.cells.spacingFeet} ft apart over the lot${screen.outline === 'box' ? "'s bounding box" : ''}; each given its elevation and tested against the flood, wetland and protected-area outlines.`],
+    ['Sources', (screen.sources ?? []).map((source) => source.name).join('; ') || 'USGS 3DEP; FEMA National Flood Hazard Layer; National Wetlands Inventory; PAD-US'],
+    ['Note', 'A screen from public maps, not a survey, an elevation certificate or a wetland delineation. Zoning, access, utilities and soils are not part of it.'],
+  )
+  return rows
+}
+
+/** The crime table: reported violent and property offenses by radius, where they stand, and what was reported. */
+export function crimeRows(answer: CrimeAnswer): Cell[][] {
+  if (!answer.covered) {
+    return [[answer.elsewhere
+      ? `This site is in ${answer.elsewhere}, which has its own police; their reported crime is not published here. This is not a count of zero.`
+      : 'This site is outside the area of the police agency whose reported crime is published here. This is not a count of zero.']]
+  }
+  const head = (first: string): Cell[] => [first, ...answer.rings.map((ring) => `${ring.miles} mile`)]
+  const rows: Cell[][] = [
+    head(`Reported, ${answer.from} to ${answer.to}`),
+    ['Violent crime', ...answer.rings.map((ring) => ring.violent)],
+    ['Property crime', ...answer.rings.map((ring) => ring.property)],
+    ['Other reported offenses', ...answer.rings.map((ring) => ring.other)],
+  ]
+  if (answer.compared) {
+    rows.push(
+      ["Share of the market's parcels with fewer violent offenses (%)", ...answer.rings.map((ring) => ring.violentAbove)],
+      ["Share of the market's parcels with fewer property offenses (%)", ...answer.rings.map((ring) => ring.propertyAbove)],
+    )
+  }
+  if (answer.rings.some((ring) => ring.covered < 0.98)) rows.push(['Share of each circle the figures cover (%)', ...answer.rings.map((ring) => Math.round(ring.covered * 100))])
+  rows.push([], head('What was reported'))
+  for (const category of answer.categories.slice(0, 20)) rows.push([`${category.category} (${category.kind})`, ...category.counts])
+  rows.push([], ['Agency', answer.agency])
+  if (answer.definitions.violent) rows.push(['Violent crime means', answer.definitions.violent])
+  if (answer.definitions.property) rows.push(['Property crime means', answer.definitions.property])
+  for (const note of answer.notes) rows.push(['Note', note])
+  return rows
+}
+
 export function chainsRows(chains: NearbyBusiness[]): Cell[][] {
   return [
     ['Name', 'Brand', 'Sector', 'Address', 'Miles'],
@@ -120,4 +203,24 @@ export function csv(rows: Cell[][]): string {
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
   }
   return rows.map((row) => row.map(cell).join(',')).join('\n')
+}
+
+/** The same rows with tabs between cells: what a spreadsheet takes from the clipboard. */
+export function tsv(rows: Cell[][]): string {
+  return rows.map((row) => row.map((v) => (v == null ? '' : String(v).replace(/[\t\n\r]+/g, ' '))).join('\t')).join('\n')
+}
+
+/**
+ * The rows as an HTML table, for the clipboard: pasted into Word, Google Docs,
+ * PowerPoint or an email it lands as a real table, which then takes the
+ * styles of whatever document it is pasted into. The first row is the
+ * heading; a short row's last cell runs to the table's edge. No styling and
+ * no name on it: it is going under somebody else's letterhead.
+ */
+export function htmlTable(rows: Cell[][]): string {
+  const width = Math.max(1, ...rows.map((row) => row.length))
+  const clean = (v: Cell) => (v == null ? '' : String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'))
+  const line = (row: Cell[], tag: 'th' | 'td') =>
+    `<tr>${row.map((v, i) => `<${tag}${i === row.length - 1 && row.length < width ? ` colspan="${width - row.length + 1}"` : ''}>${clean(v)}</${tag}>`).join('')}</tr>`
+  return `<table>${rows.map((row, i) => line(row, i === 0 ? 'th' : 'td')).join('')}</table>`
 }

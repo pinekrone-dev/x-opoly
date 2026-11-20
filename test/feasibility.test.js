@@ -9,11 +9,12 @@
  */
 import assert from 'node:assert/strict'
 import test, { after, before, describe } from 'node:test'
+import fs from 'node:fs'
 import zlib from 'node:zlib'
 
 import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
-import { feasibilityReport, runTool } from '../app/lib/mcp.js'
+import { feasibilityReport, markdownTable, pieceOf, runTool } from '../app/lib/mcp.js'
 import { siteFeasibility } from '../app/lib/feasibility.js'
 import { RESULT_COLORS, acresOf, assess, boxOf, cellFeatures, cellTileReader, gridOver, inRingSet, insideSite, partsOf, resultsOn, slopesOf, validCellMap } from '../src/lib/feasibility.ts'
 import { renderMap } from '../app/lib/mapimage.js'
@@ -297,9 +298,20 @@ describe('the route and the connector', () => {
   let stand = services()
   const record = { id: 7, ad: '7 Ridge Rd', ow: 'Vance Holdings', mv: 900000, ac: 9.9, at: 'Land', bb: [W, S, E, N] }
   const blob = zlib.gzipSync(Buffer.from(JSON.stringify({ 7: record })))
+  // A second market that can be searched: seven parcels' filter columns (the
+  // pipeline's fixture, see parcel-cols.test.js) and the records of three.
+  const kent = {
+    5: { id: 5, ad: '5 Mill Rd', ow: 'Vance Logistics', mv: 5200000, ac: 8.5, at: 'Industrial', bb: [-75.45, 39.15, -75.44, 39.16] },
+    2: { id: 2, ad: '2 High St', ow: 'Reyes Holdings', mv: 2500000, ac: 3.1, at: 'Retail', bb: [-75.4, 39.2, -75.39, 39.21] },
+    3: { id: 3, ad: '3 Farm Ln', ow: 'Okafor Trust', mv: 90000, ac: 12, at: 'Land', bb: [-75.3, 39.3, -75.29, 39.31] },
+  }
+  const kentBlob = zlib.gzipSync(Buffer.from(JSON.stringify(kent)))
   const FILES = {
     'sacramento-ca/rows.json': Buffer.from(JSON.stringify({ v: 1, n: 1, per: 300, shards: 1, offsets: [0, blob.length], built: 1700000000 })),
     'sacramento-ca/rows.pack': blob,
+    'kent-de/cols.bin': fs.readFileSync(new URL('./fixtures/cols.bin', import.meta.url)),
+    'kent-de/rows.json': Buffer.from(JSON.stringify({ v: 1, n: 3, per: 300, shards: 1, offsets: [0, kentBlob.length], built: 1700000000 })),
+    'kent-de/rows.pack': kentBlob,
   }
   assert.equal(shardOf(7, 1), 0)
   const call = async (path) => {
@@ -394,6 +406,76 @@ describe('the route and the connector', () => {
     assert.deepEqual(many.ranked.map((r) => r.id), ['7', '999'])
     assert.equal(many.ranked[0].buildableAcres, 4.17)
     assert.match(many.ranked[1].error, /No such parcel/)
+  })
+
+  const run = (name, input) => runTool(name, input, {
+    origin: 'http://localhost',
+    scope: ['read', 'maps'],
+    call: (path, init = {}) => app.fetch(new Request(`http://localhost${path}`, { ...init, headers: { ...(init.headers || {}), cookie } })),
+  })
+
+  test('find_sites searches and screens in one step, ranked by the acres that pass', async () => {
+    const found = (await run('find_sites', { market: 'kent-de', acresMin: 5, valueMin: 50000 })).structuredContent
+    assert.equal(found.matches, 2)
+    assert.equal(found.screened, 2)
+    assert.deepEqual(found.sites.map((site) => site.id).sort(), ['3', '5'])
+    assert.ok(found.sites[0].buildableAcres >= found.sites[1].buildableAcres, 'most acres passing first')
+    assert.equal(found.sites[0].buildablePercent, 100, 'nothing in the stand-in maps is near Delaware')
+    assert.match(found.sites.find((site) => site.id === '5').address, /5 Mill Rd/)
+    assert.equal(found.sites.find((site) => site.id === '5').assetType, 'Industrial')
+    assert.equal(found.remaining, 0)
+    assert.equal(found.next, undefined)
+    assert.match(found.summary, /2 parcels match; 2 screened/)
+    // A slope nobody could meet screens them out, and says why.
+    const none = (await run('find_sites', { market: 'kent-de', acresMin: 5, valueMin: 50000, maxSlopePercent: 5, minBuildablePercent: 50 })).structuredContent
+    assert.deepEqual(none.sites, [])
+    assert.equal(none.screenedOut.length, 2)
+    assert.match(none.screenedOut[0].why, /100% of the lot is steeper than 5%/)
+    assert.match(none.summary, /0 of them pass what was asked/)
+    const empty = (await run('find_sites', { market: 'kent-de', acresMin: 5000 })).structuredContent
+    assert.equal(empty.screened, 0)
+    assert.match(empty.summary, /No parcel in this market meets those criteria/)
+    // A market that cannot be searched says so in the search's own words.
+    assert.equal((await run('find_sites', { market: 'sacramento-ca', acresMin: 1 })).isError, true)
+  })
+
+  test('site_pieces hands back pieces for someone else\'s brief, each with its source and none with a brand', async () => {
+    const out = (await run('site_pieces', { market: 'sacramento-ca', id: '7' })).structuredContent
+    assert.equal(out.site, '7 Ridge Rd, CA')
+    assert.deepEqual(out.pieces.map((piece) => piece.id), ['property', 'feasibility'])
+    const property = out.pieces[0]
+    assert.match(property.text, /^7 Ridge Rd, CA is a 9\.9-acre land parcel/)
+    assert.match(property.text, /assessed at \$900,000\.$/)
+    assert.deepEqual(property.table.columns, ['Item', 'Detail'])
+    assert.deepEqual(property.table.rows.find((row) => row[0] === 'Owner of record'), ['Owner of record', 'Vance Holdings'])
+    assert.equal(property.source, "The county assessor's roll")
+    assert.match(property.markdown, /^\*\*Property\*\*\n\n7 Ridge Rd, CA is a/)
+    assert.match(property.markdown, /\| Item \| Detail \|\n\| --- \| --- \|\n\| Address \| 7 Ridge Rd, CA \|/)
+    assert.match(property.markdown, /_Source: The county assessor's roll_$/)
+    const feasibility = out.pieces[1]
+    assert.match(feasibility.text, /About 4\.17 of 9\.88 acres \(42\.2%\) pass the screen/)
+    assert.deepEqual(feasibility.table.rows.find((row) => row[0] === 'Passing the screen'), ['Passing the screen', '4.17 acres (42.2%)'])
+    assert.match(feasibility.table.rows.find((row) => row[0] === 'FEMA flood hazard area')[1], /46\.7% of the lot; zone X 53\.3%, AE 46\.7%/)
+    assert.match(feasibility.source, /USGS 3D Elevation Program.*FEMA National Flood Hazard Layer/)
+    assert.equal(feasibility.image, undefined, 'no map is published for this market, so no picture')
+    // What could not be made is named, with why, and is not a silent gap.
+    assert.deepEqual(out.notAvailable.map((gap) => gap.piece), ['crime', 'demographics', 'retail'])
+    assert.match(out.notAvailable[0].why, /No police agency's reported crime is published for sacramento-ca/)
+    // Nothing in a piece names this product: it goes under somebody else's letterhead.
+    assert.doesNotMatch(JSON.stringify(out.pieces), /Land Quotient|landquotient/i)
+    assert.match(out.use, /no branding/)
+    const one = (await run('site_pieces', { market: 'sacramento-ca', id: '7', pieces: ['property'] })).structuredContent
+    assert.deepEqual(one.pieces.map((piece) => piece.id), ['property'])
+    assert.equal(one.notAvailable, undefined)
+    assert.equal((await run('site_pieces', { market: 'sacramento-ca', id: '999' })).isError, true)
+    assert.equal((await run('site_pieces', { market: 'sacramento-ca' })).isError, true)
+  })
+
+  test('a table reads as Markdown, bars and all', () => {
+    assert.equal(markdownTable(['A', 'B'], [['x|y', 1], [null, 'two\nlines']]), '| A | B |\n| --- | --- |\n| x\\|y | 1 |\n|  | two lines |')
+    const bare = pieceOf({ id: 'parcel-map', title: 'Parcel map', image: 'https://example.test/a.png', source: 'County parcel lines' })
+    assert.equal(bare.table, undefined)
+    assert.equal(bare.markdown, '**Parcel map**\n\n![Parcel map](https://example.test/a.png)\n\n_Source: County parcel lines_')
   })
 
   test('a lot nothing stands in the way of says so', () => {

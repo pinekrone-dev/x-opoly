@@ -19,6 +19,7 @@ export const PIECES = {
   'parcel-map': { title: 'Parcel map', group: 'Maps' },
   'location-map': { title: 'Location map', group: 'Maps' },
   'retail-map': { title: 'Retail map', group: 'Maps' },
+  'feasibility-map': { title: 'Site feasibility map', group: 'Maps' },
 }
 
 const camelPlace = (r) => ({

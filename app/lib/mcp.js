@@ -10,6 +10,7 @@
  */
 
 import { fullAddress } from '../../src/lib/address.ts'
+import { demographicsRows } from '../../src/lib/libraryPieces.ts'
 import { safeLogo } from './logos.js'
 import { squeeze } from './places.js'
 
@@ -19,7 +20,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. site_feasibility screens a parcel for buildability in any market (slope, FEMA flood hazard, wetlands, protected land, and the acres that pass), one lot or up to five ranked: use it after search_parcels to narrow a list. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (market by market; it says when a market or a site is not covered), and where it is published market_layers lists a crime layer that make_map can switch on. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. find_sites searches and screens in one step, returning the matches ranked by the acres that pass (use it for "find me a site for..."). site_pieces returns ready-made, unbranded pieces about a parcel (property, feasibility, crime, demographics, retail, a map) for the user to paste into their own brief; it never writes the brief. site_feasibility screens a parcel for buildability in any market (slope, FEMA flood hazard, wetlands, protected land, and the acres that pass), one lot or up to five ranked: use it after search_parcels to narrow a list. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (market by market; it says when a market or a site is not covered), and where it is published market_layers lists a crime layer that make_map can switch on. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files: there, search_parcels finds a parcel by address, owner or parcel number (text alone) and get_parcel reads any lot, but filters and totals are not available; the tool says so.`
 
@@ -214,6 +215,40 @@ export const TOOLS = [
         image: { type: 'boolean', description: 'Also draw the lot as a map, each cell coloured by what it came to: passes, steep, flood hazard, wetland, protected land (default true for one parcel; the image link opens without signing in).' },
       },
       required: ['market'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'find_sites',
+    title: 'Find and screen sites',
+    description: "Search a market for parcels that meet criteria and screen the matches for buildability in one step: the search of search_parcels (asset type, acres, value, zoning, vacant, a circle, owner signals...), then site_feasibility on each match (slope, FEMA flood hazard, wetlands, protected land), returning the lots ranked by the acres that pass, with what stands in the way of each. Give minBuildableAcres or minBuildablePercent to keep only the finalists. Eight matches are screened a call, the most valuable first; `offset` screens the next eight, and the answer says how many matches remain. This is the way to go from \"find me a site for X\" to a short list.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        ...CRITERIA,
+        maxSlopePercent: { type: 'number', minimum: 1, maximum: 100, description: 'The steepest ground counted as buildable, in percent (default 15).' },
+        minBuildableAcres: { type: 'number', minimum: 0, description: 'Keep only lots with at least this many acres passing the screen.' },
+        minBuildablePercent: { type: 'number', minimum: 0, maximum: 100, description: 'Keep only lots with at least this share passing the screen.' },
+        offset: { type: 'integer', minimum: 0, description: 'How many matches to skip: 8 for the second eight, 16 for the third.' },
+      },
+      required: ['market'],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'site_pieces',
+    title: 'Pieces for a site',
+    description: "Ready-made pieces about one parcel, for pasting into the user's own brief, offering memorandum or email: each stands alone, carries no branding, and comes as a short paragraph, a table (also as Markdown) and, where it has one, an image link, with its public source named. Pieces: property (the county record), feasibility (slope, flood hazard, wetlands, protected land and the acres that pass, with a map of the lot), crime (reported violent and property crime within a quarter, a half and a mile, where the police publish it), demographics (population, households, income at 1, 3 and 5 miles), retail (the chains within a mile) and parcel-map (the lot outlined on the street map). Ask for the ones wanted; without `pieces` it returns property, feasibility, crime, demographics and retail. It does not write the brief: the user's document and branding are theirs.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        id: { type: 'string', description: 'The parcel id from search_parcels or find_sites.' },
+        pieces: { type: 'array', items: { type: 'string', enum: ['property', 'feasibility', 'crime', 'demographics', 'retail', 'parcel-map'] }, description: 'Which pieces to make (default: property, feasibility, crime, demographics, retail).' },
+        images: { type: 'boolean', description: 'Draw the images that go with the pieces (the feasibility map; default true). Image links open without signing in and are kept 30 days.' },
+      },
+      required: ['market', 'id'],
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
@@ -585,6 +620,33 @@ const text = (value) => ({ type: 'text', text: typeof value === 'string' ? value
 const result = (value, extra = {}) => ({ content: [text(value)], structuredContent: typeof value === 'object' ? value : undefined, ...extra })
 const failure = (message) => ({ content: [text(message)], isError: true })
 
+/** A table as Markdown, for a client that pastes text. */
+export function markdownTable(columns, rows) {
+  const cell = (value) => String(value ?? '').replace(/\|/g, '\\|').replace(/\n/g, ' ')
+  return [`| ${columns.map(cell).join(' | ')} |`, `| ${columns.map(() => '---').join(' | ')} |`, ...rows.map((row) => `| ${columns.map((_, i) => cell(row[i])).join(' | ')} |`)].join('\n')
+}
+
+/**
+ * One piece for someone's own brief: a title, a paragraph, a table, an
+ * image, the source. Nothing in it names this product: it goes into a
+ * document under somebody else's letterhead, and what it must carry is where
+ * the figures came from.
+ */
+export function pieceOf({ id, title, text: words, columns = null, rows = null, image = null, source = null, note = null }) {
+  const table = columns && rows && rows.length ? { columns, rows } : undefined
+  const markdown = [
+    `**${title}**`,
+    words || null,
+    table ? markdownTable(columns, rows) : null,
+    image ? `![${title}](${image})` : null,
+    note ? `_${note}_` : null,
+    source ? `_Source: ${source}_` : null,
+  ].filter(Boolean).join('\n\n')
+  return { id, title, text: words || undefined, table, image: image || undefined, note: note || undefined, source: source || undefined, markdown }
+}
+
+const money = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? `$${Math.round(Number(value)).toLocaleString('en-US')}` : null)
+
 /** The feasibility route's answer, with the findings said plainly and the limits of the screen beside them. */
 export function feasibilityReport(b) {
   const pct = (share) => `${Math.round((Number(share) || 0) * 1000) / 10}%`
@@ -933,6 +995,192 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
         landmarks: groups,
         source: 'Wikidata (community-edited; notable places only, figures as Wikidata records them, some years old)',
       })
+    }
+
+    case 'find_sites': {
+      if (!input.market) return failure('market is required.')
+      const params = searchParams(input)
+      const offset = Math.max(0, Math.floor(Number(input.offset) || 0))
+      const batch = 8
+      params.set('limit', String(batch))
+      if (offset) params.set('offset', String(offset))
+      const found = await ask(`/api/gis/parcels?${params.toString()}`)
+      if (found.status !== 200) return failure(refusal(found))
+      const rows = (found.body.rows || []).slice(0, batch)
+      const total = Number(found.body.count) || rows.length
+      if (!rows.length) return result({ market: input.market, matches: total, screened: 0, sites: [], summary: offset ? 'No more matches to screen.' : 'No parcel in this market meets those criteria.' })
+      const slope = Number(input.maxSlopePercent)
+      const limit = Number.isFinite(slope) && slope >= 1 && slope <= 100 ? `&maxSlope=${Math.round(slope)}` : ''
+      // All at once: each is four requests to federal services, and a lot screened before is answered from the edge.
+      const screened = await Promise.all(rows.map(async (row) => {
+        const answer = await ask(`/api/gis/feasibility?market=${input.market}&id=${encodeURIComponent(String(row.id))}${limit}`)
+        const record = readable(row, input.market)
+        if (answer.status !== 200) return { id: String(row.id), address: record.fullAddress ?? record.address, notScreened: refusal(answer) }
+        const report = feasibilityReport(answer.body || {})
+        return {
+          id: String(row.id), address: record.fullAddress ?? record.address, owner: record.owner, assetType: record.assetType, zoning: record.zoning, value: record.value,
+          acres: report.acres, buildableAcres: report.buildable.acres, buildablePercent: report.buildable.percent,
+          flags: report.flags, notScreened: report.buildable.notScreened,
+        }
+      }))
+      const minAcres = Number(input.minBuildableAcres)
+      const minPercent = Number(input.minBuildablePercent)
+      const asked = (Number.isFinite(minAcres) && minAcres > 0) || (Number.isFinite(minPercent) && minPercent > 0)
+      const passes = (site) => site.buildableAcres != null && !(Number.isFinite(minAcres) && site.buildableAcres < minAcres) && !(Number.isFinite(minPercent) && site.buildablePercent < minPercent)
+      const ranked = screened.filter((site) => site.buildableAcres != null).sort((a, b) => b.buildableAcres - a.buildableAcres)
+      const sites = asked ? ranked.filter(passes) : ranked
+      const out = asked ? ranked.filter((site) => !passes(site)).map((site) => ({ id: site.id, address: site.address, buildableAcres: site.buildableAcres, buildablePercent: site.buildablePercent, why: site.flags.slice(0, 2).join(' ') || 'Below the threshold asked for.' })) : undefined
+      const failed = screened.filter((site) => site.buildableAcres == null).map((site) => ({ id: site.id, address: site.address, why: site.notScreened }))
+      const left = Math.max(0, total - offset - rows.length)
+      return result({
+        market: input.market,
+        matches: total,
+        screened: rows.length,
+        screenedFrom: offset + 1,
+        maxSlopePercent: Number.isFinite(slope) && slope >= 1 && slope <= 100 ? Math.round(slope) : 15,
+        sites,
+        screenedOut: out && out.length ? out : undefined,
+        couldNotScreen: failed.length ? failed : undefined,
+        remaining: left,
+        next: left ? { offset: offset + rows.length } : undefined,
+        summary: `${total.toLocaleString('en-US')} parcel${total === 1 ? '' : 's'} match; ${rows.length} screened (the most valuable${offset ? `, from number ${offset + 1}` : ''})${asked ? `, ${sites.length} of them pass what was asked` : ''}.${left ? ` ${left.toLocaleString('en-US')} more can be screened with offset ${offset + rows.length}.` : ''}`,
+        then: 'site_feasibility draws any one of these; site_pieces returns pieces about it for a brief.',
+        caveats: ['A screen from public maps, not a survey. Zoning, access, utilities and title are not part of it.'],
+      })
+    }
+
+    case 'site_pieces': {
+      if (!input.market || !input.id) return failure('market and id are required.')
+      const KNOWN = ['property', 'feasibility', 'crime', 'demographics', 'retail', 'parcel-map']
+      const wanted = Array.isArray(input.pieces) && input.pieces.length ? KNOWN.filter((k) => input.pieces.map(String).includes(k)) : ['property', 'feasibility', 'crime', 'demographics', 'retail']
+      if (!wanted.length) return failure(`pieces is any of ${KNOWN.join(', ')}.`)
+      const record = await ask(`/api/gis/parcel?market=${input.market}&id=${encodeURIComponent(String(input.id))}`)
+      if (record.status !== 200) return failure(refusal(record))
+      const parcel = record.body.parcel || {}
+      const facts = readable(parcel, input.market)
+      const where = facts.fullAddress || facts.address || `Parcel ${facts.parcelId || input.id}`
+      const box = Array.isArray(parcel.bb) && parcel.bb.length === 4 ? parcel.bb.map(Number) : null
+      const at = box && box.every(Number.isFinite) ? { lat: (box[1] + box[3]) / 2, lng: (box[0] + box[2]) / 2 } : null
+      const pieces = []
+      const missing = []
+      const inline = []
+      const draw = async (body) => {
+        const made = await ask('/api/gis/map-image', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ market: input.market, state: {}, width: 1200, height: 800, ...body }) })
+        if (made.status !== 200) return { error: refusal(made) }
+        if (Number(made.body.bytes) <= 1_500_000) {
+          const file = await call(made.body.path)
+          if (file.status === 200) inline.push({ type: 'image', data: toBase64(new Uint8Array(await file.arrayBuffer())), mimeType: 'image/png' })
+        }
+        return { image: `${origin}${made.body.path}` }
+      }
+      const jobs = {
+        property: async () => {
+          const rows = [
+            ['Address', facts.fullAddress || facts.address],
+            ['Parcel number', facts.parcelId],
+            ['Lot size', facts.acres != null ? `${Number(facts.acres).toLocaleString('en-US')} acres` : null],
+            ['Use', facts.assetType],
+            ['Zoning', [facts.zoning, facts.zoningCategory].filter(Boolean).join(', ') || null],
+            ['Assessed value', money(facts.value)],
+            ['Owner of record', facts.owner],
+            ['Owner mailing address', facts.mailing],
+            ['Last sale', facts.lastSaleYear],
+          ].filter(([, value]) => value != null && value !== '')
+          const words = `${where}${facts.acres != null ? ` is a ${Number(facts.acres).toLocaleString('en-US')}-acre` : ' is a'}${facts.assetType ? ` ${String(facts.assetType).toLowerCase()}` : ''} parcel${facts.parcelId ? ` (parcel ${facts.parcelId})` : ''}${money(facts.value) ? `, assessed at ${money(facts.value)}` : ''}.`
+          pieces.push(pieceOf({ id: 'property', title: 'Property', text: words, columns: ['Item', 'Detail'], rows, source: "The county assessor's roll", note: 'An assessed value is a tax figure, not an appraisal.' }))
+        },
+        feasibility: async () => {
+          const answer = await ask(`/api/gis/feasibility?market=${input.market}&id=${encodeURIComponent(String(input.id))}`)
+          if (answer.status !== 200) return missing.push({ piece: 'feasibility', why: refusal(answer) })
+          const b = answer.body
+          const report = feasibilityReport(b)
+          const pct = (share) => `${Math.round((Number(share) || 0) * 1000) / 10}%`
+          const rows = [['Lot area', `${b.acres} acres`], ['Passing the screen', `${b.buildable.acres} acres (${pct(b.buildable.share)})`]]
+          if (b.slope.available) rows.push(['Slope', `mean ${b.slope.meanPercent}%, steepest ${b.slope.maxPercent}%; ${pct(b.slope.shareOverLimit)} over ${b.slope.limitPercent}%`], ['Ground elevation', `${b.slope.elevationMinFeet.toLocaleString('en-US')} to ${b.slope.elevationMaxFeet.toLocaleString('en-US')} ft`])
+          else rows.push(['Slope', `Not screened: ${b.slope.reason}`])
+          if (b.flood.available) rows.push(['FEMA flood hazard area', b.flood.mapped ? `${pct(b.flood.shareInHazardArea)} of the lot; zone ${b.flood.zones.map((z) => `${z.zone} ${pct(z.share)}`).join(', ')}` : 'Not mapped by FEMA here'])
+          else rows.push(['FEMA flood hazard area', `Not screened: ${b.flood.reason}`])
+          if (b.wetlands.available) rows.push(['Mapped wetland', b.wetlands.share > 0 ? `${pct(b.wetlands.share)} (${[...new Set(b.wetlands.types.map((t) => t.type))].join(', ')})` : 'None'])
+          else rows.push(['Mapped wetland', `Not screened: ${b.wetlands.reason}`])
+          if (b.protectedLand.available) rows.push(['Protected or public land', b.protectedLand.share > 0 ? `${pct(b.protectedLand.share)} (${b.protectedLand.units.filter((u) => u.counted).slice(0, 3).map((u) => u.name).join('; ')})` : 'None'])
+          else rows.push(['Protected or public land', `Not screened: ${b.protectedLand.reason}`])
+          const drawn = input.images !== false && b.map ? await draw({ cells: b.map, title: `Site feasibility: ${where}` }) : {}
+          pieces.push(pieceOf({
+            id: 'feasibility', title: 'Site feasibility', text: report.summary, columns: ['Screen', 'Finding'], rows, image: drawn.image,
+            source: (b.sources || []).map((src) => src.name).join('; '),
+            note: 'A screen from public maps, not a survey, an elevation certificate or a wetland delineation.',
+          }))
+        },
+        crime: async () => {
+          if (!at) return missing.push({ piece: 'crime', why: 'The parcel has no place on the map.' })
+          const answer = await ask(`/api/gis/crime?market=${input.market}&lat=${at.lat}&lng=${at.lng}`)
+          if (answer.status !== 200) return missing.push({ piece: 'crime', why: refusal(answer) })
+          const report = crimeReport(answer.body, { market: input.market })
+          if (!report.covered) return missing.push({ piece: 'crime', why: report.summary })
+          const label = (m) => (m === 0.25 ? '1/4 mile' : m === 0.5 ? '1/2 mile' : `${m} mile`)
+          pieces.push(pieceOf({
+            id: 'crime', title: 'Reported crime nearby', text: report.summary,
+            columns: ['Reported offenses', ...report.within.map((w) => label(w.miles))],
+            rows: [['Violent crime', ...report.within.map((w) => w.violent)], ['Property crime', ...report.within.map((w) => w.property)]],
+            source: `${report.policedBy}, offenses reported ${report.period.from} to ${report.period.to}`,
+            note: [answer.body.definitions?.violent, answer.body.definitions?.property].filter(Boolean).join(' '),
+          }))
+        },
+        demographics: async () => {
+          if (!at) return missing.push({ piece: 'demographics', why: 'The parcel has no place on the map.' })
+          const answer = await ask(`/api/demographics?lat=${at.lat}&lng=${at.lng}`)
+          if (answer.status !== 200 || !Array.isArray(answer.body?.radii)) return missing.push({ piece: 'demographics', why: refusal(answer) })
+          const table = demographicsRows(answer.body).filter((row) => row.length > 1 && row[0] !== 'Source')
+          const first = answer.body.radii[0]
+          const people = first?.metrics?.population
+          pieces.push(pieceOf({
+            id: 'demographics', title: 'Demographics',
+            text: people != null ? `About ${Math.round(people).toLocaleString('en-US')} people live within ${first.miles} mile${first.miles === 1 ? '' : 's'} of the site.` : null,
+            columns: table[0], rows: table.slice(1), source: answer.body.source,
+          }))
+        },
+        retail: async () => {
+          if (!at) return missing.push({ piece: 'retail', why: 'The parcel has no place on the map.' })
+          const answer = await ask(`/api/places/nearby?${nearbyQuery(at.lat, at.lng, { radiusMiles: 1, category: 'chains' })}`)
+          if (answer.status !== 200) return missing.push({ piece: 'retail', why: refusal(answer) })
+          const nearest = new Map()
+          for (const store of answer.body.results || []) {
+            const key = store.brand || store.name
+            if (key && !nearest.has(key)) nearest.set(key, store)
+          }
+          const rows = [...nearest.values()].slice(0, 25).map((store) => [store.brand || store.name, store.sector ?? '', Math.round(Number(store.miles) * 100) / 100])
+          if (!rows.length) return missing.push({ piece: 'retail', why: 'No national or regional chain is listed within one mile.' })
+          pieces.push(pieceOf({
+            id: 'retail', title: 'Retail within one mile',
+            text: `${nearest.size} national and regional chain${nearest.size === 1 ? '' : 's'} within one mile, the nearest being ${rows.slice(0, 4).map((row) => row[0]).join(', ')}.`,
+            columns: ['Chain', 'Sector', 'Miles'], rows, source: answer.body.source || 'OpenStreetMap contributors',
+            note: 'A store the directory has not tagged with its brand can be missing, so the count is a floor.',
+          }))
+        },
+        'parcel-map': async () => {
+          if (!at) return missing.push({ piece: 'parcel-map', why: 'The parcel has no place on the map.' })
+          const drawn = await draw({ state: { center: [at.lng, at.lat], zoom: 17 }, highlight: [String(parcel.id ?? input.id)], title: where })
+          if (drawn.error) return missing.push({ piece: 'parcel-map', why: drawn.error })
+          pieces.push(pieceOf({ id: 'parcel-map', title: 'Parcel map', image: drawn.image, source: 'County parcel lines; street map by OpenStreetMap contributors' }))
+        },
+      }
+      // One after another: a piece that fails is named and the rest still come.
+      for (const name of wanted) {
+        try {
+          await jobs[name]()
+        } catch (cause) {
+          missing.push({ piece: name, why: String(cause?.message || 'could not be made just now').slice(0, 160) })
+        }
+      }
+      const out = {
+        market: input.market,
+        id: String(parcel.id ?? input.id),
+        site: where,
+        pieces,
+        notAvailable: missing.length ? missing : undefined,
+        use: 'Each piece stands alone and carries no branding (a map keeps only the small credit line for its sources): paste its text, table (or markdown) and image into the user\'s own document, under their name. Keep the source line with it. Do not present these as a finished brief.',
+      }
+      return { content: [text(out), ...inline.slice(0, 2)], structuredContent: out }
     }
 
     case 'site_feasibility': {

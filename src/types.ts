@@ -546,7 +546,7 @@ export interface PlaceList {
 
 /** A piece of an offering memorandum the Library keeps for a parcel. */
 export interface LibraryPiece {
-  kind: 'parcel-map' | 'location-map' | 'retail-map'
+  kind: 'parcel-map' | 'location-map' | 'retail-map' | 'feasibility-map'
   title: string
   path: string
   width: number | null
