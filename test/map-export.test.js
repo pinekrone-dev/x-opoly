@@ -306,7 +306,7 @@ describe('the map image route', () => {
 
   test('a lot\'s feasibility cells are drawn, framed on the lot', async () => {
     const d = 0.0006
-    const cells = { box: [C[0] - d, C[1] - d, C[0] + d, C[1] + d], nx: 2, ny: 2, results: [0, 3, 4, -1] }
+    const cells = { box: [C[0] - d, C[1] - d, C[0] + d, C[1] + d], nx: 2, ny: 2, results: [0, 4, 8, -1] }
     const res = await json('/api/gis/map-image', { market: 'denver-co', title: 'Site feasibility: 1 Test St', cells, width: 800, height: 600 })
     assert.equal(res.status, 200, JSON.stringify(res.body))
     assert.ok(res.body.zoom >= 16 && res.body.zoom <= 19, `framed on the lot, not the county: zoom ${res.body.zoom}`)
