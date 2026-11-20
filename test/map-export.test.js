@@ -244,6 +244,25 @@ const MAP_TILE_FETCH = async () => {
   return encodePng(256, 256, rgba)
 }
 
+// The four federal services, standing in: flat ground, and one flood zone
+// over the west half of whatever box is asked about.
+let screensAsked = 0
+const FEASIBILITY_FETCH = async (url, init = {}) => {
+  screensAsked += 1
+  const says = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  const address = String(url)
+  if (address.includes('3DEPElevation')) {
+    const points = JSON.parse(new URLSearchParams(String(init.body)).get('geometry')).points
+    return says({ samples: points.map((_, i) => ({ locationId: i, value: '1600', resolution: 1 })) })
+  }
+  if (address.includes('NFHL')) {
+    const [w, s, e, n] = new URL(address).searchParams.get('geometry').split(',').map(Number)
+    const mid = (w + e) / 2
+    return says({ features: [{ attributes: { FLD_ZONE: 'AE', ZONE_SUBTY: null, SFHA_TF: 'T' }, geometry: { rings: [[[w - 1, s - 1], [mid, s - 1], [mid, n + 1], [w - 1, n + 1], [w - 1, s - 1]]] } }] })
+  }
+  return says({ features: [] })
+}
+
 const call = async (path, init = {}, anonymous = false) => {
   const res = await app.fetch(new Request(`http://localhost${path}`, {
     ...init, headers: { ...(init.body ? { 'content-type': 'application/json' } : {}), ...(init.headers || {}), ...(cookie && !anonymous ? { cookie } : {}) },
@@ -264,7 +283,7 @@ before(async () => {
   app = await createServer({
     DATA_DIR: temp.directory, DB_FILE: `${temp.directory}/test.db`,
     JWKS_FETCH: async () => new Response(JSON.stringify({ keys: [jwk] }), { status: 200, headers: { 'content-type': 'application/json' } }),
-    PROSPECTOR_DATA, TILE_ARCHIVES: archives, MAP_TILE_FETCH,
+    PROSPECTOR_DATA, TILE_ARCHIVES: archives, MAP_TILE_FETCH, FEASIBILITY_FETCH,
   })
   await json('/api/auth/register', { email: 'maps@example.com', password: 'a long enough password', name: 'M' })
   const rows = LOTS.map((lot, i) => ({ id: lot.id, ad: `${lot.id} Test St`, ow: 'Owner LLC', at: 'Land', mv: [900000, 100000, 50000][i], ac: 0.3, bb: boxOf(lot.ring) }))
@@ -432,6 +451,36 @@ describe('the library', () => {
     const kinds = (await json('/api/library')).body.items[0].pieces.map((p) => p.kind).sort()
     assert.deepEqual(kinds, ['location-map', 'parcel-map'])
     assert.equal((await json(`/api/library/${place.id}/pieces`, { kind: 'nonsense' })).status, 400)
+  })
+
+  test('the feasibility map is the lot\'s own screen, drawn and kept as a piece', async () => {
+    const before = screensAsked
+    const made = await json(`/api/library/${place.id}/pieces`, { kind: 'feasibility-map' })
+    assert.equal(made.status, 201, JSON.stringify(made.body))
+    assert.equal(made.body.piece.title, 'Site feasibility map')
+    assert.equal(made.body.piece.kind, 'feasibility-map')
+    assert.equal(screensAsked - before, 4, 'one request to each of the four services')
+    const file = await call(made.body.piece.path, {}, true)
+    const image = await decodePng(new Uint8Array(await file.arrayBuffer()))
+    assert.equal(image.width, 1200)
+    // Both colours of the screen are on the picture: flood blue and passing green.
+    let blue = 0
+    let green = 0
+    for (let o = 0; o < image.rgba.length; o += 4) {
+      const [r, g, b] = [image.rgba[o], image.rgba[o + 1], image.rgba[o + 2]]
+      if (b > 180 && r < 110 && g < 150) blue += 1
+      if (g > 130 && r < 90 && b < 120) green += 1
+    }
+    assert.ok(blue > 500, `flood cells are drawn (${blue})`)
+    assert.ok(green > 500, `passing cells are drawn (${green})`)
+    assert.ok((await json('/api/library')).body.items[0].pieces.some((p) => p.kind === 'feasibility-map'))
+    // A record with no parcel behind it cannot be screened, and says so.
+    const loose = (await json('/api/crm/places', { name: 'A corner', lat: C[1], lng: C[0], market: 'denver-co' })).body.record
+    await json('/api/library', { placeId: loose.id })
+    const refused = await json(`/api/library/${loose.id}/pieces`, { kind: 'feasibility-map' })
+    assert.equal(refused.status, 400)
+    assert.match(refused.body.error, /not tied to a parcel/)
+    await call(`/api/library/${loose.id}`, { method: 'DELETE' })
   })
 
   test('a parcel taken out of the library takes its pieces with it', async () => {

@@ -3,8 +3,8 @@ import WorkspaceNav from '../components/WorkspaceNav'
 import { api } from '../api'
 import { navigate } from '../lib/router'
 import {
-  MAP_PIECES, PACKAGE_MARKET, PIECE_SPECS, chainsRows, cleanPieces, csv, demographicsRows, employmentRows, packages,
-  type Package, type PieceId,
+  MAP_PIECES, PACKAGE_MARKET, PIECE_SPECS, chainsRows, cleanPieces, crimeRows, csv, demographicsRows, employmentRows, feasibilityRows, htmlTable, packages, tsv,
+  type Cell, type Package, type PieceId,
 } from '../lib/libraryPieces'
 import { zip, type ZipEntry } from '../lib/zip'
 import type { Account, BillingStatus, Deal, LibraryItem, LibraryPiece } from '../types'
@@ -80,20 +80,53 @@ function Entry({ item, picked, packageName, onChanged }: { item: LibraryItem; pi
     return made.piece
   }
 
-  /** One data piece as CSV text, from the same sources the map reads. */
-  const table = async (id: PieceId): Promise<string> => {
-    if (id === 'demographics') return csv(demographicsRows(await api.demographics(lat, lng)))
+  /** One data piece as rows, from the same sources the map reads. */
+  const rowsOf = async (id: PieceId): Promise<Cell[][]> => {
+    if (id === 'demographics') return demographicsRows(await api.demographics(lat, lng))
     if (id === 'employment') {
       const [data, found] = await Promise.all([
         api.demographics(lat, lng).catch(() => null),
         api.landmarks({ lat, lng, radius: 5, kinds: ['headquarters'] }).catch(() => null),
       ])
       if (!data && !found) throw new Error('Neither the Census nor the employer directory could be reached.')
-      return csv(employmentRows(data, found?.landmarks ?? []))
+      return employmentRows(data, found?.landmarks ?? [])
+    }
+    if (id === 'feasibility') {
+      if (!place.market || !place.parcelId) throw new Error('This record is not tied to a parcel, so it cannot be screened.')
+      return feasibilityRows(await api.parcels.feasibility(place.market, place.parcelId))
+    }
+    if (id === 'crime') {
+      if (!place.market) throw new Error('This record is not on a county map.')
+      // A market with no police file answers 404 with its own words, which is the message shown.
+      return crimeRows(await api.parcels.crime(place.market, lat, lng))
     }
     const found = await api.nearby({ lat, lng, category: 'chains', radius: 1 })
-    return csv(chainsRows(found.results))
+    return chainsRows(found.results)
   }
+  const table = async (id: PieceId): Promise<string> => csv(await rowsOf(id))
+
+  /*
+   * A table straight onto the clipboard, to paste into the broker's own
+   * document: as a real table for Word, Docs or PowerPoint, and as tabbed
+   * text for a spreadsheet. The clipboard is claimed at the click and filled
+   * when the rows arrive, which is how a browser lets a slow answer through.
+   */
+  const copyTable = (id: PieceId) =>
+    run(`copy:${id}`, async () => {
+      const rows = rowsOf(id)
+      if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/html': rows.then((r) => new Blob([htmlTable(r)], { type: 'text/html' })),
+          'text/plain': rows.then((r) => new Blob([tsv(r)], { type: 'text/plain' })),
+        })])
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(tsv(await rows))
+      } else {
+        throw new Error('This browser will not let a page copy. Download the CSV instead.')
+      }
+      setCopied(id)
+      window.setTimeout(() => setCopied(null), 1500)
+    })
 
   const one = (id: PieceId) =>
     run(id, async () => {
@@ -193,7 +226,7 @@ function Entry({ item, picked, packageName, onChanged }: { item: LibraryItem; pi
       {located ? (
         <>
           <p className="label mb-1.5 mt-4">Maps</p>
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {PIECE_SPECS.filter((p) => p.group === 'Maps').map((spec) => {
               const piece = pieces.get(spec.id as LibraryPiece['kind'])
               const link = piece ? `${window.location.origin}${piece.path}` : ''
@@ -248,9 +281,15 @@ function Entry({ item, picked, packageName, onChanged }: { item: LibraryItem; pi
                 <div key={spec.id} className={`rounded-lg border p-2 ${inPackage ? 'border-brand/50' : 'border-line opacity-70'}`} data-piece={spec.id}>
                   <p className="text-xs font-semibold text-ink">{spec.label}{inPackage ? <span className="ml-1.5 text-[10px] font-medium text-brand">in package</span> : null}</p>
                   <p className="mt-0.5 text-[10px] leading-snug text-faint">{spec.what}</p>
-                  <button type="button" className="mt-1.5 text-[11px] font-semibold text-brand hover:underline disabled:opacity-50" disabled={busy !== null} onClick={() => void one(spec.id)}>
-                    {busy === spec.id ? 'Reading…' : 'Download CSV'}
-                  </button>
+                  <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-semibold">
+                    <button type="button" className="text-brand hover:underline disabled:opacity-50" disabled={busy !== null} onClick={() => void copyTable(spec.id)}
+                      title="Copies the table; paste it into Word, Google Docs, PowerPoint or a spreadsheet">
+                      {busy === `copy:${spec.id}` ? 'Reading…' : copied === spec.id ? 'Copied' : 'Copy table'}
+                    </button>
+                    <button type="button" className="text-ink hover:underline disabled:opacity-50" disabled={busy !== null} onClick={() => void one(spec.id)}>
+                      {busy === spec.id ? 'Reading…' : 'Download CSV'}
+                    </button>
+                  </div>
                 </div>
               )
             })}
