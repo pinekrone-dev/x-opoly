@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import CrimeNearby from '../components/CrimeNearby'
+import SiteFeasibility from '../components/SiteFeasibility'
 import { CRIME_COLORS, CRIME_MARKETS, crimeFeatures, readCrime, type CrimeSummary } from '../lib/crime'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
@@ -5986,6 +5987,7 @@ export default function Gis({
                     lng={(((parcel.bb ?? selectedBox) as number[])[0] + ((parcel.bb ?? selectedBox) as number[])[2]) / 2}
                   />
                 ) : null}
+                {active && selected != null ? <SiteFeasibility key={`feasibility:${selected}`} market={active} id={String(selected)} /> : null}
                 {active === 'los-angeles-ca' ? (
                   <ZoningReport key={`zoning:${selected}`} market={active} apn={String(selected).padStart(10, '0')} />
                 ) : null}

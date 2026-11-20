@@ -19,7 +19,7 @@ export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
 const INSTRUCTIONS = `Land Quotient is a parcel map of US counties: every lot with its county record (owner, mailing address, values, land use, acreage, sale) plus layers such as zoning, permits, flood, power lines and fuel tanks.
 
-Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (market by market; it says when a market or a site is not covered), and where it is published market_layers lists a crime layer that make_map can switch on. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
+Start with list_markets to find the county slug (for example austin-tx). search_parcels answers "which parcels" questions with counts, totals and the top matches by value; get_parcel reads one lot in full, with its permits, code cases and recorded mortgages where the city publishes them. market_layers says what a county publishes. nearby_retail lists the national and regional chains around a point (Target to Zaxby's) with their logos, the tenant mix by sector and the nearest store of each brand, or finds particular brands. site_feasibility screens a parcel for buildability in any market (slope, FEMA flood hazard, wetlands, protected land, and the acres that pass), one lot or up to five ranked: use it after search_parcels to narrow a list. nearby_crime counts the violent and property crime reported within a quarter, a half and a mile of a site over the last year, with where that stands among the market's parcels (market by market; it says when a market or a site is not covered), and where it is published market_layers lists a crime layer that make_map can switch on. nearby_landmarks lists what sells a site: colleges, hospitals, stadiums and arenas, airports, malls, attractions and the headquarters of major employers, with enrolment, seats, passengers and headcount. add_to_list files parcels on a client's list (my_lists finds them by client or tag). make_map saves a map (layers, criteria, a circle, pins with logos for chains or landmarks) and returns a link that opens it in Land Quotient: offer it whenever a result is easier to see than to read. export_map_image draws a map (a saved one by name, or one described the same way) as a PNG with a link to the file, for a proposal or a deck. export_parcels_geojson returns the matching parcels with their real outlines as GeoJSON. platform_stats gives the totals across every market (markets, parcels, acres, roll value) for headline figures.
 
 Figures are the county's own. An assessed value is a tax figure, not an appraisal. California counties publish no owner names. Some markets are served from county files: there, search_parcels finds a parcel by address, owner or parcel number (text alone) and get_parcel reads any lot, but filters and totals are not available; the tool says so.`
 
@@ -197,6 +197,22 @@ export const TOOLS = [
         ...LANDMARKS,
         perKind: { type: 'integer', minimum: 1, maximum: 40, description: 'How many of each kind to list, largest first (default 10).' },
       },
+    },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  },
+  {
+    name: 'site_feasibility',
+    title: 'Site feasibility screen',
+    description: "A first screen of whether a parcel can be built on, in any market: how steep it is (mean and steepest slope, and the share over a limit, 15% unless said, from USGS 3DEP elevation), how much lies in FEMA's special flood hazard area and which flood zones it touches, how much is mapped wetland (National Wetlands Inventory), how much is protected or publicly held land (PAD-US), and the acres left after all of those are taken out. Give one parcel id, or up to five to compare, ranked by the acres that pass. Use it to narrow search_parcels results to the lots worth a closer look. A screen from public maps, not a survey; zoning, access and utilities are not part of it.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        market: MARKET,
+        id: { type: 'string', description: 'The parcel id from search_parcels.' },
+        ids: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Up to five parcel ids to screen and rank, in place of id.' },
+        maxSlopePercent: { type: 'number', minimum: 1, maximum: 100, description: 'The steepest ground counted as buildable, in percent (default 15).' },
+      },
+      required: ['market'],
     },
     annotations: { readOnlyHint: true, openWorldHint: true },
   },
@@ -568,6 +584,62 @@ const text = (value) => ({ type: 'text', text: typeof value === 'string' ? value
 const result = (value, extra = {}) => ({ content: [text(value)], structuredContent: typeof value === 'object' ? value : undefined, ...extra })
 const failure = (message) => ({ content: [text(message)], isError: true })
 
+/** The feasibility route's answer, with the findings said plainly and the limits of the screen beside them. */
+export function feasibilityReport(b) {
+  const pct = (share) => `${Math.round((Number(share) || 0) * 1000) / 10}%`
+  const flags = []
+  const slope = b.slope || {}
+  const flood = b.flood || {}
+  const wetlands = b.wetlands || {}
+  const land = b.protectedLand || {}
+  const build = b.buildable || {}
+  if (slope.available && slope.shareOverLimit > 0) flags.push(`${pct(slope.shareOverLimit)} of the lot is steeper than ${slope.limitPercent}% (steepest about ${slope.maxPercent}%).`)
+  if (flood.available && flood.shareInHazardArea > 0) {
+    const zones = (flood.zones || []).filter((z) => z.hazardArea).map((z) => (z.subtype ? `${z.zone} (${String(z.subtype).toLowerCase()})` : z.zone))
+    flags.push(`${pct(flood.shareInHazardArea)} is in FEMA's special flood hazard area${zones.length ? `, zone ${[...new Set(zones)].join(', ')}` : ''}.`)
+  }
+  if (flood.available && !flood.mapped) flags.push('FEMA has not mapped flood hazard on this ground, which is not the same as no hazard.')
+  if (wetlands.available && wetlands.share > 0) flags.push(`${pct(wetlands.share)} is mapped wetland (${[...new Set((wetlands.types || []).map((t) => t.type))].join(', ')}).`)
+  if (land.available) {
+    for (const unit of (land.units || []).filter((u) => u.counted).slice(0, 3)) {
+      flags.push(`${pct(unit.share)} is within ${unit.name}${unit.manager ? `, held by ${unit.manager}` : ''}${unit.designation ? ` (${unit.designation})` : ''}.`)
+    }
+    const around = (land.units || []).filter((u) => !u.counted).map((u) => u.name)
+    if (around.length) flags.push(`Inside the drawn boundary of ${[...new Set(around)].slice(0, 3).join(', ')}, which does not by itself restrict private land.`)
+  }
+  for (const section of [slope, flood, wetlands, land]) if (section.available === false && section.reason) flags.push(`Not screened: ${section.reason}`)
+  const passed = (build.screened || []).length
+  const said = passed
+    ? `About ${build.acres} of ${b.acres} acres (${pct(build.share)}) pass the screen: ${[
+        (build.screened || []).includes('slope') ? `slope of ${build.limitPercent}% or less` : null,
+        (build.screened || []).includes('flood') ? "outside FEMA's flood hazard area" : null,
+        (build.screened || []).includes('wetlands') ? 'outside mapped wetlands' : null,
+        (build.screened || []).includes('protected land') ? 'outside protected or publicly held land' : null,
+      ].filter(Boolean).join(', ')}.`
+    : 'None of the four services answered, so nothing could be screened.'
+  const strip = ({ available, ...rest }) => (available ? rest : { notScreened: rest.reason })
+  return {
+    market: b.market,
+    id: b.id,
+    address: b.address ?? undefined,
+    acres: b.acres,
+    countyAcres: b.countyAcres ?? undefined,
+    buildable: { acres: build.acres, percent: Math.round((Number(build.share) || 0) * 1000) / 10, maxSlopePercent: build.limitPercent, notScreened: (build.notScreened || []).length ? build.notScreened : undefined },
+    slope: strip(slope),
+    flood: strip(flood),
+    wetlands: strip(wetlands),
+    protectedLand: strip(land),
+    flags,
+    summary: `${said}${flags.length ? ` ${flags.filter((f) => !f.startsWith('Not screened')).slice(0, 3).join(' ')}` : ' Nothing on these four maps stands in the way.'}`,
+    method: `The lot${b.outline === 'box' ? "'s bounding box (its outline was not available)" : ''} was laid over with ${b.cells?.count} cells about ${b.cells?.spacingFeet} ft apart; each was given its elevation and tested against the flood, wetland and protected-area outlines.`,
+    caveats: [
+      'A screen from public maps, not a survey, an elevation certificate or a wetland delineation.',
+      'Zoning, access, utilities, soils, easements and title are not part of it.',
+    ],
+    sources: b.sources,
+  }
+}
+
 /** The crime route's answer, said the way a person asking about a site would want it. */
 export function crimeReport(b, { market, place = null } = {}) {
   const at = { market, place: place ?? undefined, lat: b.lat, lng: b.lng }
@@ -862,6 +934,25 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       })
     }
 
+    case 'site_feasibility': {
+      const wanted = [...new Set([input.id, ...(Array.isArray(input.ids) ? input.ids : [])].map((v) => String(v ?? '').trim()).filter(Boolean))].slice(0, 5)
+      if (!wanted.length) return failure('Give a parcel id from search_parcels (id), or up to five (ids).')
+      const slope = Number(input.maxSlopePercent)
+      const limit = Number.isFinite(slope) && slope >= 1 && slope <= 100 ? `&maxSlope=${Math.round(slope)}` : ''
+      const screens = []
+      for (const id of wanted) {
+        const answer = await ask(`/api/gis/feasibility?market=${input.market}&id=${encodeURIComponent(id)}${limit}`)
+        screens.push(answer.status === 200 ? feasibilityReport(answer.body || {}) : { id, error: refusal(answer) })
+      }
+      if (screens.length === 1) return screens[0].error ? failure(screens[0].error) : result(screens[0])
+      // Most acres passing first; a lot that could not be screened last.
+      const ranked = [...screens].sort((a, b) => (b.buildable?.acres ?? -1) - (a.buildable?.acres ?? -1))
+      return result({
+        market: input.market,
+        ranked: ranked.map((r) => (r.error ? { id: r.id, error: r.error } : { id: r.id, address: r.address, acres: r.acres, buildableAcres: r.buildable.acres, buildablePercent: r.buildable.percent, flags: r.flags })),
+        screens: ranked,
+      })
+    }
     case 'nearby_crime': {
       const point = await locate(input)
       if (point.error) return failure(point.error)
