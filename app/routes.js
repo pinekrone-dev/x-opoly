@@ -218,6 +218,7 @@ import { routeLegs } from './lib/routing.js'
 import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
 import { CRIME_COLORS, crimeNear, crimeSummary, crimeTileReader, readCrime } from '../src/lib/crime.ts'
+import { siteFeasibility } from './lib/feasibility.js'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
@@ -3452,6 +3453,58 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    * answers from its search index and packed rows. No totals and no
    * filters: that is /api/gis/parcels, which needs the store.
    */
+  /*
+   * A first screen of whether a lot can be built on: how steep it is (USGS
+   * 3DEP elevation over a grid of cells on the lot), and how much of it lies
+   * in FEMA's flood hazard area, a mapped wetland (National Wetlands
+   * Inventory) or protected or publicly held land (PAD-US); then the share
+   * and acres that pass all of them. Four federal services, asked once a lot
+   * for the lot's own box, so it works in every market with nothing
+   * published for it. A complete answer is kept at the edge for a week:
+   * terrain and flood maps do not move by the day. One with a service
+   * missing is not kept, so the next asker tries again.
+   */
+  app.get('/api/gis/feasibility', async (c) => {
+    const user = c.get('user')
+    if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
+    const throttled = limited(c, 'feasibility', 60, 10 * 60 * 1000)
+    if (throttled) return throttled
+    const market = marketSlug(c)
+    if (!market) return c.json({ error: 'market must be a slug like austin-tx.' }, 400)
+    const id = (c.req.query('id') ?? '').trim()
+    if (!id) return c.json({ error: 'id is required.' }, 400)
+    const asked = Number(c.req.query('maxSlope'))
+    const maxSlope = Number.isFinite(asked) && asked >= 1 && asked <= 100 ? Math.round(asked) : 15
+    return edgeCached(
+      c,
+      'feasibility-v1',
+      7 * 24 * 60 * 60,
+      async () => {
+        const found = (await getParcel(parcelsFor(market), market, id).catch(() => null)) ?? (await packedParcel(market, id))
+        if (!found) return notFound(c, 'No such parcel in that market.')
+        const box = Array.isArray(found.bb) ? found.bb.map(Number) : null
+        if (!box || box.length !== 4 || !box.every(Number.isFinite)) return c.json({ error: 'That parcel has no place on the map to screen.' }, 422)
+        // The lot's own outline from the map's tiles; its box where the tiles do not hold it.
+        let geometry = null
+        const archive = archiveFor(`${market}/parcels.pmtiles`)
+        const header = await archive.getHeader().catch(() => null)
+        if (header) {
+          const shape = await parcelShape(featureReader(archive, 'parcels'), found.id ?? id, box, { minZoom: header.minZoom, maxZoom: header.maxZoom }).catch(() => null)
+          geometry = shape?.geometry ?? null
+        }
+        const outline = geometry ? 'parcel' : 'box'
+        if (!geometry) {
+          const [w, s, e, n] = box
+          geometry = { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] }
+        }
+        const screen = await siteFeasibility({ geometry, maxSlopePercent: maxSlope, fetcher: env.FEASIBILITY_FETCH ?? fetch })
+        c.header('x-screen-complete', screen.buildable.notScreened.length ? '0' : '1')
+        return c.json({ market, id: String(found.id ?? id), address: found.ad || null, countyAcres: Number(found.ac) > 0 ? Number(found.ac) : null, outline, ...screen })
+      },
+      { params: { market, id, maxSlope }, cacheable: (fresh) => fresh.status === 200 && fresh.headers.get('x-screen-complete') === '1' },
+    )
+  })
+
   /*
    * Reported crime round a site: violent and property offences within a
    * quarter, a half and a mile over the last twelve months the agency has

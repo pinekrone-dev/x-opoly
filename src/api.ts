@@ -35,6 +35,7 @@ import type { AskCircle, ClientPin, LibraryItem, LibraryPiece, LandmarksResult, 
 import type { VesselAnswer } from './lib/vessels'
 import type { ParcelGrid } from './lib/grid'
 import type { CrimeAnswer, CrimeSummary } from './lib/crime'
+import type { SiteScreen } from './components/SiteFeasibility'
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
@@ -431,6 +432,10 @@ export const api = {
     /** Reported violent and property crime within a quarter, a half and a mile of a place. */
     crime: (market: string, lat: number, lng: number) =>
       request<CrimeAnswer>(`/api/gis/crime?market=${encodeURIComponent(market)}&lat=${lat.toFixed(5)}&lng=${lng.toFixed(5)}`),
+
+    /** A first screen of whether a lot can be built on: slope, flood hazard, wetlands, protected land. */
+    feasibility: (market: string, id: string | number) =>
+      request<SiteScreen>(`/api/gis/feasibility?market=${encodeURIComponent(market)}&id=${encodeURIComponent(String(id))}`),
 
     /** Whether a market has reported crime published, and what its last twelve months hold. */
     crimeSummary: (market: string) =>
