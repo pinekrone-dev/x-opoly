@@ -185,6 +185,88 @@ export interface Feasibility {
     | { available: true; share: number; units: { name: string; manager: string | null; designation: string | null; category: string | null; gapStatus: string | null; access: string | null; share: number; counted: boolean }[] }
     | { available: false; reason: string }
   buildable: { share: number; acres: number; limitPercent: number; screened: string[]; notScreened: string[]; takenOut: { slope: number; flood: number; wetlands: number; protectedLand: number } }
+  /** The cells themselves, for drawing: see CellMap. */
+  map: CellMap
+}
+
+/**
+ * What each cell came to, for a map of the screen. `results` runs row by row
+ * from the south-west: -1 off the lot, 0 passes, else the first thing that
+ * takes the cell out, in the order of RESULTS (land that is not the owner's
+ * to build on before water, water before a slope a grader can change).
+ */
+export interface CellMap {
+  box: [number, number, number, number]
+  nx: number
+  ny: number
+  results: number[]
+}
+
+export const RESULTS = ['Passes', 'Protected or public land', 'Mapped wetland', 'Flood hazard area', 'Steeper than the limit'] as const
+export const RESULT_COLORS: Record<string, string> = {
+  Passes: '#16a34a',
+  'Protected or public land': '#7c3aed',
+  'Mapped wetland': '#0d9488',
+  'Flood hazard area': '#2563eb',
+  'Steeper than the limit': '#ea580c',
+}
+
+const cellBox = (map: CellMap, index: number): [number, number, number, number] => {
+  const [west, south, east, north] = map.box
+  const i = index % map.nx
+  const j = Math.floor(index / map.nx)
+  return [west + (i / map.nx) * (east - west), south + (j / map.ny) * (north - south), west + ((i + 1) / map.nx) * (east - west), south + ((j + 1) / map.ny) * (north - south)]
+}
+
+/** What a cell map must be to be drawn: a wrong one is treated as none. */
+export function validCellMap(value: unknown): CellMap | null {
+  const m = value as CellMap | null
+  if (!m || typeof m !== 'object') return null
+  if (!Array.isArray(m.box) || m.box.length !== 4 || !m.box.every(Number.isFinite)) return null
+  if (!Number.isInteger(m.nx) || !Number.isInteger(m.ny) || m.nx < 1 || m.ny < 1 || m.nx > 40 || m.ny > 40) return null
+  if (!Array.isArray(m.results) || m.results.length !== m.nx * m.ny) return null
+  if (!m.results.every((r) => Number.isInteger(r) && r >= -1 && r < RESULTS.length)) return null
+  return m
+}
+
+/** The lot's cells as rectangles for the map, each named for what it came to. */
+export function cellFeatures(map: CellMap): GeoJSON.FeatureCollection {
+  const features: GeoJSON.Feature[] = []
+  const six = (n: number) => Math.round(n * 1e6) / 1e6
+  map.results.forEach((result, index) => {
+    if (result < 0) return
+    const [w, s, e, n] = cellBox(map, index).map(six)
+    features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] }, properties: { Result: RESULTS[result] } })
+  })
+  return { type: 'FeatureCollection', features }
+}
+
+/**
+ * The same cells a tile at a time, for the image the server draws: the
+ * shape a tile archive's reader hands back, rectangles in tile units.
+ */
+export function cellTileReader(map: CellMap, extent = 4096) {
+  const worldX = (lng: number, size: number) => ((lng + 180) / 360) * size
+  const worldY = (lat: number, size: number) => {
+    const rad = (lat * Math.PI) / 180
+    return ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * size
+  }
+  return async (z: number, tx: number, ty: number) => {
+    const size = 2 ** z
+    const features: { type: 3; geometry: [number, number][][]; properties: { Result: string } }[] = []
+    map.results.forEach((result, index) => {
+      if (result < 0) return
+      const [w, s, e, n] = cellBox(map, index)
+      const x0 = (worldX(w, size) - tx) * extent
+      const x1 = (worldX(e, size) - tx) * extent
+      const y0 = (worldY(n, size) - ty) * extent
+      const y1 = (worldY(s, size) - ty) * extent
+      // A cell wholly outside this tile belongs to another one.
+      if (x1 < 0 || y1 < 0 || x0 > extent || y0 > extent) return
+      features.push({ type: 3, geometry: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], properties: { Result: RESULTS[result] } })
+    })
+    return { extent, features }
+  }
 }
 
 const round = (value: number, places = 0) => Math.round(value * 10 ** places) / 10 ** places
@@ -214,6 +296,12 @@ export function assess(input: FeasibilityInput): Feasibility {
   const cells = grid.inside.reduce((n, yes) => n + (yes ? 1 : 0), 0)
   const share = (count: number) => (cells ? round(count / cells, 3) : 0)
   const fail = new Uint8Array(grid.points.length)
+  // Which screen takes each cell out, as a code into RESULTS; the lowest stands.
+  const first = new Uint8Array(grid.points.length)
+  const out = (i: number, code: number) => {
+    fail[i] = 1
+    if (!first[i] || code < first[i]) first[i] = code
+  }
   const takenOut = { slope: 0, flood: 0, wetlands: 0, protectedLand: 0 }
   const screened: string[] = []
   const notScreened: string[] = []
@@ -229,7 +317,7 @@ export function assess(input: FeasibilityInput): Feasibility {
       all.forEach((value, i) => {
         if (grid.inside[i] && Number.isFinite(value) && value > limit) {
           over += 1
-          fail[i] = 1
+          out(i, 4)
         }
       })
       takenOut.slope = share(over)
@@ -264,7 +352,7 @@ export function assess(input: FeasibilityInput): Feasibility {
     const hazard = (overlay: Overlay) => String(overlay.attributes.SFHA_TF ?? '').toUpperCase() === 'T'
     const covered = cover(grid, zones, hazard)
     const inHazard = covered.any.reduce((n, v) => n + v, 0)
-    covered.any.forEach((v, i) => { if (v) fail[i] = 1 })
+    covered.any.forEach((v, i) => { if (v) out(i, 3) })
     takenOut.flood = share(inHazard)
     const byZone = new Map<string, { zone: string; subtype: string | null; hazardArea: boolean; count: number }>()
     zones.forEach((overlay, o) => {
@@ -293,7 +381,7 @@ export function assess(input: FeasibilityInput): Feasibility {
   if (input.wetlands.available && input.wetlands.data) {
     const covered = cover(grid, input.wetlands.data)
     const wet = covered.any.reduce((n, v) => n + v, 0)
-    covered.any.forEach((v, i) => { if (v) fail[i] = 1 })
+    covered.any.forEach((v, i) => { if (v) out(i, 2) })
     takenOut.wetlands = share(wet)
     const byType = new Map<string, { type: string; code: string | null; count: number }>()
     input.wetlands.data.forEach((overlay, o) => {
@@ -316,7 +404,7 @@ export function assess(input: FeasibilityInput): Feasibility {
     const held = (overlay: Overlay) => HELD.has(String(overlay.attributes.Category ?? '').toUpperCase())
     const covered = cover(grid, input.protectedLand.data, held)
     const kept = covered.any.reduce((n, v) => n + v, 0)
-    covered.any.forEach((v, i) => { if (v) fail[i] = 1 })
+    covered.any.forEach((v, i) => { if (v) out(i, 1) })
     takenOut.protectedLand = share(kept)
     protectedLand = {
       available: true,
@@ -353,5 +441,6 @@ export function assess(input: FeasibilityInput): Feasibility {
     wetlands,
     protectedLand,
     buildable: { share: round(passing, 3), acres: round(acres * passing, acres < 10 ? 2 : 1), limitPercent: limit, screened, notScreened, takenOut },
+    map: { box: boxOf(geometry), nx: grid.nx, ny: grid.ny, results: grid.inside.map((on, i) => (on ? first[i] : -1)) },
   }
 }

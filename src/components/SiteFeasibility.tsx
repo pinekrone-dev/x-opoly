@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { PanelSection } from './ParcelPanel'
-import type { Feasibility } from '../lib/feasibility'
+import { RESULTS, RESULT_COLORS, type Feasibility } from '../lib/feasibility'
 
 /*
  * A first screen of whether the selected lot can be built on: slope, FEMA
@@ -26,15 +26,24 @@ function Row({ label, value, detail, warn }: { label: string; value: string; det
   )
 }
 
-export default function SiteFeasibility({ market, id }: { market: string; id: string }) {
+export default function SiteFeasibility({ market, id, onScreen }: { market: string; id: string; onScreen?: (screen: SiteScreen | null) => void }) {
   const [screen, setScreen] = useState<SiteScreen | null | 'loading' | 'failed'>(null)
-  // A new lot starts unasked.
-  useEffect(() => setScreen(null), [market, id])
+  // A new lot starts unasked, and the last lot's cells come off the map.
+  useEffect(() => {
+    setScreen(null)
+    onScreen?.(null)
+    // onScreen is the map's own setter; the lot is what this follows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, id])
   const run = () => {
     setScreen('loading')
     api.parcels
       .feasibility(market, id)
-      .then(setScreen)
+      .then((found) => {
+        setScreen(found)
+        // Drawn on the map as it is read here: each cell coloured by what it came to.
+        onScreen?.(found)
+      })
       .catch(() => setScreen('failed'))
   }
 
@@ -111,8 +120,16 @@ export default function SiteFeasibility({ market, id }: { market: string; id: st
               <Row label="Protected or public land" value="Not screened" detail={screen.protectedLand.reason} warn />
             )}
           </ul>
+          <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5" aria-label="What the colours on the map mean">
+            {[...new Set(screen.map.results.filter((r) => r >= 0))].sort((a, b) => a - b).map((r) => (
+              <li key={r} className="flex items-center gap-1 text-[10px] text-muted">
+                <span className="inline-block h-2 w-2 rounded-sm" style={{ background: RESULT_COLORS[RESULTS[r]] }} />
+                {RESULTS[r]}
+              </li>
+            ))}
+          </ul>
           <p className="mt-1.5 text-[10px] leading-snug text-faint">
-            A screen from public maps (USGS elevation, FEMA flood, the National Wetlands Inventory, PAD-US) over {screen.cells.count} cells about {screen.cells.spacingFeet} ft apart
+            Each cell is drawn on the map in its colour. A screen from public maps (USGS elevation, FEMA flood, the National Wetlands Inventory, PAD-US) over {screen.cells.count} cells about {screen.cells.spacingFeet} ft apart
             {screen.outline === 'box' ? ", on the lot's bounding box" : ''}. Not a survey, an elevation certificate or a wetland delineation; zoning, access and utilities are not part of it.
           </p>
         </>

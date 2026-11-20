@@ -203,7 +203,7 @@ export const TOOLS = [
   {
     name: 'site_feasibility',
     title: 'Site feasibility screen',
-    description: "A first screen of whether a parcel can be built on, in any market: how steep it is (mean and steepest slope, and the share over a limit, 15% unless said, from USGS 3DEP elevation), how much lies in FEMA's special flood hazard area and which flood zones it touches, how much is mapped wetland (National Wetlands Inventory), how much is protected or publicly held land (PAD-US), and the acres left after all of those are taken out. Give one parcel id, or up to five to compare, ranked by the acres that pass. Use it to narrow search_parcels results to the lots worth a closer look. A screen from public maps, not a survey; zoning, access and utilities are not part of it.",
+    description: "A first screen of whether a parcel can be built on, in any market: how steep it is (mean and steepest slope, and the share over a limit, 15% unless said, from USGS 3DEP elevation), how much lies in FEMA's special flood hazard area and which flood zones it touches, how much is mapped wetland (National Wetlands Inventory), how much is protected or publicly held land (PAD-US), and the acres left after all of those are taken out. Give one parcel id, or up to five to compare, ranked by the acres that pass. Use it to narrow search_parcels results to the lots worth a closer look. For one parcel it also returns a map of the lot with each cell coloured by the result. A screen from public maps, not a survey; zoning, access and utilities are not part of it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -211,6 +211,7 @@ export const TOOLS = [
         id: { type: 'string', description: 'The parcel id from search_parcels.' },
         ids: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'Up to five parcel ids to screen and rank, in place of id.' },
         maxSlopePercent: { type: 'number', minimum: 1, maximum: 100, description: 'The steepest ground counted as buildable, in percent (default 15).' },
+        image: { type: 'boolean', description: 'Also draw the lot as a map, each cell coloured by what it came to: passes, steep, flood hazard, wetland, protected land (default true for one parcel; the image link opens without signing in).' },
       },
       required: ['market'],
     },
@@ -940,11 +941,38 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       const slope = Number(input.maxSlopePercent)
       const limit = Number.isFinite(slope) && slope >= 1 && slope <= 100 ? `&maxSlope=${Math.round(slope)}` : ''
       const screens = []
+      let cells = null
       for (const id of wanted) {
         const answer = await ask(`/api/gis/feasibility?market=${input.market}&id=${encodeURIComponent(id)}${limit}`)
         screens.push(answer.status === 200 ? feasibilityReport(answer.body || {}) : { id, error: refusal(answer) })
+        if (answer.status === 200) cells = answer.body?.map ?? null
       }
-      if (screens.length === 1) return screens[0].error ? failure(screens[0].error) : result(screens[0])
+      if (screens.length === 1) {
+        if (screens[0].error) return failure(screens[0].error)
+        const report = screens[0]
+        const content = [text(report)]
+        // The lot drawn, each cell coloured by what it came to.
+        if (input.image !== false && cells) {
+          const drawn = await ask('/api/gis/map-image', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ market: input.market, state: {}, cells, title: `Site feasibility: ${report.address || `parcel ${report.id}`}`, width: 900, height: 640 }),
+          })
+          if (drawn.status === 200) {
+            report.image = `${origin}${drawn.body.path}`
+            report.imageNote = 'A PNG of the lot, each cell coloured by the result; the link opens without signing in and is kept 30 days.'
+            content[0] = text(report)
+            if (Number(drawn.body.bytes) <= 1_500_000) {
+              const file = await call(drawn.body.path)
+              if (file.status === 200) content.push({ type: 'image', data: toBase64(new Uint8Array(await file.arrayBuffer())), mimeType: 'image/png' })
+            }
+          } else {
+            report.imageNote = `The map of the lot could not be drawn: ${refusal(drawn)}`
+            content[0] = text(report)
+          }
+        }
+        return { content, structuredContent: report }
+      }
       // Most acres passing first; a lot that could not be screened last.
       const ranked = [...screens].sort((a, b) => (b.buildable?.acres ?? -1) - (a.buildable?.acres ?? -1))
       return result({

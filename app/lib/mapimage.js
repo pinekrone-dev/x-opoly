@@ -172,8 +172,8 @@ async function drawLayer(canvas, frame, layer, notes) {
       const parts = placed(feature.geometry, tile.extent, tx, ty, scale, frame)
       const colour = colourOf(feature)
       if (feature.type === 3) {
-        fillPolygon(canvas, parts, colour, 0.3)
-        strokeLines(canvas, parts.map((ring) => [...ring, ring[0]]), 1, colour, 0.8)
+        fillPolygon(canvas, parts, colour, layer.fill ?? 0.3)
+        strokeLines(canvas, parts.map((ring) => [...ring, ring[0]]), 1, colour, layer.fill ? 0.35 : 0.8)
       } else if (feature.type === 2) strokeLines(canvas, parts, 2.5, colour, 0.9)
       else for (const part of parts) for (const point of part) points.push([point, colour])
       drawn += 1
@@ -300,7 +300,10 @@ export async function renderMap(options) {
   if (options.basemap && options.fetchTile) await drawBasemap(canvas, frame, options.basemap, options.fetchTile, notes)
 
   for (const layer of (options.layers ?? []).filter((l) => l.kind === 'polygon')) {
-    if (await drawLayer(canvas, frame, layer, notes)) legend.push({ label: layer.label, colour: rgb(layer.color), kind: 'polygon', outline: true, alpha: 0.35 })
+    if (!(await drawLayer(canvas, frame, layer, notes))) continue
+    // A layer that names its own colours (a lot's feasibility cells) is keyed by each of them.
+    if (Array.isArray(layer.legend)) for (const [label, hex] of layer.legend) legend.push({ label, colour: rgb(hex), kind: 'polygon', alpha: layer.fill ?? 0.6 })
+    else legend.push({ label: layer.label, colour: rgb(layer.color), kind: 'polygon', outline: true, alpha: 0.35 })
   }
 
   let parcels = { drawn: 0, matched: 0 }
