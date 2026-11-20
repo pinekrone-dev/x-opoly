@@ -304,6 +304,34 @@ describe('the map image route', () => {
     assert.ok(image.rgba[o] > 200 && image.rgba[o + 1] < 190, 'the lot over the threshold is red')
   })
 
+  test('a lot\'s feasibility cells are drawn, framed on the lot', async () => {
+    const d = 0.0006
+    const cells = { box: [C[0] - d, C[1] - d, C[0] + d, C[1] + d], nx: 2, ny: 2, results: [0, 3, 4, -1] }
+    const res = await json('/api/gis/map-image', { market: 'denver-co', title: 'Site feasibility: 1 Test St', cells, width: 800, height: 600 })
+    assert.equal(res.status, 200, JSON.stringify(res.body))
+    assert.ok(res.body.zoom >= 16 && res.body.zoom <= 19, `framed on the lot, not the county: zoom ${res.body.zoom}`)
+    assert.ok(Math.abs(res.body.center.lng - C[0]) < 1e-9 && Math.abs(res.body.center.lat - C[1]) < 1e-9)
+    assert.equal(res.body.shown.layers, 3, 'the key names the three results on this lot')
+    const image = await decodePng(new Uint8Array(await (await call(res.body.path, {}, true)).arrayBuffer()))
+    const frame = frameOf({ center: C, zoom: res.body.zoom, width: 800, height: 600 })
+    const colour = (lng, lat) => {
+      const [x, y] = project(lng, lat, frame.z)
+      const o = (Math.round(y - frame.top) * image.width + Math.round(x - frame.left)) * 4
+      return [image.rgba[o], image.rgba[o + 1], image.rgba[o + 2]]
+    }
+    // South-west passes (green), south-east is flood (blue), north-west is steep (orange).
+    const [gr, gg, gb] = colour(C[0] - d / 2, C[1] - d / 2 + d / 4)
+    assert.ok(gg > gr && gg > gb, `passes: ${[gr, gg, gb]}`)
+    const [br, bg, bb] = colour(C[0] + d / 2, C[1] - d / 2)
+    assert.ok(bb > br && bb > bg, `flood: ${[br, bg, bb]}`)
+    const [or, og, ob] = colour(C[0] - d / 2, C[1] + d / 2 + d / 4)
+    assert.ok(or > ob + 40 && or > og, `steep: ${[or, og, ob]}`)
+    // A cell map that is not one is not drawn, and the picture is the county as before.
+    const bad = await json('/api/gis/map-image', { market: 'denver-co', cells: { box: [0, 0, 1, 1], nx: 2, ny: 2, results: [0] } })
+    assert.equal(bad.status, 200)
+    assert.equal(bad.body.shown.layers, 0)
+  })
+
   test('a name that was never issued, or has aged out, opens nothing', async () => {
     assert.equal((await call(`/api/map-exports/20260101-${'a'.repeat(32)}.png`, {}, true)).status, 410)
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')

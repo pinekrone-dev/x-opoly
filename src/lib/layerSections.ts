@@ -43,7 +43,7 @@ const BY_KEY: Record<string, string> = {
   'parks-rec': 'market', 'rail-stations': 'market', 'business-licenses': 'market', comps: 'market',
   'Market surveys': 'market', Absorption: 'market', 'Rent trends': 'market', Forecasts: 'market',
   transmission: 'infrastructure', substations: 'infrastructure', 'power-plants': 'infrastructure', ships: 'infrastructure', vessels: 'infrastructure',
-  crime: 'risk', 'flood-zones': 'risk', ust: 'risk', lust: 'risk',
+  feasibility: 'risk', crime: 'risk', 'flood-zones': 'risk', ust: 'risk', lust: 'risk',
 }
 
 /** A card's layer key: its id without the panel's `x:` or `g:` prefix. */

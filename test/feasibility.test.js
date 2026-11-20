@@ -15,7 +15,10 @@ import { createServer } from '../server/index.js'
 import { useTempData } from './helpers.js'
 import { feasibilityReport, runTool } from '../app/lib/mcp.js'
 import { siteFeasibility } from '../app/lib/feasibility.js'
-import { acresOf, assess, boxOf, gridOver, inRingSet, insideSite, slopesOf } from '../src/lib/feasibility.ts'
+import { RESULTS, RESULT_COLORS, acresOf, assess, boxOf, cellFeatures, cellTileReader, gridOver, inRingSet, insideSite, slopesOf, validCellMap } from '../src/lib/feasibility.ts'
+import { renderMap } from '../app/lib/mapimage.js'
+import { decodePng } from '../app/lib/png.js'
+import { project } from '../app/lib/shapes.js'
 import { shardOf } from '../src/lib/parcelRows.ts'
 
 const LAT = 36
@@ -141,6 +144,83 @@ describe('the arithmetic', () => {
     assert.equal(unmapped.flood.mapped, false, 'no zone under the lot is unmapped ground, not safe ground')
     assert.equal(unmapped.slope.available, false)
     assert.equal(unmapped.buildable.share, 1)
+  })
+})
+
+describe('the screen, drawn', () => {
+  const grid = gridOver(LOT)
+  const screen = assess({
+    geometry: LOT,
+    grid,
+    elevation: { available: true, data: { z: grid.points.map(ground(0.1)), resolutionMeters: 1 } },
+    flood: { available: true, data: FLOOD },
+    wetlands: { available: true, data: POND },
+    protectedLand: { available: true, data: PARK },
+    maxSlopePercent: 15,
+  })
+  const at = (fx, fy) => [W + fx * (E - W), S + fy * (N - S)]
+
+  test('each cell is what first takes it out: land that is not the owner\'s before water, water before slope', () => {
+    const { map } = screen
+    assert.deepEqual([map.nx, map.ny, map.results.length], [15, 15, 225])
+    const cell = (i, j) => RESULTS[map.results[j * 15 + i]]
+    assert.equal(cell(10, 7), 'Passes')
+    assert.equal(cell(2, 7), 'Flood hazard area')
+    assert.equal(cell(14, 14), 'Mapped wetland')
+    assert.equal(cell(2, 0), 'Protected or public land', 'the park, though the flood zone covers it too')
+    const steep = assess({ geometry: LOT, grid, elevation: { available: true, data: { z: grid.points.map(ground(0.3)), resolutionMeters: 1 } }, flood: { available: true, data: FLOOD }, wetlands: { available: true, data: [] }, protectedLand: { available: true, data: [] } })
+    assert.equal(RESULTS[steep.map.results[7 * 15 + 10]], 'Steeper than the limit')
+    assert.equal(RESULTS[steep.map.results[7 * 15 + 2]], 'Flood hazard area', 'flood before slope')
+    // A triangle's cells off the lot are marked so, and are not drawn.
+    const triangle = { type: 'Polygon', coordinates: [[[W, S], [E, S], [W, N], [W, S]]] }
+    const tri = gridOver(triangle)
+    const half = assess({ geometry: triangle, grid: tri, elevation: { available: false }, flood: { available: true, data: [] }, wetlands: { available: true, data: [] }, protectedLand: { available: true, data: [] } })
+    assert.equal(half.map.results.filter((r) => r === -1).length, 225 - half.cells.count)
+    assert.equal(cellFeatures(half.map).features.length, half.cells.count)
+  })
+
+  test('as rectangles for the map, each named for its result', () => {
+    const geo = cellFeatures(screen.map)
+    assert.equal(geo.features.length, 225)
+    const names = new Set(geo.features.map((f) => f.properties.Result))
+    assert.deepEqual([...names].sort(), ['Flood hazard area', 'Mapped wetland', 'Passes', 'Protected or public land'])
+    const first = geo.features[0].geometry.coordinates[0]
+    assert.ok(Math.abs(first[0][0] - W) < 1e-6 && Math.abs(first[0][1] - S) < 1e-6, 'the first cell starts at the south-west corner')
+    assert.ok(Math.abs(first[2][0] - (W + (E - W) / 15)) < 1e-6)
+  })
+
+  test('only a sound cell map is drawn', () => {
+    assert.ok(validCellMap(screen.map))
+    assert.equal(validCellMap(null), null)
+    assert.equal(validCellMap({ ...screen.map, results: screen.map.results.slice(1) }), null)
+    assert.equal(validCellMap({ ...screen.map, nx: 400, ny: 400, results: [] }), null)
+    assert.equal(validCellMap({ ...screen.map, results: screen.map.results.map(() => 9) }), null)
+    assert.equal(validCellMap({ ...screen.map, box: [0, 0, 'x', 1] }), null)
+  })
+
+  test('in a picture, each part of the lot is its own colour', async () => {
+    const centre = at(0.5, 0.5)
+    const out = await renderMap({
+      center: centre, zoom: 17, width: 600, height: 600,
+      layers: [{ label: 'Site feasibility', kind: 'polygon', color: RESULT_COLORS.Passes, colors: { field: 'Result', map: RESULT_COLORS }, fill: 0.9, legend: [['Passes', RESULT_COLORS.Passes]], read: cellTileReader(screen.map), minZoom: 0, maxZoom: 22 }],
+    })
+    assert.equal(out.shown.layers, 1)
+    const image = await decodePng(out.png)
+    const colour = ([lng, lat]) => {
+      const [x, y] = project(lng, lat, out.frame.z)
+      const o = (Math.round(y - out.frame.top) * image.width + Math.round(x - out.frame.left)) * 4
+      return [image.rgba[o], image.rgba[o + 1], image.rgba[o + 2]]
+    }
+    const [pr, pg, pb] = colour(at(0.72, 0.5))
+    assert.ok(pg > pr + 40 && pg > pb + 40, `east of the middle passes, green: ${[pr, pg, pb]}`)
+    const [fr, fg, fb] = colour(at(0.2, 0.5))
+    assert.ok(fb > fr + 60 && fb > fg + 30, `the west half is flood, blue: ${[fr, fg, fb]}`)
+    const [wr, wg, wb] = colour(at(0.9, 0.9))
+    assert.ok(wg > wr + 60 && wb > wr + 60, `the pond is teal: ${[wr, wg, wb]}`)
+    const [qr, qg, qb] = colour(at(0.5, 0.05))
+    assert.ok(qb > qg + 60 && qr > qg + 30, `the park is purple: ${[qr, qg, qb]}`)
+    const [or, og, ob] = colour([W - (E - W) * 0.3, (S + N) / 2])
+    assert.ok(Math.abs(or - og) < 12 && Math.abs(og - ob) < 12, 'off the lot is the ground colour')
   })
 })
 
@@ -272,6 +352,11 @@ describe('the route and the connector', () => {
     assert.equal(out.slope.meanPercent, 10)
     assert.match(out.method, /bounding box.*225 cells about 44 ft apart/)
     assert.match(out.caveats.join(' '), /not a survey/)
+    assert.equal(out.map, undefined, 'the cells are for drawing, not for the reply')
+    assert.equal(out.image, undefined)
+    assert.match(out.imageNote, /could not be drawn: No map is published for sacramento-ca/)
+    const plain = (await tool({ market: 'sacramento-ca', id: '7', image: false })).structuredContent
+    assert.equal(plain.imageNote, undefined, 'no picture asked for, none attempted')
     assert.equal((await tool({ market: 'sacramento-ca' })).isError, true)
     assert.equal((await tool({ market: 'sacramento-ca', id: '999' })).isError, true)
   })

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import CrimeNearby from '../components/CrimeNearby'
-import SiteFeasibility from '../components/SiteFeasibility'
+import SiteFeasibility, { type SiteScreen } from '../components/SiteFeasibility'
+import { RESULTS as FEASIBILITY_RESULTS, RESULT_COLORS, cellFeatures } from '../lib/feasibility'
 import { CRIME_COLORS, CRIME_MARKETS, crimeFeatures, readCrime, type CrimeSummary } from '../lib/crime'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
 import DealPicker, { stageWords } from '../components/DealPicker'
@@ -2155,6 +2156,38 @@ export default function Gis({
     }
   }, [crimeInfo, crimeGeo])
 
+  /*
+   * A lot's feasibility screen, drawn: its cells as rectangles on the map,
+   * each in the colour of what it came to (passes, steep, flood hazard,
+   * wetland, protected land). On when a lot is screened from its card, off
+   * when another lot is picked.
+   */
+  const [feasibility, setFeasibility] = useState<SiteScreen | null>(null)
+  const showFeasibility = useCallback((screen: SiteScreen | null) => {
+    setFeasibility(screen)
+    setLayerOn((on) => (Boolean(on.feasibility) === Boolean(screen) ? on : { ...on, feasibility: Boolean(screen) }))
+    // Nearly solid: the selected lot is washed in its own colour underneath,
+    // and at the usual 70% that wash turns green and teal into one olive.
+    if (screen) setLayerStyle((style) => (style.feasibility ? style : { ...style, feasibility: { color: RESULT_COLORS.Passes, opacity: 0.9 } }))
+  }, [])
+  const feasibilityGeo = useMemo(() => (feasibility?.map ? cellFeatures(feasibility.map) : null), [feasibility])
+  const feasibilityLayer = useMemo((): PublishedLayer | null => {
+    if (!feasibility || !feasibilityGeo) return null
+    const counts = new Map<string, number>()
+    for (const feature of feasibilityGeo.features) counts.set(String(feature.properties?.Result), (counts.get(String(feature.properties?.Result)) ?? 0) + 1)
+    return {
+      id: 'feasibility',
+      label: 'Site feasibility',
+      kind: 'polygon',
+      color: RESULT_COLORS.Passes,
+      file: '',
+      note: `${feasibility.buildable.acres.toLocaleString()} of ${feasibility.acres.toLocaleString()} acres pass`,
+      categories: [{ field: 'Result', values: FEASIBILITY_RESULTS.filter((name) => counts.has(name)).map((name): [string, number] => [name, counts.get(name) ?? 0]), colors: RESULT_COLORS }],
+      fields: ['Result'],
+      attribution: 'USGS 3DEP elevation, FEMA flood hazard, National Wetlands Inventory, PAD-US: a screen, not a survey',
+    }
+  }, [feasibility, feasibilityGeo])
+
   const vesselsGeo = useMemo(() => (vessels ? vesselFeatures(vessels.ships) : null), [vessels])
   const trailsGeo = useMemo(() => (vessels ? vesselTrails(vessels.ships) : null), [vessels])
 
@@ -2254,10 +2287,10 @@ export default function Gis({
     () =>
       // Crime leads the market's own layers where it is published: it is the
       // one a site is asked about first.
-      [...(crimeLayer ? [crimeLayer] : []), ...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])].map((layer) =>
+      [...(feasibilityLayer ? [feasibilityLayer] : []), ...(crimeLayer ? [crimeLayer] : []), ...published, compsLayer, ...(gridVersion ? [gridLayer] : []), BUILDINGS_LAYER, ...(coastal ? [vesselsLayer] : [])].map((layer) =>
         layerGroup(layer.id) === 'traffic' ? { ...layer, label: trafficLabel(layer) } : layer,
       ),
-    [crimeLayer, published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
+    [feasibilityLayer, crimeLayer, published, compsLayer, gridVersion, gridLayer, coastal, vesselsLayer],
   )
 
   /** The same, for geometry: comps come from the workspace and ships from the feed, not the catalog. */
@@ -2266,9 +2299,10 @@ export default function Gis({
     if (compsGeo) out.comps = compsGeo
     if (vesselsGeo) out.vessels = vesselsGeo
     if (crimeGeo) out.crime = crimeGeo
+    if (feasibilityGeo) out.feasibility = feasibilityGeo
     if (gridDrawing) out.grid = gridDrawing.geo
     return out
-  }, [layerData, compsGeo, vesselsGeo, crimeGeo, gridDrawing])
+  }, [layerData, compsGeo, vesselsGeo, crimeGeo, feasibilityGeo, gridDrawing])
 
   /*
    * What each loaded layer could be coloured by, and how.
@@ -5986,7 +6020,7 @@ export default function Gis({
                     lng={(((parcel.bb ?? selectedBox) as number[])[0] + ((parcel.bb ?? selectedBox) as number[])[2]) / 2}
                   />
                 ) : null}
-                {active && selected != null ? <SiteFeasibility key={`feasibility:${selected}`} market={active} id={String(selected)} /> : null}
+                {active && selected != null ? <SiteFeasibility key={`feasibility:${selected}`} market={active} id={String(selected)} onScreen={showFeasibility} /> : null}
                 {active === 'los-angeles-ca' ? (
                   <ZoningReport key={`zoning:${selected}`} market={active} apn={String(selected).padStart(10, '0')} />
                 ) : null}

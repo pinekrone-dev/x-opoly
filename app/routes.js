@@ -219,6 +219,7 @@ import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
 import { CRIME_COLORS, crimeNear, crimeSummary, crimeTileReader, readCrime } from '../src/lib/crime.ts'
 import { siteFeasibility } from './lib/feasibility.js'
+import { RESULT_COLORS, RESULTS as FEASIBILITY_RESULTS, cellTileReader, validCellMap } from '../src/lib/feasibility.ts'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
@@ -4028,6 +4029,17 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     let zoom = Number.isFinite(Number(state.zoom)) ? Number(state.zoom) : null
     if (!center && circle) center = [circle.lng, circle.lat]
     if (zoom == null && circle) zoom = zoomToFit(circle.miles, circle.lat, Math.min(width, height))
+    // A lot's feasibility cells (from /api/gis/feasibility), drawn over the
+    // ground and framed so the lot fills a little over half the picture.
+    const cells = validCellMap(body.cells)
+    if (cells && !center) {
+      const [w, s, e, n] = cells.box
+      center = [(w + e) / 2, (s + n) / 2]
+      const k = Math.cos((center[1] * Math.PI) / 180)
+      const across = Math.log2((360 * width * 0.55) / (256 * Math.max(e - w, 1e-6)))
+      const down = Math.log2((360 * k * height * 0.55) / (256 * Math.max(n - s, 1e-6)))
+      zoom = Math.max(10, Math.min(19, Math.floor(Math.min(across, down))))
+    }
     if (!center) {
       center = [(header.minLon + header.maxLon) / 2, (header.minLat + header.maxLat) / 2]
       const span = Math.max(header.maxLon - header.minLon, (header.maxLat - header.minLat) * 1.3)
@@ -4116,6 +4128,14 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
           read: featureReader(tiles, layer.sourceLayer || id), minZoom: head.minZoom, maxZoom: head.maxZoom,
         })
       }
+    }
+
+    if (cells) {
+      const seen = [...new Set(cells.results.filter((r) => r >= 0))].sort((a, b) => a - b).map((r) => FEASIBILITY_RESULTS[r])
+      layers.push({
+        label: 'Site feasibility', kind: 'polygon', color: RESULT_COLORS.Passes, colors: { field: 'Result', map: RESULT_COLORS }, fill: 0.55,
+        legend: seen.map((name) => [name, RESULT_COLORS[name]]), read: cellTileReader(cells), minZoom: 0, maxZoom: 22,
+      })
     }
 
     const pins = (Array.isArray(state.pins) ? state.pins : [])
