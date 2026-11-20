@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { PanelSection } from './ParcelPanel'
-import { RESULTS, RESULT_COLORS, type Feasibility } from '../lib/feasibility'
+import { RESULT_COLORS, resultsOn, type Feasibility } from '../lib/feasibility'
 
 /*
  * A first screen of whether the selected lot can be built on: slope, FEMA
@@ -121,15 +121,15 @@ export default function SiteFeasibility({ market, id, onScreen }: { market: stri
             )}
           </ul>
           <ul className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5" aria-label="What the colours on the map mean">
-            {[...new Set(screen.map.results.filter((r) => r >= 0))].sort((a, b) => a - b).map((r) => (
-              <li key={r} className="flex items-center gap-1 text-[10px] text-muted">
-                <span className="inline-block h-2 w-2 rounded-sm" style={{ background: RESULT_COLORS[RESULTS[r]] }} />
-                {RESULTS[r]}
+            {resultsOn(screen.map).map((name) => (
+              <li key={name} className="flex items-center gap-1 text-[10px] text-muted">
+                <span className="inline-block h-2 w-2 rounded-sm" style={{ background: RESULT_COLORS[name] }} />
+                {name}
               </li>
             ))}
           </ul>
           <p className="mt-1.5 text-[10px] leading-snug text-faint">
-            Each cell is drawn on the map in its colour. A screen from public maps (USGS elevation, FEMA flood, the National Wetlands Inventory, PAD-US) over {screen.cells.count} cells about {screen.cells.spacingFeet} ft apart
+            Each cell is drawn on the map in its colour; a cell in two or three colours is taken out by each of them. A screen from public maps (USGS elevation, FEMA flood, the National Wetlands Inventory, PAD-US) over {screen.cells.count} cells about {screen.cells.spacingFeet} ft apart
             {screen.outline === 'box' ? ", on the lot's bounding box" : ''}. Not a survey, an elevation certificate or a wetland delineation; zoning, access and utilities are not part of it.
           </p>
         </>

@@ -220,7 +220,7 @@ import { OWNER_FILTERS, marketState } from '../src/lib/owners.ts'
 import { nearGrid, readNear } from '../src/lib/nearby.ts'
 import { CRIME_COLORS, crimeNear, crimeSummary, crimeTileReader, readCrime } from '../src/lib/crime.ts'
 import { siteFeasibility } from './lib/feasibility.js'
-import { RESULT_COLORS, RESULTS as FEASIBILITY_RESULTS, cellTileReader, validCellMap } from '../src/lib/feasibility.ts'
+import { RESULT_COLORS, cellTileReader, resultsOn, validCellMap } from '../src/lib/feasibility.ts'
 import { readRow, validManifest } from '../src/lib/parcelRows.ts'
 import { searchPack, validSearchManifest } from '../src/lib/parcelSearch.ts'
 import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
@@ -3491,7 +3491,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const maxSlope = Number.isFinite(asked) && asked >= 1 && asked <= 100 ? Math.round(asked) : 15
     return edgeCached(
       c,
-      'feasibility-v1',
+      'feasibility-v2',
       7 * 24 * 60 * 60,
       async () => {
         const found = (await getParcel(parcelsFor(market), market, id).catch(() => null)) ?? (await packedParcel(market, id))
@@ -4296,7 +4296,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
 
     if (cells) {
-      const seen = [...new Set(cells.results.filter((r) => r >= 0))].sort((a, b) => a - b).map((r) => FEASIBILITY_RESULTS[r])
+      const seen = resultsOn(cells)
       layers.push({
         label: 'Site feasibility', kind: 'polygon', color: RESULT_COLORS.Passes, colors: { field: 'Result', map: RESULT_COLORS }, fill: 0.55,
         legend: seen.map((name) => [name, RESULT_COLORS[name]]), read: cellTileReader(cells), minZoom: 0, maxZoom: 22,

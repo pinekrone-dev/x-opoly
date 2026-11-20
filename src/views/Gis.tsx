@@ -3,6 +3,7 @@ import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import CrimeNearby from '../components/CrimeNearby'
 import SiteFeasibility, { type SiteScreen } from '../components/SiteFeasibility'
+import MapKey, { type KeyEntry } from '../components/MapKey'
 import { RESULTS as FEASIBILITY_RESULTS, RESULT_COLORS, cellFeatures } from '../lib/feasibility'
 import { CRIME_COLORS, CRIME_MARKETS, crimeFeatures, readCrime, type CrimeSummary } from '../lib/crime'
 import SendPlaceToSurvey from '../components/SendPlaceToSurvey'
@@ -2184,7 +2185,7 @@ export default function Gis({
       file: '',
       note: `${feasibility.buildable.acres.toLocaleString()} of ${feasibility.acres.toLocaleString()} acres pass`,
       categories: [{ field: 'Result', values: FEASIBILITY_RESULTS.filter((name) => counts.has(name)).map((name): [string, number] => [name, counts.get(name) ?? 0]), colors: RESULT_COLORS }],
-      fields: ['Result'],
+      fields: ['Result', 'With'],
       attribution: 'USGS 3DEP elevation, FEMA flood hazard, National Wetlands Inventory, PAD-US: a screen, not a survey',
     }
   }, [feasibility, feasibilityGeo])
@@ -2625,6 +2626,36 @@ export default function Gis({
       },
     }
   }, [showCensus, census, metric, censusRamp])
+
+  /**
+   * The map's key: one entry for each thing drawn, in the colours it is
+   * drawn in. The parcel wash and the census shading first, since they cover
+   * the map; then each layer that is on, by category where it is coloured so.
+   */
+  const mapKey = useMemo((): KeyEntry[] => {
+    const out: KeyEntry[] = []
+    if (showParcels) {
+      if (effectiveColorBy === 'value') out.push({ id: 'parcels', label: meta?.valueLabel || 'Value', kind: 'ramp', ramp: rampOf(parcelRamp), low: 'Low', high: 'High' })
+      else out.push({ id: 'parcels', label: 'Land use', kind: 'polygon', swatches: LEGEND })
+    }
+    if (choropleth) {
+      out.push({
+        id: 'census', label: choropleth.label, kind: 'ramp', ramp: rampOf(censusRamp),
+        low: censusValue(choropleth.scale.min, choropleth.kind), high: censusValue(choropleth.scale.max, choropleth.kind),
+      })
+    }
+    for (const layer of shownLayers) {
+      if (!layerOn[layer.id]) continue
+      const paint = categoryPaint[layer.id]
+      // In the layer's own order: commonest first where the colours were
+      // dealt out by count, the layer's stated order where it names them
+      // (a feasibility screen reads Passes first, whatever the lot).
+      const swatches = paint ? Object.entries(paint.colors).map(([name, color]): [string, string] => [name, color]) : []
+      if (swatches.length) out.push({ id: layer.id, label: layer.label, kind: layer.kind, swatches, more: paint?.rest || undefined })
+      else out.push({ id: layer.id, label: layer.label, kind: layer.kind, color: layerStyle[layer.id]?.color ?? layer.color })
+    }
+    return out
+  }, [showParcels, effectiveColorBy, meta?.valueLabel, parcelRamp, choropleth, censusRamp, shownLayers, layerOn, categoryPaint, layerStyle])
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
@@ -4800,8 +4831,10 @@ export default function Gis({
         Nothing about the market floats over the map any more. The corner
         beside the rail belongs to the basemap picker (MapCanvas draws it
         there), and the market is chosen in the Layers drawer, where its
-        stats are.
+        stats are. What does sit on the map is its key: along the bottom,
+        from past the basemap picker to short of the right panel.
       */}
+      <MapKey entries={mapKey} left={rail ? '32.5rem' : '12.5rem'} right={sideOpen ? '24.75rem' : '3.25rem'} />
 
       {tableOpen && active && (server?.ready ?? false) ? (
         <ResultsTable
