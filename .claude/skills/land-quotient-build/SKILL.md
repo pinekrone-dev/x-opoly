@@ -246,6 +246,15 @@ The same file is the map's **Crime layer**, drawn by the app and not by the cata
 
 `MapKey` (src/components/MapKey.tsx) sits along the bottom of the GIS map, from past the basemap picker to short of the right panel, because both side panels are taken (layers and filters left, the lot's record right, with the old legend behind a tab the record covers). One entry for each thing drawn, from `mapKey` in Gis.tsx: the parcel wash (land-use swatches or the value ramp), the census shading (ramp with its ends), and each layer that is on, with a swatch per category from `categoryPaint` (six at most, then "+N more") or its one colour. It folds to a button and is hidden on phones, which keep the legend sheet.
 
+## Pieces, not a brief (Nov 20 2026)
+
+The owner: "instead of a brief we only provide pieces they can paste into their branded brief". So nothing here writes a memo; it makes exhibits with their source and no name on them.
+
+- **Library** (`src/views/Library.tsx`, `src/lib/libraryPieces.ts`, `PIECES` in `app/lib/library.js`): three more pieces beside the maps and tables it had: `feasibility-map` (a Maps piece: the route `POST /api/library/:placeId/pieces` runs `screenParcel` and draws the cells with `drawMapImage`), `feasibility` and `crime` (Data pieces from `feasibilityRows`, `crimeRows`). A built-in package "Feasibility". Every Data piece has **Copy table** next to Download CSV: `htmlTable` + `tsv` go on the clipboard through a `ClipboardItem` claimed at the click (promises inside, so a slow screen still copies), and paste into Word, Docs or PowerPoint as a real, unstyled table.
+- **Connector** (`app/lib/mcp.js`): `site_pieces` (market, id, `pieces` from property, feasibility, crime, demographics, retail, parcel-map) returns `pieces: [{id, title, text, table {columns, rows}, image, note, source, markdown}]` built by `pieceOf`, plus `notAvailable: [{piece, why}]` for whatever could not be made. A test holds that no piece names the product. `find_sites` is search and screen in one call: the search's criteria, eight parcels screened a call (`offset` for the next eight), ranked by acres passing, with `screenedOut` and `couldNotScreen` named.
+- `screenParcel(market, id, maxSlope)` in `app/routes.js` is the one place a parcel is screened (route, Library piece); its edge cache key is `feasibility-v2`.
+- Not built: find-and-screen inside the app (it is a connector tool only).
+
 ## What the product is (the owner's words, Nov 20 2026)
 
 "We are basically making Esri's ArcGIS, preprogrammed for site selection and real estate brokerage." Read that as the test for any feature: a broker or site selector should get the answer a GIS analyst would build by hand (overlay the layers, screen the lot, count what is nearby, hand back a map) from one click or one question, with nothing to configure. So: prefer a finished answer over a tool to assemble one; show what overlaps on the map with a legend in view; keep every figure traceable to its public source and say what a screen is not. The owner has said plainly that 3D models and fly-through video are not wanted: "we don't need all that stuff, just a good tool."
