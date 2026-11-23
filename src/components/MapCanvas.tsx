@@ -47,6 +47,9 @@ function registerPmtiles() {
 }
 
 const PARCEL_SOURCE = 'parcels'
+/** The states with data, shaded when the map shows the whole country. */
+const STATES_SOURCE = 'lq-states'
+export const STATES_COLOR = '#1B3668'
 
 /*
  * A failing map reports what it saw, from the browser that actually failed.
@@ -594,6 +597,16 @@ interface Props {
   places?: { id: string; label: string; detail?: string; lat: number; lng: number }[] | null
   placesUntilZoom?: number
   /**
+   * The country, zoomed all the way out. A label for every market is a
+   * hundred labels on top of one another at that distance, so below
+   * `statesUntilZoom` the map shades the states that have data instead and
+   * the place labels wait until the map is closer in. `have` is the states'
+   * postal codes; `url` is the outlines (public/geo/us-states.json). A click
+   * on a shaded state frames it, which is where its markets' labels appear.
+   */
+  states?: { url: string; have: string[] } | null
+  statesUntilZoom?: number
+  /**
    * Pins a saved map carries (nearby retail from the Claude connector, say):
    * a round badge with the brand's logo, or the name's initial where there
    * is none, and the name and detail on a click.
@@ -785,6 +798,8 @@ export default function MapCanvas({
   onNeighbourParcel,
   places = null,
   placesUntilZoom = 8,
+  states = null,
+  statesUntilZoom = 5.5,
   pins = null,
   onPinPick,
   onPlace,
@@ -1495,8 +1510,11 @@ export default function MapCanvas({
       })
       return new maplibregl.Marker({ element, anchor: 'top' }).setLngLat([place.lng, place.lat]).addTo(instance)
     })
+    // Where the states are shaded the labels start at the zoom the shading stops.
+    const from = states?.have.length ? statesUntilZoom : -Infinity
     const show = () => {
-      const visible = instance.getZoom() < placesUntilZoom
+      const zoom = instance.getZoom()
+      const visible = zoom < placesUntilZoom && zoom >= from
       for (const marker of made) marker.getElement().style.visibility = visible ? 'visible' : 'hidden'
     }
     show()
@@ -1505,7 +1523,87 @@ export default function MapCanvas({
       instance.off('zoom', show)
       for (const marker of made) marker.remove()
     }
-  }, [loaded, places, placesUntilZoom])
+  }, [loaded, places, placesUntilZoom, states, statesUntilZoom])
+
+  /*
+   * The states with data, shaded while the map shows the whole country.
+   * The outlines are fetched the first time the map is that far out, and
+   * the two layers stop drawing at `statesUntilZoom` on their own.
+   */
+  const stateShapes = useRef<GeoJSON.FeatureCollection | null>(null)
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !states?.have.length) return undefined
+    let live = true
+    const have = new Set(states.have)
+    const draw = (shapes: GeoJSON.FeatureCollection) => {
+      if (!live || !map.current) return
+      const data: GeoJSON.FeatureCollection = {
+        type: 'FeatureCollection',
+        features: shapes.features.map((f) => ({ ...f, properties: { ...f.properties, has: have.has(String(f.properties?.abbr)) } })),
+      }
+      upsert(STATES_SOURCE, data, [
+        {
+          id: 'lq-states-fill', type: 'fill', source: STATES_SOURCE, maxzoom: statesUntilZoom,
+          filter: ['==', ['get', 'has'], true],
+          paint: { 'fill-color': STATES_COLOR, 'fill-opacity': 0.28 },
+        },
+        {
+          id: 'lq-states-line', type: 'line', source: STATES_SOURCE, maxzoom: statesUntilZoom,
+          paint: {
+            'line-color': ['case', ['==', ['get', 'has'], true], STATES_COLOR, '#94a3b8'],
+            'line-width': ['case', ['==', ['get', 'has'], true], 1.4, 0.6],
+          },
+        },
+      ])
+    }
+    let asked = false
+    const want = () => {
+      if (instance.getZoom() >= statesUntilZoom) return
+      if (stateShapes.current) return draw(stateShapes.current)
+      if (asked) return
+      asked = true
+      fetch(states.url)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((shapes) => {
+          if (!shapes?.features) return
+          stateShapes.current = shapes
+          draw(shapes)
+        })
+        .catch(() => {
+          asked = false
+        })
+    }
+    const frame = (event: maplibregl.MapLayerMouseEvent) => {
+      const raw = event.features?.[0]?.properties?.box
+      // The map hands a feature's array back as text.
+      const box = typeof raw === 'string' ? (JSON.parse(raw) as number[]) : (raw as number[] | undefined)
+      if (!box || box.length !== 4 || !box.every(Number.isFinite)) return
+      // Close enough that the shading gives way to the markets' labels, even
+      // for a state as wide as Texas.
+      const camera = instance.cameraForBounds([[box[0], box[1]], [box[2], box[3]]], { padding: 48, maxZoom: 8 })
+      if (camera?.center) instance.easeTo({ center: camera.center, zoom: Math.max(camera.zoom ?? 0, statesUntilZoom + 0.1), duration: 600 })
+    }
+    const point = () => {
+      instance.getCanvas().style.cursor = 'pointer'
+    }
+    const unpoint = () => {
+      instance.getCanvas().style.cursor = ''
+    }
+    want()
+    instance.on('zoomend', want)
+    instance.on('click', 'lq-states-fill', frame)
+    instance.on('mouseenter', 'lq-states-fill', point)
+    instance.on('mouseleave', 'lq-states-fill', unpoint)
+    return () => {
+      live = false
+      instance.off('zoomend', want)
+      instance.off('click', 'lq-states-fill', frame)
+      instance.off('mouseenter', 'lq-states-fill', point)
+      instance.off('mouseleave', 'lq-states-fill', unpoint)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, states, statesUntilZoom])
 
   /*
    * Saved pins, as HTML markers for the same reason as the places: the
