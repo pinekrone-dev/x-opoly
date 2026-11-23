@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import MapCanvas, { PARCEL_MIN_ZOOM, type MapPin } from '../components/MapCanvas'
+import MapCanvas, { PARCEL_MIN_ZOOM, STATES_COLOR, type MapPin } from '../components/MapCanvas'
 import ParcelPanel, { PanelSection, panelRows, type PanelGroup } from '../components/ParcelPanel'
 import CrimeNearby from '../components/CrimeNearby'
 import SiteFeasibility, { type SiteScreen } from '../components/SiteFeasibility'
@@ -104,6 +104,8 @@ import type {
  * request left to refuse.
  */
 const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
+/** Below this zoom the map shows the country: states with data are shaded and market labels wait. */
+const STATES_UNTIL_ZOOM = 5.5
 /** A fetch that treats an error page as the failure it is, not as JSON. */
 const asJson = (r: Response) => {
   if (!r.ok) throw new Error(`${r.status}`)
@@ -848,7 +850,7 @@ const GIS_TIPS: Coachmark[] = [
   {
     target: '[data-tour="address"]',
     title: 'One map, every county',
-    body: 'Type an address to go straight to its lot. Pan into another county and the map switches to it; zoomed out, every market is a label you can click.',
+    body: 'Type an address to go straight to its lot. Pan into another county and the map switches to it; zoomed out, every market is a label you can click, and from the whole country the states with data are shaded.',
   },
   {
     target: '[data-tour="layers"]',
@@ -1601,6 +1603,15 @@ export default function Gis({
     () => extents.map((x) => ({ id: x.slug, label: x.name, lng: x.center[0], lat: x.center[1] })),
     [extents],
   )
+  /*
+   * Which states have a market, by the postal code every slug ends in
+   * (austin-tx, washington-dc). Zoomed out to the whole country the map
+   * shades these instead of labelling a hundred markets on top of each other.
+   */
+  const dataStates = useMemo(() => {
+    const have = [...new Set(extents.map((x) => /-([a-z]{2})$/.exec(x.slug)?.[1].toUpperCase()).filter((code): code is string => Boolean(code)))].sort()
+    return have.length ? { url: '/geo/us-states.json', have } : null
+  }, [extents])
 
   // Meta first: it carries where the market opens and how it is coloured.
   useEffect(() => {
@@ -2634,6 +2645,10 @@ export default function Gis({
    */
   const mapKey = useMemo((): KeyEntry[] => {
     const out: KeyEntry[] = []
+    // The whole country in view: the shading is the only thing drawn, so it is the key.
+    if (dataStates && viewBox && viewBox.zoom < STATES_UNTIL_ZOOM) {
+      return [{ id: 'states', label: `States with data (${dataStates.have.length}): click one to see its markets`, kind: 'polygon', color: STATES_COLOR }]
+    }
     if (showParcels) {
       if (effectiveColorBy === 'value') out.push({ id: 'parcels', label: meta?.valueLabel || 'Value', kind: 'ramp', ramp: rampOf(parcelRamp), low: 'Low', high: 'High' })
       else out.push({ id: 'parcels', label: 'Land use', kind: 'polygon', swatches: LEGEND })
@@ -2655,7 +2670,7 @@ export default function Gis({
       else out.push({ id: layer.id, label: layer.label, kind: layer.kind, color: layerStyle[layer.id]?.color ?? layer.color })
     }
     return out
-  }, [showParcels, effectiveColorBy, meta?.valueLabel, parcelRamp, choropleth, censusRamp, shownLayers, layerOn, categoryPaint, layerStyle])
+  }, [dataStates, viewBox, showParcels, effectiveColorBy, meta?.valueLabel, parcelRamp, choropleth, censusRamp, shownLayers, layerOn, categoryPaint, layerStyle])
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
@@ -4754,6 +4769,8 @@ export default function Gis({
           onNeighbourParcel={onNeighbourParcel}
           places={places}
           placesUntilZoom={9}
+          states={dataStates}
+          statesUntilZoom={STATES_UNTIL_ZOOM}
           pins={mapPins}
           onPinPick={(pin) => {
             // A pin that is not a parcel (a chain, a landmark, a place with
