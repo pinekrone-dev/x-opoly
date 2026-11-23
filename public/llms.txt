@@ -26,7 +26,12 @@ Austin (Travis County, TX); Washington, DC; Nashville (Davidson County, TN); Ora
 - [For developers](https://landquotient.com/developers)
 - [For investors](https://landquotient.com/investors)
 - [Pricing](https://landquotient.com/pricing)
+- [Connect an AI assistant](https://landquotient.com/connect): how to add Land Quotient to Claude or Grok
 - [FAQ](https://landquotient.com/faq)
+
+## Connect an AI assistant
+
+Land Quotient has a Model Context Protocol (MCP) connector at https://landquotient.com/mcp (streamable HTTP, OAuth sign-in with a free Land Quotient account, no API key). An assistant that connects can search parcels, read one parcel in full, screen a lot for slope, flood hazard, wetlands and protected land, list the chains and landmarks around a site, and save maps. It exposes two tools, search and execute; https://landquotient.com/mcp/classic lists one tool per operation instead. Directions: https://landquotient.com/connect
 
 ## Data
 

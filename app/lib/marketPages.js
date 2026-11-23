@@ -43,7 +43,7 @@ export function liveMarkets(catalogue) {
 }
 
 /** The pages the sitemap always lists, besides one per market. */
-export const STATIC_PAGES = ['/', '/gis', '/markets', '/investment-sales', '/developers', '/investors', '/pricing', '/faq']
+export const STATIC_PAGES = ['/', '/gis', '/markets', '/investment-sales', '/developers', '/investors', '/pricing', '/connect', '/faq']
 
 export function sitemapXml(markets, { today = new Date().toISOString().slice(0, 10) } = {}) {
   const urls = [
@@ -218,7 +218,7 @@ ${
     : ''
 }
 </main>
-<footer><div class="in">Land Quotient: parcel maps and site selection for commercial real estate. <a href="/markets">All markets</a> · <a href="/faq">FAQ</a> · <a href="/pricing">Pricing</a></div></footer>
+<footer><div class="in">Land Quotient: parcel maps and site selection for commercial real estate. <a href="/markets">All markets</a> · <a href="/faq">FAQ</a> · <a href="/pricing">Pricing</a> · <a href="/connect">Connect your AI</a></div></footer>
 </body>
 </html>`
 }

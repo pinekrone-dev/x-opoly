@@ -80,6 +80,14 @@ export function MarketingHeader({
           >
             Pricing
           </a>
+          {/* Shown where the bar has room for it; the footer carries it everywhere. */}
+          <a
+            className={`btn-ghost hidden px-3 py-1.5 lg:inline-block ${current === '/connect' ? 'text-ink' : ''}`}
+            href="/connect"
+            aria-current={current === '/connect' ? 'page' : undefined}
+          >
+            Connect AI
+          </a>
           <a className="btn-ghost hidden px-3 py-1.5 sm:inline-block" href="/faq">
             FAQ
           </a>
@@ -135,6 +143,9 @@ export function MarketingFooter({ onSignIn, homeHref = '' }: { onSignIn: () => v
           </a>
           <a className="underline hover:text-brand-soft" href="/pricing">
             Pricing
+          </a>
+          <a className="underline hover:text-brand-soft" href="/connect">
+            Connect your AI
           </a>
           <button type="button" className="ml-auto underline hover:text-brand-soft" onClick={onSignIn}>
             Sign in

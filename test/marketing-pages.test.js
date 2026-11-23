@@ -7,7 +7,7 @@ import fs from 'node:fs'
  * own title and preview. These checks are the ones a broken card would fail.
  */
 
-const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html', 'faq.html', 'gis.html', 'pricing.html']
+const PAGES = ['index.html', 'investors.html', 'developers.html', 'investment-sales.html', 'markets.html', 'faq.html', 'gis.html', 'pricing.html', 'connect.html']
 
 const meta = (html, attr, name) => {
   const m = html.match(new RegExp(`<meta\\s+${attr}="${name}"\\s+content="([^"]*)"`, 's'))
@@ -41,7 +41,7 @@ describe('public pages', () => {
     const { sitemapXml } = await import('../app/lib/marketPages.js')
     const xml = sitemapXml([{ slug: 'austin-tx', status: 'live' }])
     assert.ok(xml.includes('<loc>https://landquotient.com/markets/austin-tx</loc>'), 'each market has its page')
-    for (const p of ['/', '/investors', '/developers', '/investment-sales', '/markets', '/pricing', '/faq', '/gis']) {
+    for (const p of ['/', '/investors', '/developers', '/investment-sales', '/markets', '/pricing', '/connect', '/faq', '/gis']) {
       assert.ok(xml.includes(`<loc>https://landquotient.com${p}</loc>`), `sitemap has ${p}`)
     }
     assert.ok(!/\/survey\/|\/s\/|\/api\//.test(xml))

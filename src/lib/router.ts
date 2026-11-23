@@ -22,7 +22,7 @@ export function usePath(): string {
 }
 
 export interface Route {
-  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings' | 'audience' | 'markets' | 'pricing' | 'om' | 'library'
+  view: 'home' | 'workspace' | 'share' | 'book' | 'billingReturn' | 'record' | 'faq' | 'gis' | 'settings' | 'audience' | 'markets' | 'pricing' | 'connect' | 'om' | 'library'
   /** Which public page an `audience` route is showing. */
   audience?: 'investors' | 'developers' | 'investment-sales'
   id?: string
@@ -43,6 +43,7 @@ export function matchRoute(path: string): Route {
   if (/^\/faq\/?$/.test(path)) return { view: 'faq' }
   if (/^\/markets\/?$/.test(path)) return { view: 'markets' }
   if (/^\/pricing\/?$/.test(path)) return { view: 'pricing' }
+  if (/^\/connect\/?$/.test(path)) return { view: 'connect' }
   const audience = path.match(/^\/(investors|developers|investment-sales)\/?$/)
   if (audience) return { view: 'audience', audience: audience[1] as Route['audience'] }
 

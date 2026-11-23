@@ -114,6 +114,14 @@ const CARDS = [
     shotWidth: 500,
   },
   {
+    file: 'og-connect.png',
+    eyebrow: 'Connect',
+    title: 'Put Land Quotient inside your AI assistant',
+    sub: 'Add one address to Claude or Grok and it can search parcels, screen sites and draw maps. It signs in as you; no API key.',
+    shot: 'shots/gis.jpg',
+    shotWidth: 500,
+  },
+  {
     // The card behind a client share link. The page's own title and
     // description are written per survey by the Worker (app/lib/preview.js);
     // the picture stays generic, because a survey's sites are the broker's.
