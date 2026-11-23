@@ -281,6 +281,10 @@ The owner: "when it zooms it maybe shows county then when it zooms into a county
 
 The Layers panel lists "My map" first, above "Property & ownership" (`SECTIONS` in `src/lib/layerSections.ts`).
 
+### Development activity: named by kind (Nov 23 2026)
+
+The owner: "Development activity should be building permits and submitted plans or approved plans etc. don't use the name Anaheim". `layerName(id, label)` in `src/lib/layerSections.ts` names a layer by its id whatever the catalogue calls it: `permits` "Building permits", `plan-review` and `entitlements` "Submitted and approved plans", `code-cases` "Code cases". It is applied where `layers.json` is read in `Gis.tsx` and in the connector's `market_layers`, so every screen and the legend agree; `entitlements` is filed under Development activity (it was falling into More). The cards that stand in where a market has none carry the same names.
+
 ## What the product is (the owner's words, Nov 20 2026)
 
 "We are basically making Esri's ArcGIS, preprogrammed for site selection and real estate brokerage." Read that as the test for any feature: a broker or site selector should get the answer a GIS analyst would build by hand (overlay the layers, screen the lot, count what is nearby, hand back a map) from one click or one question, with nothing to configure. So: prefer a finished answer over a tool to assemble one; show what overlaps on the map with a legend in view; keep every figure traceable to its public source and say what a screen is not. The owner has said plainly that 3D models and fly-through video are not wanted: "we don't need all that stuff, just a good tool."
