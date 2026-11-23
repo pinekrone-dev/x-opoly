@@ -11,6 +11,7 @@
 
 import { fullAddress } from '../../src/lib/address.ts'
 import { demographicsRows } from '../../src/lib/libraryPieces.ts'
+import { layerName } from '../../src/lib/layerSections.ts'
 import { safeLogo } from './logos.js'
 import { squeeze } from './places.js'
 
@@ -943,7 +944,7 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
       if (!input.market) return failure('market is required.')
       const answer = await ask(`/catalog/${encodeURIComponent(input.market)}/layers.json`)
       if (answer.status !== 200) return failure(refusal(answer))
-      const layers = (answer.body?.layers ?? []).map((l) => ({ id: l.id, label: l.label, kind: l.kind, count: l.count, note: l.note || undefined }))
+      const layers = (answer.body?.layers ?? []).map((l) => ({ id: l.id, label: layerName(l.id, l.label), kind: l.kind, count: l.count, note: l.note || undefined }))
       // Reported crime is a layer the app draws from its own packed file,
       // not one in the market's catalogue: listed first where it is published.
       const crime = await ask(`/api/gis/crime?market=${input.market}`)

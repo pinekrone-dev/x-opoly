@@ -13,7 +13,7 @@ import { readManifest, readRow, type RowsManifest } from '../lib/parcelRows'
 import { readSearchManifest, searchPack, type SearchHit, type SearchManifest } from '../lib/parcelSearch'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
-import { STARTING_POINT_MARKET, cardsToSwitch, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
+import { STARTING_POINT_MARKET, cardsToSwitch, layerName, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
 import LibraryButton from '../components/LibraryButton'
 import ZoningCode from '../components/ZoningCode'
@@ -384,6 +384,7 @@ const PUBLISHED_ICONS: Record<string, JSX.Element> = {
   zoning: LAYER_ICONS.zoning,
   permits: LAYER_ICONS.pipeline,
   'plan-review': LAYER_ICONS.entitlements,
+  entitlements: LAYER_ICONS.entitlements,
   'opportunity-zones': LAYER_ICONS.absorption,
   schools: LAYER_ICONS.demographics,
   'school-districts': LAYER_ICONS.zoning,
@@ -1829,7 +1830,8 @@ export default function Gis({
       .then(asJson)
       .then((doc: { layers?: PublishedLayer[] }) => {
         if (cancelled) return
-        const list = doc.layers ?? []
+        // Named by what they are, not by who publishes them (layerSections.ts).
+        const list = (doc.layers ?? []).map((layer) => ({ ...layer, label: layerName(layer.id, layer.label) }))
         setPublished(list)
         setLayerStyle(
           Object.fromEntries(list.map((layer) => [layer.id, { color: layer.color, opacity: 0.7 }])),
@@ -3451,8 +3453,8 @@ export default function Gis({
       }),
       // Still genuinely unbuilt: no public source publishes these, so they
       // stay honest rather than becoming empty cards.
-      ...(published.some((l) => l.id === 'permits') ? [] : [pending('Development pipeline', LAYER_ICONS.pipeline)]),
-      ...(published.some((l) => l.id === 'plan-review') ? [] : [pending('Entitlements', LAYER_ICONS.entitlements)]),
+      ...(published.some((l) => l.id === 'permits') ? [] : [pending('Building permits', LAYER_ICONS.pipeline)]),
+      ...(published.some((l) => l.id === 'plan-review' || l.id === 'entitlements') ? [] : [pending('Submitted and approved plans', LAYER_ICONS.entitlements)]),
       pending('Market surveys', LAYER_ICONS.surveys),
       pending('Absorption', LAYER_ICONS.absorption),
       pending('Rent trends', LAYER_ICONS.rent),

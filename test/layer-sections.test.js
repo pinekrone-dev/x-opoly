@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { SECTIONS, STARTING_POINTS, bySection, cardKey, cardsToSwitch, sectionOf, startingPoints } from '../src/lib/layerSections.ts'
+import { SECTIONS, STARTING_POINTS, bySection, cardKey, cardsToSwitch, layerName, sectionOf, startingPoints } from '../src/lib/layerSections.ts'
 
 test('every layer a market publishes today has a section that is not More', () => {
   const published = ['opportunity-zones', 'transmission', 'substations', 'power-plants', 'schools', 'private-schools', 'flood-zones',
@@ -61,3 +61,21 @@ test('a team\'s own starting point takes a built-in one\'s place by name, and ex
   assert.equal(all.find((p) => p.name.toLowerCase() === 'risk check').id, 'v1')
   assert.equal(all[all.length - 1].name, 'Retail pads')
 })
+
+test('a development layer is named for what it is, never for the city that publishes it', () => {
+  assert.equal(layerName('permits', 'Anaheim permits'), 'Building permits')
+  assert.equal(layerName('permits', 'Development pipeline'), 'Building permits')
+  assert.equal(layerName('plan-review', 'Entitlements'), 'Submitted and approved plans')
+  assert.equal(layerName('entitlements', 'Anaheim entitlements'), 'Submitted and approved plans')
+  assert.equal(layerName('code-cases', 'Anaheim code cases'), 'Code cases')
+  // Everything else keeps the catalogue's own name.
+  assert.equal(layerName('zoning', 'Zoning'), 'Zoning')
+  assert.equal(layerName('permits-bis', 'Permits, legacy jobs'), 'Permits, legacy jobs')
+  // And all three sit under Development activity, with the cards that stand in for them where a market has none.
+  for (const id of ['permits', 'plan-review', 'entitlements', 'code-cases', 'Building permits', 'Submitted and approved plans', 'Code cases']) {
+    assert.equal(sectionOf(id), 'development', id)
+  }
+  assert.match(SECTIONS.find((s) => s.id === 'development').hint, /Building permits, submitted and approved plans, code cases/)
+  assert.deepEqual(SECTIONS.slice(0, 2).map((s) => s.label), ['My map', 'Property & ownership'])
+})
+
