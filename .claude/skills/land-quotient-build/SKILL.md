@@ -255,6 +255,18 @@ The owner: "instead of a brief we only provide pieces they can paste into their 
 - `screenParcel(market, id, maxSlope)` in `app/routes.js` is the one place a parcel is screened (route, Library piece); its edge cache key is `feasibility-v2`.
 - Not built: find-and-screen inside the app (it is a connector tool only).
 
+## The connector in code mode (Nov 23 2026)
+
+The owner asked for the connector to be rebuilt on Cloudflare's Code Mode (blog.cloudflare.com/code-mode-mcp). `/mcp` now lists two tools where it listed nineteen: `search` (finds operations, returns each one's TypeScript call signature) and `execute` (runs a script the assistant writes, in which `await lq.<operation>(input)` calls an operation). What the assistant reads up front fell from about 32,000 characters to about 2,500 and no longer grows with the list.
+
+- `app/lib/codemode.js`: `CODE_TOOLS`, `CODE_INSTRUCTIONS`, `typeOf` (JSON Schema to TypeScript), `searchOperations`, `runScript`, and the month's ledger (`runsCap`, `runsSpent`, `chargeRun`, table `code_run_ledger`). The operations are still `TOOLS` in `mcp.js`, run by `runTool` as the signed-in person, so adding an operation is adding a tool there, exactly as before; `search` finds it with no other change.
+- The sandbox is Cloudflare's: `worker/index.js` `sandboxFor(env.LOADER)` wraps `DynamicWorkerExecutor` from `@cloudflare/codemode` (loaded on first use, because it imports `cloudflare:workers` and the tests load the Worker entry under Node). `[[worker_loaders]] binding = "LOADER"` in `wrangler.toml`. A script has no network, no bindings and no environment; `lq` is its only way out. Nothing in the app ever evaluates a script itself.
+- **Cost.** Cloudflare counts each run as a Dynamic Worker: 1,000 a month come with Workers Paid, then $0.002 each. The app refuses runs past `CODE_RUNS_PER_MONTH` (900 unless set in `[vars]`), and at 30 runs in ten minutes a person. `search` runs no script. Raising the cap is the owner's decision.
+- **Fallbacks.** No `LOADER` binding (staging, the Node server): `/mcp` lists the nineteen tools as before. `/mcp/classic` always lists them (its own `/.well-known/oauth-protected-resource/mcp/classic`). A tool called by its old name on `/mcp` still answers, so an assistant holding the old list keeps working until it reconnects. `/api/health` `features.codeMode` says which is live.
+- Limits a run: 40 calls, 45 seconds, 20,000 characters of script, 100,000 of result, two images. An operation's refusal throws inside the script with its own words.
+- An operation must not be named a JavaScript reserved word (`double`, `class`): the library renames those and `lq.double` is then not found. A test holds it.
+- Tests: `test/codemode.test.js` with `test/vm-executor.js`, a stand-in for the sandbox built on `node:vm`. That is not a security boundary and is never wired into the server. To try the real sandbox locally: `npx wrangler dev --env="" --local` runs the whole app on workerd with the loader.
+
 ## What the product is (the owner's words, Nov 20 2026)
 
 "We are basically making Esri's ArcGIS, preprogrammed for site selection and real estate brokerage." Read that as the test for any feature: a broker or site selector should get the answer a GIS analyst would build by hand (overlay the layers, screen the lot, count what is nearby, hand back a map) from one click or one question, with nothing to configure. So: prefer a finished answer over a tool to assemble one; show what overlaps on the map with a legend in view; keep every figure traceable to its public source and say what a screen is not. The owner has said plainly that 3D models and fly-through video are not wanted: "we don't need all that stuff, just a good tool."
