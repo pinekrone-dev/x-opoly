@@ -412,6 +412,13 @@ export const SCHEMA_STATEMENTS = [
     rows       INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL
   )`,
+  // Scripts the connector has run in its sandbox this month, against the
+  // monthly allowance; see codemode.js.
+  `CREATE TABLE IF NOT EXISTS code_run_ledger (
+    month      TEXT PRIMARY KEY,
+    runs       INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL
+  )`,
   // The Library (library.js): the parcels whose offering-memorandum pieces
   // are kept, and the pieces drawn for each, one of a kind per parcel.
   `CREATE TABLE IF NOT EXISTS library_items (

@@ -15,6 +15,7 @@ import { safeLogo } from './logos.js'
 import { squeeze } from './places.js'
 
 import { toBase64 } from './storage.js'
+import { CODE_INSTRUCTIONS, CODE_TOOLS, runScript, searchOperations } from './codemode.js'
 
 export const PROTOCOL_VERSIONS = ['2025-06-18', '2025-03-26', '2024-11-05']
 
@@ -1568,12 +1569,19 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
 
 /**
  * One JSON-RPC message in, its answer out (null for a notification).
+ *
+ * `context.code` ({ executor, admit }) turns the connector to code mode: two
+ * tools, search and execute, in place of the list. `context.classic` keeps
+ * the list whatever the deployment can do.
  */
 export async function handleRpc(message, context) {
   const reply = (resultValue) => ({ jsonrpc: '2.0', id: message.id, result: resultValue })
   const error = (code, text) => ({ jsonrpc: '2.0', id: message.id ?? null, error: { code, message: text } })
   if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') return error(-32600, 'Invalid request')
   const isNotification = message.id === undefined || message.id === null
+  // Code mode where the deployment has a sandbox to run scripts in and the
+  // caller did not ask for the classic list; see codemode.js.
+  const code = context?.code?.executor && !context.classic ? context.code : null
 
   switch (message.method) {
     case 'initialize': {
@@ -1581,16 +1589,36 @@ export async function handleRpc(message, context) {
       return reply({
         protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
         capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'land-quotient', title: 'Land Quotient', version: '1.0.0' },
-        instructions: INSTRUCTIONS,
+        serverInfo: { name: 'land-quotient', title: 'Land Quotient', version: code ? '2.0.0' : '1.0.0' },
+        instructions: code ? CODE_INSTRUCTIONS : INSTRUCTIONS,
       })
     }
     case 'ping':
       return reply({})
     case 'tools/list':
-      return reply({ tools: TOOLS })
+      return reply({ tools: code ? CODE_TOOLS : TOOLS })
     case 'tools/call': {
       const name = message.params?.name
+      if (code && name === 'search') {
+        const found = searchOperations(TOOLS, message.params?.arguments ?? {})
+        return reply({ content: [{ type: 'text', text: JSON.stringify(found) }], structuredContent: found })
+      }
+      if (code && name === 'execute') {
+        try {
+          // The month's allowance of runs is checked, and charged, before the sandbox starts.
+          const admitted = await code.admit()
+          if (!admitted.ok) return reply(failure(admitted.why))
+          return reply(await runScript(message.params?.arguments?.code, {
+            tools: TOOLS,
+            run: (operation, input) => runTool(operation, input, context),
+            executor: code.executor,
+          }))
+        } catch (cause) {
+          return reply(failure(`The script could not be run: ${cause?.message || cause}`))
+        }
+      }
+      // An operation called by its own name: the classic connector, and an
+      // assistant still holding the list it read before code mode.
       if (!TOOLS.some((t) => t.name === name)) return error(-32602, `Unknown tool: ${name}`)
       try {
         const out = await runTool(name, message.params?.arguments ?? {}, context)

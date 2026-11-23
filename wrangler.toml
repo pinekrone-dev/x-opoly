@@ -65,7 +65,7 @@ not_found_handling = "single-page-application"
 # Once this list exists, every path NOT on it is answered by the asset layer
 # alone, so it names every prefix worker/index.js hands to the app (keep the
 # two in step). Anything here the app does not answer falls back to ASSETS.
-run_worker_first = ["/api/*", "/catalog/*", "/markets/*", "/sitemap.xml", "/mcp", "/oauth/*", "/.well-known/*"]
+run_worker_first = ["/api/*", "/catalog/*", "/markets/*", "/sitemap.xml", "/mcp", "/mcp/*", "/oauth/*", "/.well-known/*"]
 
 # Once a day, 16:07 UTC (morning in the US): the trial reminders. See
 # `scheduled` in worker/index.js. One D1 query on a day with nothing due.
@@ -145,6 +145,17 @@ namespace = "default"
 # to staging, so staging signups never mail real people.
 [[send_email]]
 name = "EMAIL"
+
+# The connector's code mode (app/lib/codemode.js): the Worker Loader, which
+# starts an isolate for one script an assistant wrote and throws it away.
+# The script has no network and none of this Worker's bindings. Cloudflare
+# counts each run as a Dynamic Worker: 1,000 a month come with the Workers
+# Paid plan and each one past that is $0.002, so the app refuses runs past
+# CODE_RUNS_PER_MONTH (900 unless set below) and points to /mcp/classic.
+# Without this binding the connector lists its tools the old way. Not given
+# to staging.
+[[worker_loaders]]
+binding = "LOADER"
 
 [vars]
 # Which further parcel store each market lives in, "slug=BINDING" pairs

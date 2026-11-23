@@ -227,6 +227,7 @@ import { readCols, scanCols, unanswerable } from '../src/lib/parcelCols.ts'
 import { randomToken } from './lib/crypto.js'
 import { assistantName, createCode, disconnect, exchangeCode, getClient, goodRedirect, listConnections, metadataAddress, metadataClient, namedAddress, readScope, refreshTokens, registerClient, revokeToken, SCOPES, sweepOauth, tokenUser } from './lib/oauth.js'
 import { handleRpc } from './lib/mcp.js'
+import { chargeRun, monthOf as codeMonth, runsCap, runsSpent } from './lib/codemode.js'
 import { parcelRecords, recordsSupported } from './lib/records.js'
 import { COASTAL_MARKETS, marketBox, snapView } from '../src/lib/vessels.ts'
 import { availableBasemaps, placeholderTile, resolveTiles } from './lib/tiles.js'
@@ -331,8 +332,12 @@ function bindingError(error, binding) {
  * @param {object} context.storage file store (disk or R2)
  * @param {object} context.env     configuration and secrets
  */
-export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards = {} }) {
+export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards = {}, codeExecutor = null }) {
   const app = new Hono()
+  // The sandbox the connector's scripts run in (codemode.js). The Worker
+  // builds Cloudflare's from its LOADER binding; a test hands one in through
+  // the environment; with neither, the connector lists its tools the old way.
+  const scriptRunner = codeExecutor ?? env.CODE_EXECUTOR ?? null
 
   /*
    * The connector calls this app's own routes as the person, and those
@@ -484,6 +489,8 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
            * Census is the odd one: the ACS is free and keyless for light use,
            * so `false` here means "rate-limited", not "broken".
            */
+          // Whether the connector answers in code mode (a sandbox is bound).
+          codeMode: Boolean(scriptRunner),
           integrations: {
             census: Boolean(env.CENSUS_API_KEY),
             google: Boolean(env.GOOGLE_MAPS_API_KEY),
@@ -5787,7 +5794,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     c.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
     c.header('Access-Control-Expose-Headers', 'WWW-Authenticate, Mcp-Session-Id')
   }
-  for (const path of ['/mcp', '/oauth/token', '/oauth/register', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
+  for (const path of ['/mcp', '/mcp/classic', '/.well-known/oauth-protected-resource/mcp/classic', '/oauth/token', '/oauth/register', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp']) {
     app.options(path, (c) => {
       openCors(c)
       return c.body(null, 204)
@@ -5797,7 +5804,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   const protectedResource = (c) => {
     openCors(c)
     return c.json({
-      resource: `${originOf(c)}/mcp`,
+      // The address the caller means to use: an assistant checks it against
+      // the one it was given.
+      resource: `${originOf(c)}${c.req.path.endsWith('/mcp/classic') ? '/mcp/classic' : '/mcp'}`,
       authorization_servers: [originOf(c)],
       scopes_supported: SCOPES,
       bearer_methods_supported: ['header'],
@@ -5806,6 +5815,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
   }
   app.get('/.well-known/oauth-protected-resource', protectedResource)
   app.get('/.well-known/oauth-protected-resource/mcp', protectedResource)
+  app.get('/.well-known/oauth-protected-resource/mcp/classic', protectedResource)
   app.get('/.well-known/oauth-authorization-server', (c) => {
     openCors(c)
     const origin = originOf(c)
@@ -5999,14 +6009,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
    */
   const unauthorizedConnector = (c) => {
     openCors(c)
-    c.header('WWW-Authenticate', `Bearer resource_metadata="${originOf(c)}/.well-known/oauth-protected-resource"`)
+    const which = c.req.path.endsWith('/mcp/classic') ? '/mcp/classic' : ''
+    c.header('WWW-Authenticate', `Bearer resource_metadata="${originOf(c)}/.well-known/oauth-protected-resource${which}"`)
     return c.json({ error: 'unauthorized', error_description: 'Connect Land Quotient to use this.' }, 401)
   }
-  app.get('/mcp', (c) => {
-    openCors(c)
-    return c.json({ error: 'This server answers JSON-RPC over POST and keeps no stream open.' }, 405)
-  })
-  app.post('/mcp', async (c) => {
+  for (const path of ['/mcp', '/mcp/classic']) {
+    app.get(path, (c) => {
+      openCors(c)
+      return c.json({ error: 'This server answers JSON-RPC over POST and keeps no stream open.' }, 405)
+    })
+  }
+  /*
+   * The connector, at two addresses. /mcp answers in code mode (two tools,
+   * search and execute) where the deployment has a sandbox for scripts, and
+   * with the full list of tools where it has none. /mcp/classic is always
+   * the full list: for an assistant that does better with named tools, and
+   * for the rest of a month whose script allowance is spent.
+   */
+  const connector = (classic) => async (c) => {
     openCors(c)
     const bearer = (c.req.header('authorization') || '').replace(/^Bearer\s+/i, '')
     const granted = await tokenUser(db, bearer)
@@ -6029,6 +6049,24 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const context = {
       origin,
       scope: granted.scope,
+      classic,
+      code: scriptRunner && !classic
+        ? {
+            executor: scriptRunner,
+            // Each run is a sandbox Cloudflare counts, so a run is admitted
+            // against the month's allowance and the person's own pace first.
+            admit: async () => {
+              const verdict = rateLimit(`code:${granted.user.id}`, { limit: 30, windowMs: 10 * 60 * 1000 })
+              if (!verdict.allowed) return { ok: false, why: `That is a lot of scripts at once. Try again in ${verdict.retryAfterSeconds} seconds, and do more in each run.` }
+              const cap = runsCap(env)
+              if ((await runsSpent(db, codeMonth())) >= cap) {
+                return { ok: false, why: `This month's ${cap.toLocaleString('en-US')} script runs are used. The same operations are listed as tools at ${origin}/mcp/classic (add that address as a connector), and scripts run again on the 1st.` }
+              }
+              await chargeRun(db, codeMonth())
+              return { ok: true }
+            },
+          }
+        : null,
       call: (path, init = {}) =>
         app.fetch(
           new Request(`${origin}${path}`, {
@@ -6057,7 +6095,9 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     }
     if (!answers.length) return c.body(null, 202)
     return c.json(Array.isArray(payload) ? answers : answers[0])
-  })
+  }
+  app.post('/mcp', connector(false))
+  app.post('/mcp/classic', connector(true))
 
   // An unexpected failure is logged here and described to the caller only
   // generally: its message can carry a query, a path or a provider's reply.

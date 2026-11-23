@@ -17,6 +17,7 @@ import { r2Storage } from '../app/lib/storage.js'
 import { isHtml, previewForPath, rewritePreview, sharePreview, withPreviewOrigin } from '../app/lib/preview.js'
 import { sendTrialReminders } from '../app/lib/billing.js'
 import { emailConfigured, sendEmail, trialReminderEmail } from '../app/lib/email.js'
+import { RUN_TIMEOUT_MS } from '../app/lib/codemode.js'
 
 // The live ship feed's one connection, bound as VESSELS in wrangler.toml.
 export { VesselHubObject } from './vessels.js'
@@ -61,6 +62,25 @@ function ensureSchema(env) {
   return pending
 }
 
+/**
+ * Cloudflare's Code Mode executor over this deployment's Worker Loader: one
+ * Dynamic Worker a script, with no network. The library is loaded the first
+ * time a script is run, not at the top of this file: it imports the Workers
+ * runtime's own modules, which exist only on Cloudflare, and this entry
+ * point is also loaded by the tests under Node.
+ */
+function sandboxFor(loader) {
+  let ready = null
+  return {
+    async execute(code, providers) {
+      ready ??= import('@cloudflare/codemode').then(
+        ({ DynamicWorkerExecutor }) => new DynamicWorkerExecutor({ loader, timeout: RUN_TIMEOUT_MS, globalOutbound: null }),
+      )
+      return (await ready).execute(code, providers)
+    },
+  }
+}
+
 function appFor(env) {
   let app = apps.get(env)
   if (!app) {
@@ -90,6 +110,13 @@ function appFor(env) {
       ),
       storage: r2Storage(env.BUCKET),
       env,
+      /*
+       * Where the connector's scripts run (app/lib/codemode.js): an isolate
+       * loaded for the one script through the LOADER binding, cut off from
+       * the network (globalOutbound null) and holding none of this Worker's
+       * bindings. Without the binding the connector lists its tools instead.
+       */
+      codeExecutor: env.LOADER ? sandboxFor(env.LOADER) : null,
     })
     apps.set(env, app)
   }
@@ -234,7 +261,7 @@ async function answer(request, env, ctx) {
   // Sign in with Land Quotient and the Claude connector: the app answers
   // these, including the approval page, which is HTML the app writes.
   const connector =
-    url.pathname === '/mcp' || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/oauth-')
+    url.pathname === '/mcp' || url.pathname.startsWith('/mcp/') || url.pathname.startsWith('/oauth/') || url.pathname.startsWith('/.well-known/oauth-')
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/catalog/') || pages || connector) {
     if (env.DB) {
       // Let the request through even if migrating failed: routes that do not
