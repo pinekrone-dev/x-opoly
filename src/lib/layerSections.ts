@@ -23,7 +23,7 @@ export const SECTIONS: Section[] = [
   { id: 'property', label: 'Property & ownership', hint: 'Land use colours, who owns what' },
   { id: 'boundaries', label: 'Opportunity zones & boundaries', hint: 'Opportunity zones, school districts, incentive areas' },
   { id: 'zoning', label: 'Zoning & land use', hint: 'Districts, overlays, plans' },
-  { id: 'development', label: 'Development activity', hint: 'Permits, entitlements, projects' },
+  { id: 'development', label: 'Development activity', hint: 'Building permits, submitted and approved plans, code cases' },
   { id: 'market', label: 'Market research', hint: 'Demographics, traffic, schools' },
   { id: 'infrastructure', label: 'Infrastructure', hint: 'Power lines, substations, plants' },
   { id: 'risk', label: 'Risk', hint: 'Crime, flood zones, fuel tanks' },
@@ -37,15 +37,33 @@ const BY_KEY: Record<string, string> = {
   tirz: 'boundaries', 'super-neighborhoods': 'boundaries', uez: 'boundaries', nez: 'boundaries', redevelopment: 'boundaries',
   zoning: 'zoning', 'land-use': 'zoning', overlays: 'zoning', landmarks: 'zoning', 'built-form': 'zoning', plans: 'zoning',
   permits: 'development', 'permits-sf': 'development', 'permits-mf': 'development', 'permits-bis': 'development',
-  'plan-review': 'development', occupancy: 'development', demolitions: 'development', txdot: 'development',
+  'plan-review': 'development', entitlements: 'development', occupancy: 'development', demolitions: 'development', txdot: 'development',
   lara: 'development', 'city-land': 'development', 'code-cases': 'development',
   'Development pipeline': 'development', Entitlements: 'development',
+  'Building permits': 'development', 'Submitted and approved plans': 'development', 'Code cases': 'development',
   demographics: 'market', traffic: 'market', 'street-counts': 'market', schools: 'market', 'private-schools': 'market',
   'parks-rec': 'market', 'rail-stations': 'market', 'business-licenses': 'market', comps: 'market',
   'Market surveys': 'market', Absorption: 'market', 'Rent trends': 'market', Forecasts: 'market',
   transmission: 'infrastructure', substations: 'infrastructure', 'power-plants': 'infrastructure', ships: 'infrastructure', vessels: 'infrastructure',
   feasibility: 'risk', crime: 'risk', 'flood-zones': 'risk', ust: 'risk', lust: 'risk',
 }
+
+/*
+ * What a development layer is called here, whatever the catalogue calls it:
+ * the kind of record, never the city that publishes it. A card is only
+ * there where the data is, so "Anaheim permits" says nothing "Building
+ * permits" does not, and reads as if the rest of the county had none to
+ * give. The publisher stays on the layer's source line.
+ */
+const LAYER_NAMES: Record<string, string> = {
+  permits: 'Building permits',
+  'plan-review': 'Submitted and approved plans',
+  entitlements: 'Submitted and approved plans',
+  'code-cases': 'Code cases',
+}
+
+/** The name a layer goes by in the app and the connector. */
+export const layerName = (id: string, label: string): string => LAYER_NAMES[id] ?? label
 
 /** A card's layer key: its id without the panel's `x:` or `g:` prefix. */
 export const cardKey = (cardId: string): string => (/^[xg]:/.test(cardId) ? cardId.slice(2) : cardId)
@@ -82,7 +100,7 @@ export interface StartingPoint {
  */
 export const STARTING_POINTS: StartingPoint[] = [
   { name: 'Site selection', note: 'Who lives here, what drives by and what is reported', layers: ['demographics', 'traffic', 'schools', 'zoning', 'crime'] },
-  { name: 'Development pipeline', note: 'What is being built and entitled', layers: ['permits', 'plan-review', 'zoning', 'opportunity-zones', 'opportunity-zones-2027', 'occupancy', 'txdot'] },
+  { name: 'Development pipeline', note: 'What is being built and entitled', layers: ['permits', 'plan-review', 'entitlements', 'zoning', 'opportunity-zones', 'opportunity-zones-2027', 'occupancy', 'txdot'] },
   { name: 'Risk check', note: 'Crime, flood and contamination', layers: ['crime', 'flood-zones', 'ust', 'lust'] },
   { name: 'Power & industrial', note: 'Lines, substations and industrial zoning', layers: ['transmission', 'substations', 'power-plants', 'zoning'] },
 ]
