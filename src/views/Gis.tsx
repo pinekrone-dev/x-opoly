@@ -106,6 +106,8 @@ import type {
 const CATALOG = import.meta.env.VITE_PARCEL_CATALOG || '/catalog'
 /** Below this zoom the map shows the country: states with data are shaded and market labels wait. */
 const STATES_UNTIL_ZOOM = 5.5
+/** From there to this zoom the counties with data are shaded; closer in, the open county draws itself. */
+const COUNTIES_UNTIL_ZOOM = 9
 /** A fetch that treats an error page as the failure it is, not as JSON. */
 const asJson = (r: Response) => {
   if (!r.ok) throw new Error(`${r.status}`)
@@ -317,6 +319,8 @@ interface MarketExtent {
   region?: string
   box: [number, number, number, number]
   center: [number, number]
+  /** The county codes its census tracts sit in, for the map zoomed out. */
+  counties?: string[]
 }
 
 interface OwnerIndex {
@@ -850,7 +854,7 @@ const GIS_TIPS: Coachmark[] = [
   {
     target: '[data-tour="address"]',
     title: 'One map, every county',
-    body: 'Type an address to go straight to its lot. Pan into another county and the map switches to it; zoomed out, every market is a label you can click, and from the whole country the states with data are shaded.',
+    body: 'Type an address to go straight to its lot. Pan into another county and the map switches to it; zoomed out, the counties with data are shaded and labelled to click, and from the whole country the states with data are.',
   },
   {
     target: '[data-tour="layers"]',
@@ -1608,6 +1612,21 @@ export default function Gis({
    * (austin-tx, washington-dc). Zoomed out to the whole country the map
    * shades these instead of labelling a hundred markets on top of each other.
    */
+  /*
+   * And the counties, for the step between: zoomed in past the country and
+   * not yet to the parcels, the counties with data are shaded and a click
+   * on one opens its market.
+   */
+  const dataCounties = useMemo(
+    () =>
+      extents.length
+        ? {
+            url: (state: string) => `/geo/counties/${state}.json`,
+            markets: extents.map((x) => ({ slug: x.slug, name: x.name, counties: x.counties ?? [], center: x.center })),
+          }
+        : null,
+    [extents],
+  )
   const dataStates = useMemo(() => {
     const have = [...new Set(extents.map((x) => /-([a-z]{2})$/.exec(x.slug)?.[1].toUpperCase()).filter((code): code is string => Boolean(code)))].sort()
     return have.length ? { url: '/geo/us-states.json', have } : null
@@ -2649,6 +2668,10 @@ export default function Gis({
     if (dataStates && viewBox && viewBox.zoom < STATES_UNTIL_ZOOM) {
       return [{ id: 'states', label: `States with data (${dataStates.have.length}): click one to see its markets`, kind: 'polygon', color: STATES_COLOR }]
     }
+    // One step in: the counties with data, until the map is close enough for a county's own colours.
+    if (dataCounties && viewBox && viewBox.zoom < COUNTIES_UNTIL_ZOOM) {
+      return [{ id: 'counties', label: 'Counties with data: click one to open it', kind: 'polygon', color: STATES_COLOR }]
+    }
     if (showParcels) {
       if (effectiveColorBy === 'value') out.push({ id: 'parcels', label: meta?.valueLabel || 'Value', kind: 'ramp', ramp: rampOf(parcelRamp), low: 'Low', high: 'High' })
       else out.push({ id: 'parcels', label: 'Land use', kind: 'polygon', swatches: LEGEND })
@@ -2670,7 +2693,7 @@ export default function Gis({
       else out.push({ id: layer.id, label: layer.label, kind: layer.kind, color: layerStyle[layer.id]?.color ?? layer.color })
     }
     return out
-  }, [dataStates, viewBox, showParcels, effectiveColorBy, meta?.valueLabel, parcelRamp, choropleth, censusRamp, shownLayers, layerOn, categoryPaint, layerStyle])
+  }, [dataStates, dataCounties, viewBox, showParcels, effectiveColorBy, meta?.valueLabel, parcelRamp, choropleth, censusRamp, shownLayers, layerOn, categoryPaint, layerStyle])
 
   /** Value breaks, computed from the market itself rather than guessed. */
   const valueBreaks = useMemo(() => {
@@ -4768,8 +4791,9 @@ export default function Gis({
           neighbours={neighbours}
           onNeighbourParcel={onNeighbourParcel}
           places={places}
-          placesUntilZoom={9}
+          placesUntilZoom={COUNTIES_UNTIL_ZOOM}
           states={dataStates}
+          counties={dataCounties}
           statesUntilZoom={STATES_UNTIL_ZOOM}
           pins={mapPins}
           onPinPick={(pin) => {
