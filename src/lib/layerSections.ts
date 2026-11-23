@@ -60,6 +60,7 @@ const LAYER_NAMES: Record<string, string> = {
   'plan-review': 'Submitted and approved plans',
   entitlements: 'Submitted and approved plans',
   'code-cases': 'Code cases',
+  'business-licenses': 'Business licenses',
 }
 
 /** The name a layer goes by in the app and the connector. */

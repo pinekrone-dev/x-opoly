@@ -68,6 +68,7 @@ test('a development layer is named for what it is, never for the city that publi
   assert.equal(layerName('plan-review', 'Entitlements'), 'Submitted and approved plans')
   assert.equal(layerName('entitlements', 'Anaheim entitlements'), 'Submitted and approved plans')
   assert.equal(layerName('code-cases', 'Anaheim code cases'), 'Code cases')
+  assert.equal(layerName('business-licenses', 'Anaheim businesses'), 'Business licenses')
   // Everything else keeps the catalogue's own name.
   assert.equal(layerName('zoning', 'Zoning'), 'Zoning')
   assert.equal(layerName('permits-bis', 'Permits, legacy jobs'), 'Permits, legacy jobs')
