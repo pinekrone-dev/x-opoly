@@ -3178,7 +3178,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     if (!user) return c.json({ error: 'Sign in to continue.' }, 401)
     // Versioned, and an empty answer is never kept: a deployment with no
     // bucket bound once cached "no counties" for six hours.
-    return edgeCached(c, 'extents-v2', 6 * 60 * 60, async () => {
+    return edgeCached(c, 'extents-v3', 6 * 60 * 60, async () => {
       const listed = await catalogJson('markets.json').catch(() => null)
       const markets = (Array.isArray(listed) ? listed : listed?.markets ?? []).filter((m) => m?.status === 'live')
       const extents = await Promise.all(
@@ -3187,7 +3187,11 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
             const header = await archiveFor(`${m.slug}/parcels.pmtiles`).getHeader()
             const box = [header.minLon, header.minLat, header.maxLon, header.maxLat].map((v) => Math.round(v * 1e4) / 1e4)
             if (!box.every(Number.isFinite) || box[2] <= box[0] || box[3] <= box[1]) return null
-            return { slug: m.slug, name: m.name, region: m.region, box, center: [header.centerLon, header.centerLat] }
+            // Which counties it covers: the codes its census tracts sit in
+            // ("34017+34003+..."), which the map shades when zoomed out.
+            const tracts = await catalogJson(`${m.slug}/tracts.json`).catch(() => null)
+            const counties = String(tracts?.county ?? '').split('+').filter((code) => /^\d{5}$/.test(code))
+            return { slug: m.slug, name: m.name, region: m.region, box, center: [header.centerLon, header.centerLat], counties }
           } catch {
             return null
           }

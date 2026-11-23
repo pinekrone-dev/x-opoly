@@ -6,6 +6,7 @@ import { STAGE_META, displayName, fullAddress } from '../lib/format'
 import { METERS_PER_MILE, circlePolygon, tileUrls } from '../lib/geo'
 import { pickBasemap, readStoredBasemap, writeStoredBasemap } from '../lib/basemap'
 import LiteMap from './LiteMap'
+import { countyFeatures, statesOf, type CountyMarket, type StateShapes } from '../lib/dataCounties'
 import { BUILDING_BASE_EXPRESSION, BUILDING_HEIGHT_EXPRESSION, FLAT_PITCH, TILTED_PITCH, WHOLE_BUILDING_FILTER, buildingColor } from '../lib/buildings'
 import {
   TERRAIN_ATTRIBUTION,
@@ -49,6 +50,7 @@ function registerPmtiles() {
 const PARCEL_SOURCE = 'parcels'
 /** The states with data, shaded when the map shows the whole country. */
 const STATES_SOURCE = 'lq-states'
+const COUNTIES_SOURCE = 'lq-counties'
 export const STATES_COLOR = '#1B3668'
 
 /*
@@ -607,6 +609,14 @@ interface Props {
   states?: { url: string; have: string[] } | null
   statesUntilZoom?: number
   /**
+   * The step between the country and the parcels: from `statesUntilZoom` to
+   * `placesUntilZoom` the counties that have data are shaded, each tagged
+   * with its market, and a click on one opens that market (as its label
+   * does). `url` names a state's county shapes; only the states of the
+   * markets in view are fetched, once each.
+   */
+  counties?: { url: (state: string) => string; markets: CountyMarket[] } | null
+  /**
    * Pins a saved map carries (nearby retail from the Claude connector, say):
    * a round badge with the brand's logo, or the name's initial where there
    * is none, and the name and detail on a click.
@@ -800,6 +810,7 @@ export default function MapCanvas({
   placesUntilZoom = 8,
   states = null,
   statesUntilZoom = 5.5,
+  counties = null,
   pins = null,
   onPinPick,
   onPlace,
@@ -1604,6 +1615,83 @@ export default function MapCanvas({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, states, statesUntilZoom])
+
+  /*
+   * The counties with data, between the country view and the parcels. What
+   * is fetched follows the map: a state's counties are asked for the first
+   * time one of its markets is in view at this distance, and kept.
+   */
+  const countyShapes = useRef<Record<string, StateShapes>>({})
+  const countyAsked = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const instance = map.current
+    if (!instance || !loaded || !counties?.markets.length) return undefined
+    let live = true
+    const draw = () => {
+      if (!live || !map.current) return
+      upsert(COUNTIES_SOURCE, countyFeatures(counties.markets, countyShapes.current), [
+        {
+          id: 'lq-counties-fill', type: 'fill', source: COUNTIES_SOURCE, minzoom: statesUntilZoom, maxzoom: placesUntilZoom,
+          paint: { 'fill-color': STATES_COLOR, 'fill-opacity': 0.22 },
+        },
+        {
+          id: 'lq-counties-line', type: 'line', source: COUNTIES_SOURCE, minzoom: statesUntilZoom, maxzoom: placesUntilZoom,
+          paint: { 'line-color': STATES_COLOR, 'line-width': 1.2 },
+        },
+      ])
+    }
+    const want = () => {
+      const zoom = instance.getZoom()
+      if (zoom < statesUntilZoom || zoom >= placesUntilZoom) return
+      // The markets on screen, and a view's width around it so a pan finds them drawn.
+      const bounds = instance.getBounds()
+      const [w, s, e, n] = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]
+      const [dx, dy] = [(e - w) / 2, (n - s) / 2]
+      const needed = new Set<string>()
+      for (const market of counties.markets) {
+        const [x, y] = market.center
+        if (x < w - dx || x > e + dx || y < s - dy || y > n + dy) continue
+        for (const state of statesOf(market)) if (!countyAsked.current.has(state)) needed.add(state)
+      }
+      for (const state of needed) {
+        countyAsked.current.add(state)
+        fetch(counties.url(state))
+          .then((response) => (response.ok ? response.json() : null))
+          .then((shapes) => {
+            if (!shapes?.features) return
+            countyShapes.current = { ...countyShapes.current, [state]: shapes }
+            draw()
+          })
+          .catch(() => {
+            countyAsked.current.delete(state)
+          })
+      }
+    }
+    const open = (event: maplibregl.MapLayerMouseEvent) => {
+      const slug = event.features?.[0]?.properties?.slug
+      if (typeof slug === 'string' && slug) placeHandler.current?.(slug)
+    }
+    const point = () => {
+      instance.getCanvas().style.cursor = 'pointer'
+    }
+    const unpoint = () => {
+      instance.getCanvas().style.cursor = ''
+    }
+    if (Object.keys(countyShapes.current).length) draw()
+    want()
+    instance.on('moveend', want)
+    instance.on('click', 'lq-counties-fill', open)
+    instance.on('mouseenter', 'lq-counties-fill', point)
+    instance.on('mouseleave', 'lq-counties-fill', unpoint)
+    return () => {
+      live = false
+      instance.off('moveend', want)
+      instance.off('click', 'lq-counties-fill', open)
+      instance.off('mouseenter', 'lq-counties-fill', point)
+      instance.off('mouseleave', 'lq-counties-fill', unpoint)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, counties, statesUntilZoom, placesUntilZoom])
 
   /*
    * Saved pins, as HTML markers for the same reason as the places: the
