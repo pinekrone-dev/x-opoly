@@ -66,6 +66,24 @@ const LAYER_NAMES: Record<string, string> = {
 /** The name a layer goes by in the app and the connector. */
 export const layerName = (id: string, label: string): string => LAYER_NAMES[id] ?? label
 
+/*
+ * A colour the app gives a layer whatever the catalogue published.
+ *
+ * The owner, Nov 24 2026: "The shaded color, is purple and the opportunity
+ * zone is also purple. So it shouldn't be the same color." Tracts and parcels
+ * shade in violet by default, and the zones were published in violet too, so
+ * a zone over a shaded map could not be told from the shading under it. The
+ * zones are rose now: off the violet ramp, and off the blue, orange, green
+ * and grey the parcels use. The darker one is the 2027 designation.
+ */
+const LAYER_COLORS: Record<string, string> = {
+  'opportunity-zones': '#E64980',
+  'opportunity-zones-2027': '#A61E4D',
+}
+
+/** The colour a layer draws in: the app's own where it has one, else the catalogue's. */
+export const layerColor = (id: string, color: string): string => LAYER_COLORS[id] ?? color
+
 /** A card's layer key: its id without the panel's `x:` or `g:` prefix. */
 export const cardKey = (cardId: string): string => (/^[xg]:/.test(cardId) ? cardId.slice(2) : cardId)
 
