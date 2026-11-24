@@ -53,7 +53,11 @@ export function readScope(value, { withCrm = false } = {}) {
  * comma-separated. A bare host ("agent.meta.ai") allows that host and what
  * sits under it. An entry that starts with https:// is one return address
  * and nothing else on its site: for an assistant whose callback lives on
- * the same host as everything else it serves (Grok, on grok.com).
+ * the same host as everything else it serves (Grok, on grok.com). An
+ * entry that ends in /* is one folder of return addresses that differ only
+ * in their last part: ChatGPT sends an approval back to
+ * https://chatgpt.com/connector/oauth/<an id of its own> when it does not
+ * use its one fixed address, and nothing else on chatgpt.com is allowed.
  */
 const CALLBACK_HOSTS = ['claude.ai', 'claude.com']
 
@@ -74,7 +78,7 @@ export function redirectHosts(env = {}) {
 export function redirectAddresses(env = {}) {
   const out = []
   for (const entry of extraEntries(env)) {
-    if (!entry.startsWith('https://')) continue
+    if (!entry.startsWith('https://') || entry.endsWith('/*')) continue
     try {
       const url = new URL(entry)
       if (!url.search && !url.hash && !url.username && !url.password) out.push(url.origin + url.pathname)
@@ -83,6 +87,28 @@ export function redirectAddresses(env = {}) {
     }
   }
   return out
+}
+
+/** The folders allowed by a /* entry: origin and path up to and including the last slash. */
+export function redirectFolders(env = {}) {
+  const out = []
+  for (const entry of extraEntries(env)) {
+    if (!entry.startsWith('https://') || !entry.endsWith('/*')) continue
+    try {
+      const url = new URL(entry.slice(0, -1))
+      // A folder under the site, never the whole site: that is what a bare host is for.
+      if (!url.search && !url.hash && !url.username && !url.password && url.pathname.length > 1) out.push(url.origin + url.pathname)
+    } catch {
+      // An entry that is not an address allows nothing.
+    }
+  }
+  return out
+}
+
+/** Whether an address is one part below an allowed folder, that part an id and nothing cleverer. */
+const inFolder = (url, env) => {
+  const whole = url.origin + url.pathname
+  return redirectFolders(env).some((folder) => whole.startsWith(folder) && /^[A-Za-z0-9._~-]{1,200}$/.test(whole.slice(folder.length)))
 }
 
 export function goodRedirect(uri, env = {}) {
@@ -94,7 +120,7 @@ export function goodRedirect(uri, env = {}) {
     const host = url.hostname.toLowerCase()
     if (redirectHosts(env).some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) return true
     // A trailing slash is part of the address: Grok's has one.
-    return !url.search && redirectAddresses(env).includes(url.origin + url.pathname)
+    return !url.search && (redirectAddresses(env).includes(url.origin + url.pathname) || inFolder(url, env))
   } catch {
     return false
   }
@@ -201,7 +227,7 @@ async function readCapped(res, limit) {
 
 // One description serves several assistants; the one an approval is going to
 // is named by where it goes.
-const NAMED_BY_HOST = { 'grok.com': 'Grok' }
+const NAMED_BY_HOST = { 'grok.com': 'Grok', 'chatgpt.com': 'ChatGPT' }
 const namedBy = (uri) => {
   try {
     return NAMED_BY_HOST[new URL(uri).hostname.toLowerCase()] || null
@@ -225,7 +251,7 @@ function nameFor(given, uris) {
 export function namedAddress(uri, env = {}) {
   try {
     const url = new URL(uri)
-    return !url.search && !url.hash && redirectAddresses(env).includes(url.origin + url.pathname)
+    return !url.search && !url.hash && (redirectAddresses(env).includes(url.origin + url.pathname) || inFolder(url, env))
   } catch {
     return false
   }
@@ -252,8 +278,13 @@ export async function metadataClient(db, clientId, env = {}, fetcher = fetch) {
     return null
   }
   if (!doc || typeof doc !== 'object' || doc.client_id !== address) return null
-  // Public clients only, as with registration.
-  if (doc.token_endpoint_auth_method && doc.token_endpoint_auth_method !== 'none') return null
+  // Public clients only, as with registration. An application may list the
+  // ways it can sign a token request and name one it prefers: ChatGPT lists
+  // "none" and "private_key_jwt" and prefers the second. This server takes
+  // "none" alone and says so in its own description, so the application
+  // settles on that; it is refused only when "none" is not among them.
+  const ways = Array.isArray(doc.token_endpoint_auth_methods_supported) ? doc.token_endpoint_auth_methods_supported.map(String) : null
+  if (ways ? !ways.includes('none') : doc.token_endpoint_auth_method && doc.token_endpoint_auth_method !== 'none') return null
   const asked = Array.isArray(doc.redirect_uris) ? doc.redirect_uris.slice(0, 50).map(String) : []
   const uris = asked.filter((uri) => goodRedirect(uri, env))
   if (!uris.length) return null

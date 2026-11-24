@@ -117,7 +117,7 @@ const CARDS = [
     file: 'og-connect.png',
     eyebrow: 'Connect',
     title: 'Put Land Quotient inside your AI assistant',
-    sub: 'Add one address to Claude or Grok and it can search parcels, screen sites and draw maps. It signs in as you; no API key.',
+    sub: 'Add one address to Claude, ChatGPT or Grok and it can search parcels, screen sites and draw maps. It signs in as you; no API key.',
     shot: 'shots/gis.jpg',
     shotWidth: 500,
   },

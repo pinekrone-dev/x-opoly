@@ -96,7 +96,7 @@ const INCLUDED = [
   'The parcel map in every live market',
   'Site search and feasibility screens',
   'Zoning, permits, flood and other layers where published',
-  'The connector for Claude and other assistants',
+  'The connector for Claude, ChatGPT and Grok',
   'Surveys, tours and client share links',
   'CRM, lists and teammates, no per seat charge',
 ]
@@ -350,7 +350,7 @@ export default function Landing({
             <div>
               <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Ask your assistant instead</h2>
               <p className="mt-4 text-[16px] leading-relaxed text-slate-300">
-                Connect Land Quotient to Claude and the same records answer in a conversation. It searches parcels,
+                Connect Land Quotient to Claude, ChatGPT or Grok and the same records answer in a conversation. It searches parcels,
                 screens sites, lists the chains nearby, saves a map you can open, and files what you keep on a client
                 list. You sign in with your Land Quotient account. There is no key to copy.
               </p>

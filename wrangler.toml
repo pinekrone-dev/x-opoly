@@ -179,7 +179,7 @@ PARCEL_WRITES_SPENT = "2026-10=27000000"
 #   And the third address in that description, which is the one the Grok app
 #   on a phone actually asked for (the refusal page printed it, 2026-11-19).
 #   Those two paths only, not the rest of cursor.com.
-CONNECTOR_REDIRECT_HOSTS = "agent.meta.ai,https://grok.com/connectors-oauth-exchange-code/,https://www.cursor.com/bot/mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback"
+CONNECTOR_REDIRECT_HOSTS = "agent.meta.ai,https://grok.com/connectors-oauth-exchange-code/,https://www.cursor.com/bot/mcp/oauth/callback,https://www.cursor.com/agents/mcp/oauth/callback,https://chatgpt.com/connector_platform_oauth_redirect,https://chatgpt.com/connector/oauth/*"
 # Basemap: any of osm, carto-voyager, carto-light, carto-dark, satellite.
 # All are keyless. The keyed providers (mapbox, here, maptiler) also need
 # TILE_KEY, which is a secret and so is not set here.

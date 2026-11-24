@@ -7,7 +7,7 @@ import { LIMITS_LINE } from '../components/Pricing'
  * How to connect an AI assistant to Land Quotient.
  *
  * The connector (app/lib/mcp.js, app/lib/codemode.js) lets an assistant such
- * as Claude or Grok search parcels, screen sites and draw maps as the person
+ * as Claude, ChatGPT or Grok search parcels, screen sites and draw maps as the person
  * who connected it. This page is the public set of directions: the address
  * to paste, the steps for each assistant, what the approval screen asks, and
  * what to ask once it is connected.
@@ -37,6 +37,19 @@ const ASSISTANTS = [
     where: 'the terminal',
     command: `claude mcp add --transport http land-quotient ${CONNECTOR_ADDRESS}`,
     steps: ['Run the command below.', 'In Claude Code, type /mcp, pick land-quotient and sign in.', 'Press Allow on the Land Quotient page that opens.'],
+  },
+  {
+    // The steps are ChatGPT's own, read from OpenAI's "Connect and test"
+    // page on Nov 24 2026. Whether a custom server may be added at all is
+    // set by the person's plan and workspace, which the line under the name says.
+    name: 'ChatGPT',
+    where: 'chatgpt.com, where your plan and workspace allow custom servers',
+    steps: [
+      'Open chatgpt.com/plugins, press the plus button and choose Add custom MCP server.',
+      'Name it Land Quotient and paste the address above as the MCP server URL.',
+      'Choose OAuth for authentication, accept the warning and press Create as a plugin.',
+      'Sign in to Land Quotient when it sends you here and press Allow. In a chat, type @ and pick Land Quotient.',
+    ],
   },
   {
     name: 'Grok',
@@ -113,7 +126,7 @@ export default function ConnectPage({
   onGetStarted: () => void
 }) {
   useEffect(() => {
-    document.title = 'Connect Claude or Grok to Land Quotient'
+    document.title = 'Connect Claude, ChatGPT or Grok to Land Quotient'
   }, [])
 
   return (
@@ -137,7 +150,7 @@ export default function ConnectPage({
               Put Land Quotient inside your AI assistant.
             </h1>
             <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-slate-300">
-              Add one address to Claude or Grok and it can search parcels, screen sites and draw maps from the same county
+              Add one address to Claude, ChatGPT or Grok and it can search parcels, screen sites and draw maps from the same county
               records as the app. It signs in as you. There is no API key.
             </p>
             <div className="mt-8 max-w-xl">
@@ -160,8 +173,8 @@ export default function ConnectPage({
         </section>
 
         <section className="mx-auto max-w-5xl px-5 py-14">
-          <h2 className="border-t border-line pt-5 font-mono text-[11px] uppercase tracking-[0.16em] text-brand">Three steps</h2>
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <h2 className="border-t border-line pt-5 font-mono text-[11px] uppercase tracking-[0.16em] text-brand">How to connect</h2>
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
             {ASSISTANTS.map((assistant) => (
               <div key={assistant.name} className="min-w-0 rounded-xl border border-line bg-paper p-6" data-assistant={assistant.name}>
                 <h3 className="text-[15px] font-semibold text-ink">{assistant.name}</h3>

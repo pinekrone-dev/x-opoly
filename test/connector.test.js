@@ -487,3 +487,124 @@ describe('an application that names itself by the address of its description, as
   })
 })
 
+
+describe('ChatGPT, allowed by its fixed return address and its folder of numbered ones', () => {
+  const FIXED = 'https://chatgpt.com/connector_platform_oauth_redirect'
+  const env = { CONNECTOR_REDIRECT_HOSTS: `agent.meta.ai,${FIXED},https://chatgpt.com/connector/oauth/*` }
+
+  test('those addresses and nothing else on chatgpt.com', async () => {
+    const { goodRedirect, namedAddress } = await import('../app/lib/oauth.js')
+    assert.equal(goodRedirect(FIXED, env), true)
+    assert.equal(goodRedirect(FIXED, {}), false, 'refused until the address is named')
+    // The numbered form: one id below the folder, and only an id.
+    assert.equal(goodRedirect('https://chatgpt.com/connector/oauth/abc123_XYZ-9', env), true)
+    assert.equal(namedAddress('https://chatgpt.com/connector/oauth/abc123_XYZ-9', env), true)
+    assert.equal(goodRedirect('https://chatgpt.com/connector/oauth/', env), false, 'the folder itself is not an address')
+    assert.equal(goodRedirect('https://chatgpt.com/connector/oauth/a/b', env), false)
+    assert.equal(goodRedirect('https://chatgpt.com/connector/oauth/a?next=https://evil.example', env), false)
+    assert.equal(goodRedirect('https://chatgpt.com/connector/oauth/..%2Fshare', env), false)
+    // The rest of the site is where anyone can publish a page.
+    assert.equal(goodRedirect('https://chatgpt.com/share/abc', env), false)
+    assert.equal(goodRedirect('https://chatgpt.com/', env), false)
+    assert.equal(goodRedirect('https://chatgpt.com/connector/other/abc', env), false)
+    assert.equal(goodRedirect('https://chatgpt.com.evil.example/connector_platform_oauth_redirect', env), false)
+    assert.equal(goodRedirect('http://chatgpt.com/connector_platform_oauth_redirect', env), false)
+    // A folder entry never opens a whole site.
+    assert.equal(goodRedirect('https://evil.example/anything', { CONNECTOR_REDIRECT_HOSTS: 'https://evil.example/*' }), false)
+    // And the others beside it are untouched.
+    assert.equal(goodRedirect('https://claude.ai/api/mcp/auth_callback', env), true)
+    assert.equal(goodRedirect('https://agent.meta.ai/api/hatch/oauth/callback', env), true)
+  })
+
+  test('its published description is taken though it prefers a signed token request, since it also offers none', async () => {
+    const { metadataClient } = await import('../app/lib/oauth.js')
+    const ADDRESS = 'https://chatgpt.com/oauth/mcp-client.json'
+    const rows = new Map()
+    const db = {
+      run: async (_sql, [id, name, uris]) => rows.set(id, { client_id: id, name, redirect_uris: uris }),
+      get: async (_sql, [id]) => rows.get(id),
+    }
+    const doc = {
+      client_id: ADDRESS,
+      client_name: 'ChatGPT',
+      redirect_uris: [FIXED, 'https://chatgpt.com/share/not-a-callback'],
+      token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
+      token_endpoint_auth_method: 'private_key_jwt',
+    }
+    const answer = (body) => async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+    const kept = await metadataClient(db, ADDRESS, env, answer(doc))
+    assert.deepEqual(kept, { id: ADDRESS, name: 'ChatGPT', redirectUris: [FIXED] })
+    // One that can only sign its requests is not a client this server can serve.
+    assert.equal(await metadataClient(db, ADDRESS, env, answer({ ...doc, token_endpoint_auth_methods_supported: ['private_key_jwt'] })), null)
+    // The older single field still decides when the list is absent.
+    assert.equal(await metadataClient(db, ADDRESS, env, answer({ ...doc, token_endpoint_auth_methods_supported: undefined })), null)
+  })
+
+  test('through the door: it registers, the person approves, and every answer names this server as its issuer', async () => {
+    const server = await createServer({ DATA_DIR: temp.directory, DB_FILE: `${temp.directory}/chatgpt.db`, CONNECTOR_REDIRECT_HOSTS: env.CONNECTOR_REDIRECT_HOSTS })
+    const visitor = () => {
+      let cookie = null
+      return async (path, init = {}) => {
+        const response = await server.fetch(new Request(`http://localhost${path}`, { redirect: 'manual', ...init, headers: { ...(cookie ? { cookie } : {}), ...(init.headers || {}) } }))
+        const set = response.headers.get('set-cookie')
+        if (set) cookie = set.split(';')[0]
+        const text = await response.text()
+        let body = text
+        try { body = text ? JSON.parse(text) : null } catch { /* a page */ }
+        return { status: response.status, body, headers: response.headers }
+      }
+    }
+    const person = visitor()
+    const chatgpt = visitor()
+    await person('/api/auth/register', json({ name: 'Kevin', email: 'kevin@example.com', password: 'a long enough password' }))
+
+    // What ChatGPT checks before it will use its fixed address.
+    const meta = await chatgpt('/.well-known/oauth-authorization-server')
+    assert.equal(meta.body.authorization_response_iss_parameter_supported, true)
+    assert.deepEqual(meta.body.code_challenge_methods_supported, ['S256'])
+    const resource = await chatgpt('/.well-known/oauth-protected-resource/mcp')
+    assert.deepEqual(resource.body.authorization_servers, [meta.body.issuer], 'the issuer is written the same in both places')
+
+    const made = await chatgpt('/oauth/register', json({ client_name: 'ChatGPT', redirect_uris: [FIXED], token_endpoint_auth_method: 'none' }))
+    assert.equal(made.status, 201)
+    assert.deepEqual(made.body.redirect_uris, [FIXED])
+
+    const proof = b64url(randomBytes(32))
+    const q = new URLSearchParams({ response_type: 'code', client_id: made.body.client_id, redirect_uri: FIXED, code_challenge: b64url(createHash('sha256').update(proof).digest()), code_challenge_method: 'S256', state: 'st-1', resource: 'http://localhost/mcp' })
+    const page = await person(`/oauth/authorize?${q}`)
+    assert.equal(page.status, 200)
+    assert.match(page.body, /Connect ChatGPT to Land Quotient\?/)
+
+    // A refusal carries the issuer too.
+    const refused = await person('/oauth/authorize', form({ ...Object.fromEntries(q), decision: 'deny' }, { origin: 'http://localhost' }))
+    const no = new URL(refused.headers.get('location'))
+    assert.equal(no.origin + no.pathname, FIXED)
+    assert.equal(no.searchParams.get('error'), 'access_denied')
+    assert.equal(no.searchParams.get('iss'), meta.body.issuer)
+
+    const decided = await person('/oauth/authorize', form({ ...Object.fromEntries(q), decision: 'allow' }, { origin: 'http://localhost' }))
+    assert.equal(decided.status, 302)
+    const yes = new URL(decided.headers.get('location'))
+    assert.equal(yes.origin + yes.pathname, FIXED)
+    assert.equal(yes.searchParams.get('state'), 'st-1')
+    assert.equal(yes.searchParams.get('iss'), meta.body.issuer, 'exactly the issuer published, not a near spelling of it')
+
+    const issued = await chatgpt('/oauth/token', form({ grant_type: 'authorization_code', code: yes.searchParams.get('code'), client_id: made.body.client_id, redirect_uri: FIXED, code_verifier: proof, resource: 'http://localhost/mcp' }))
+    assert.equal(issued.status, 200)
+    assert.match(issued.body.access_token, /^lqt_/)
+
+    // Unsigned, the connector says where to sign in; signed, it lists tools that each say they need it.
+    const cold = await chatgpt('/mcp', json({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))
+    assert.equal(cold.status, 401)
+    assert.match(cold.headers.get('www-authenticate'), /resource_metadata="http:\/\/localhost\/\.well-known\/oauth-protected-resource/)
+    const listed = await chatgpt('/mcp', json({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { authorization: `Bearer ${issued.body.access_token}` }))
+    assert.equal(listed.status, 200)
+    const tools = listed.body.result.tools
+    assert.ok(tools.length > 0)
+    for (const tool of tools) {
+      assert.deepEqual(tool.securitySchemes, [{ type: 'oauth2', scopes: ['read'] }], tool.name)
+      assert.deepEqual(tool._meta.securitySchemes, tool.securitySchemes, tool.name)
+      assert.equal(typeof tool.annotations?.readOnlyHint, 'boolean', `${tool.name} says whether it only reads`)
+    }
+  })
+})
