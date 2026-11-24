@@ -5833,6 +5833,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none'],
+      // Every answer sent back to an application names this server as its
+      // issuer (RFC 9207, `backTo` below). ChatGPT asks for that before it
+      // will use its one fixed return address.
+      authorization_response_iss_parameter_supported: true,
       // An application may also name itself by the address of its own
       // description (app/lib/oauth.js, metadataClient). Grok does.
       client_id_metadata_document_supported: true,
@@ -5871,9 +5875,13 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const detail = asked ? `<p class="small" style="word-break:break-all">Application: ${shown(asked.client_id)}<br>Return address: ${shown(asked.redirect_uri)}</p>` : ''
     return c.html(oauthPage(title, `<h1>${esc(title)}</h1><p>${esc(text)}</p><p class="small">Start the connection again from the assistant you were connecting.</p>${detail}`), status)
   }
-  const backTo = (redirectUri, values) => {
+  // Where an answer goes, approval or refusal alike, with the issuer named
+  // on it: exactly the `issuer` this server publishes, so an application
+  // that started with several servers can tell which one answered.
+  const backTo = (c, redirectUri, values) => {
     const url = new URL(redirectUri)
     for (const [key, value] of Object.entries(values)) if (value) url.searchParams.set(key, value)
+    url.searchParams.set('iss', originOf(c))
     return url.toString()
   }
   // The authorize request, checked the same way on the page and on the decision.
@@ -5911,7 +5919,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const q = c.req.query()
     const checked = await checkAuthorize(c, q)
     if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal, 400, checked.asked)
-    if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
+    if (checked.back) return c.redirect(backTo(c, q.redirect_uri, { error: checked.back, state: q.state }))
     const user = await sessionUser(db, tokenFrom(c))
     if (!user) {
       const here = new URL(c.req.url)
@@ -5946,10 +5954,10 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
     const q = Object.fromEntries(Object.entries(form).map(([key, value]) => [key, typeof value === 'string' ? value : '']))
     const checked = await checkAuthorize(c, q)
     if (checked.fatal) return oauthError(c, 'This connection link is not valid', checked.fatal, 400, checked.asked)
-    if (checked.back) return c.redirect(backTo(q.redirect_uri, { error: checked.back, state: q.state }))
+    if (checked.back) return c.redirect(backTo(c, q.redirect_uri, { error: checked.back, state: q.state }))
     const user = await sessionUser(db, tokenFrom(c))
     if (!user) return oauthError(c, 'Signed out', 'Sign in to Land Quotient and start the connection again.', 401)
-    if (q.decision !== 'allow') return c.redirect(backTo(q.redirect_uri, { error: 'access_denied', state: q.state }))
+    if (q.decision !== 'allow') return c.redirect(backTo(c, q.redirect_uri, { error: 'access_denied', state: q.state }))
     const code = await createCode(db, {
       clientId: checked.client.id,
       userId: user.id,
@@ -5957,7 +5965,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
       challenge: q.code_challenge,
       scope: readScope('', { withCrm: q.crm === '1' }),
     })
-    return c.redirect(backTo(q.redirect_uri, { code, state: q.state }))
+    return c.redirect(backTo(c, q.redirect_uri, { code, state: q.state }))
   })
 
   app.post('/oauth/token', async (c) => {

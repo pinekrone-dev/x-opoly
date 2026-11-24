@@ -29,7 +29,7 @@ More than 100 markets in 29 states are live as of November 2026, among them Aust
 - [For developers](https://landquotient.com/developers)
 - [For investors](https://landquotient.com/investors)
 - [Pricing](https://landquotient.com/pricing)
-- [Connect an AI assistant](https://landquotient.com/connect): how to add Land Quotient to Claude or Grok
+- [Connect an AI assistant](https://landquotient.com/connect): how to add Land Quotient to Claude, ChatGPT or Grok
 - [FAQ](https://landquotient.com/faq)
 
 ## Connect an AI assistant

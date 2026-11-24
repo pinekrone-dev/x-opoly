@@ -63,6 +63,9 @@ export const CODE_TOOLS = [
       properties: { code: { type: 'string', description: 'An async arrow function, as JavaScript source.' } },
       required: ['code'],
     },
+    // A script may save a map or file a parcel on a list, so it is not
+    // read-only; it deletes nothing, and reaches nothing outside Land Quotient.
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
 ]
 

@@ -1575,6 +1575,16 @@ export async function runTool(name, rawInput = {}, { call, origin, scope = [] })
  * tools, search and execute, in place of the list. `context.classic` keeps
  * the list whatever the deployment can do.
  */
+/*
+ * Every tool needs the person signed in, and says so on its own listing.
+ * ChatGPT reads this to know a tool wants its sign-in rather than an
+ * anonymous call; it is written both where the protocol keeps extras
+ * (`_meta`) and where ChatGPT's own examples put it. Assistants that do not
+ * know the field ignore it.
+ */
+const SIGN_IN = [{ type: 'oauth2', scopes: ['read'] }]
+export const withSignIn = (tool) => ({ ...tool, securitySchemes: SIGN_IN, _meta: { ...(tool._meta ?? {}), securitySchemes: SIGN_IN } })
+
 export async function handleRpc(message, context) {
   const reply = (resultValue) => ({ jsonrpc: '2.0', id: message.id, result: resultValue })
   const error = (code, text) => ({ jsonrpc: '2.0', id: message.id ?? null, error: { code, message: text } })
@@ -1597,7 +1607,7 @@ export async function handleRpc(message, context) {
     case 'ping':
       return reply({})
     case 'tools/list':
-      return reply({ tools: code ? CODE_TOOLS : TOOLS })
+      return reply({ tools: (code ? CODE_TOOLS : TOOLS).map(withSignIn) })
     case 'tools/call': {
       const name = message.params?.name
       if (code && name === 'search') {

@@ -15,7 +15,7 @@ import PricingCard, { LIMITS_LINE } from '../components/Pricing'
 const INCLUDED = [
   'The parcel map: owners, zoning and permits in 100+ markets',
   'Site search and feasibility screens in every market',
-  'The connector for Claude and other assistants',
+  'The connector for Claude, ChatGPT and Grok',
   'Unlimited market surveys, sites and tours',
   'CRM, client lists, share links and tour books',
   'Census demographics around every site',
