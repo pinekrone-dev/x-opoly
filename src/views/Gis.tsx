@@ -13,7 +13,7 @@ import { readManifest, readRow, type RowsManifest } from '../lib/parcelRows'
 import { readSearchManifest, searchPack, type SearchHit, type SearchManifest } from '../lib/parcelSearch'
 import ListsLayerPicker, { listColor } from '../components/ListsLayerPicker'
 import { GROUP_LABELS, groupLayers, layerGroup, trafficLabel } from '../lib/layerGroups'
-import { STARTING_POINT_MARKET, cardsToSwitch, layerName, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
+import { STARTING_POINT_MARKET, cardsToSwitch, layerColor, layerName, sectionOf, startingPoints, type StartingPoint } from '../lib/layerSections'
 import ZoningReport from '../components/ZoningReport'
 import LibraryButton from '../components/LibraryButton'
 import ZoningCode from '../components/ZoningCode'
@@ -1831,7 +1831,7 @@ export default function Gis({
       .then((doc: { layers?: PublishedLayer[] }) => {
         if (cancelled) return
         // Named by what they are, not by who publishes them (layerSections.ts).
-        const list = (doc.layers ?? []).map((layer) => ({ ...layer, label: layerName(layer.id, layer.label) }))
+        const list = (doc.layers ?? []).map((layer) => ({ ...layer, label: layerName(layer.id, layer.label), color: layerColor(layer.id, layer.color) }))
         setPublished(list)
         setLayerStyle(
           Object.fromEntries(list.map((layer) => [layer.id, { color: layer.color, opacity: 0.7 }])),

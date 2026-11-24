@@ -198,6 +198,7 @@ import {
 } from './lib/parcels.js'
 import { edgeCached } from './lib/edgecache.js'
 import { parseZone } from './lib/zoning/la-zone.js'
+import { layerColor, layerName } from '../src/lib/layerSections.ts'
 import { laReport } from './lib/zoning/la-rules.js'
 import { slopeBands, areaSqft } from './lib/zoning/slope.js'
 import { liveMarkets, marketPage, sitemapXml } from './lib/marketPages.js'
@@ -4309,7 +4310,7 @@ export function createApp({ db, storage, env = {}, parcelDb = null, parcelShards
         if (!head) { notes.push(`${layer.label} could not be read.`); continue }
         const coloured = (layer.categories ?? []).find((cat) => cat.colors && typeof cat.colors === 'object')
         layers.push({
-          label: layer.label, kind: layer.kind, color: layer.color,
+          label: layerName(layer.id, layer.label), kind: layer.kind, color: layerColor(layer.id, layer.color),
           colors: coloured ? { field: coloured.field, map: coloured.colors } : null,
           read: featureReader(tiles, layer.sourceLayer || id), minZoom: head.minZoom, maxZoom: head.maxZoom,
         })

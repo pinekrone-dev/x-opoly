@@ -53,9 +53,9 @@ const CARDS = [
   {
     file: 'og.png',
     layout: 'trio',
-    eyebrow: 'CRM + GIS + Market surveys',
-    title: 'One tool for the whole deal',
-    sub: 'The parcel map, the market survey and the CRM in one workspace. 30+ counties, free with an account.',
+    eyebrow: 'Parcel map + site screening + CRM',
+    title: 'Find the lot. Know what fits on it.',
+    sub: 'Every parcel with its county record, its layers and a feasibility screen. 100+ markets, free with an account.',
   },
   {
     file: 'og-brokers.png',
@@ -101,7 +101,7 @@ const CARDS = [
     file: 'og-faq.png',
     eyebrow: 'Questions',
     title: 'What people ask before they move a live requirement',
-    sub: 'What it is, what it costs, where the data comes from, and what a client sees. 30+ counties, free with an account.',
+    sub: 'What it is, what it costs, where the data comes from, and what a client sees. 100+ markets, free with an account.',
     shot: 'shots/map.jpg',
     shotWidth: 440,
   },

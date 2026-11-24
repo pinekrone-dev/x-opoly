@@ -1,125 +1,111 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 
+import CoverageMap from '../components/CoverageMap'
 import { AlsoOn, MarketingFooter, MarketingHeader } from '../components/MarketingChrome'
 import PricingCard from '../components/Pricing'
+import { compact, fetchMarkets, money, totals, type Market } from '../lib/catalogue'
+import { stateOf } from '../lib/coverage'
 
 /**
  * The public face of the product.
  *
- * Everything a stranger sees before an account exists: what the tool does,
- * what it costs, and two doors in — sign in, or start a subscription. The
- * pricing card leads to the same signup the nav does; payment itself happens
- * after the email is verified, inside the app's own frame.
+ * Everything a stranger sees before an account exists: what the tool is, how
+ * much of the country it covers today, and two doors in. It describes the
+ * product as it stands (the owner, Nov 24 2026: "Update the site with latest
+ * features and total markets covered, modern SaaS site ... the client facing
+ * side. Like presignup"): a parcel map for site selection and brokerage, with
+ * the survey and deal tools around it.
+ *
+ * The counts are read from the live market list when the page opens, the way
+ * the Markets and audience pages read theirs, so the page cannot quote a
+ * market that is not published and does not need editing when one is. Until
+ * the list arrives the sentences stand without their numbers.
  */
 
-/** The product as it actually looks, once, under the fold. */
-const HERO_SHOT = {
-  src: '/shots/map.jpg',
-      w: 1440,
-      h: 660,
-  caption: 'Map view \u00b7 stage rail, radius ring, street map',
-  alt: 'Map view with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring.',
-}
-
-/**
- * The work in two chapters rather than one long count to six. Each chapter
- * opens with the wide, thin part of the interface it starts from \u2014 a toolbar,
- * a table row \u2014 run as a full-width band, then the two chunkier panels beside
- * each other. Shape follows the crop: a strip of toolbar and a stage rail want
- * different room, and forcing both into the same frame wasted most of it.
- */
-const CHAPTERS = [
+/** What a lot card answers, in the order a broker asks it. */
+const ON_A_LOT = [
   {
-    label: '01',
-    title: 'Build the survey',
-    intro:
-      'Get every candidate onto one map, inside the area that actually matters, sorted by where it stands.',
-    band: {
-      title: 'Add the sites',
-      body: 'Every candidate goes in one place. Drop a pin by address, paste a listing, or upload the flyer and let the AI fill the profile in. The views across the top are the same survey seen four ways.',
-      src: '/steps/1-add.jpg',
-      w: 1280,
-      h: 124,
-      alt: 'The survey toolbar: Map, List, Plan tour and Share views, with an Add site button.',
-    },
-    cards: [
-      {
-        title: 'Draw the trade area',
-        body: 'Set a radius or draw a zone around where the client needs to be. The ring carries its own distance, so half a mile stays half a mile for whoever opens it next.',
-        src: '/steps/2-area.jpg',
-      w: 1280,
-      h: 985,
-        alt: 'A dashed radius ring drawn on the street map, labelled Test \u00b7 0.5 mi, with a site pin inside it.',
-      },
-      {
-        title: 'Stage every candidate',
-        body: 'Drag a site between stages and its pin recolours on the map. Hide a stage to clear the noise. The count beside each label is how you know where the search really stands.',
-        src: '/steps/3-stage.jpg',
-      w: 1280,
-      h: 717,
-        alt: 'The stage rail showing Unqualified and Qualified/Touring groups, each with a count and a draggable site card.',
-      },
-    ],
+    title: 'Who owns it',
+    body: 'The owner on the county roll and where the tax bill is mailed, with the other parcels the same owner holds. California counties publish no owner names, and the page says so.',
   },
   {
-    label: '02',
-    title: 'Run the deal',
-    intro: 'Compare on the numbers, order the day, and hand the client something that stays current.',
-    band: {
-      title: 'Compare on the numbers',
-      body: 'Switch to the list when comparing matters more than locating. Stage, asking, size and year built line up in a column you can sort. Rate on request stays rate on request.',
-      src: '/steps/4-compare.jpg',
-      w: 1280,
-      h: 169,
-      alt: 'The list view table with columns for site, stage, asking rate, size and year built.',
-    },
-    cards: [
-      {
-        title: 'Order the tour',
-        body: 'Optimize route puts the stops in driving order and works out the arrival time at each one. Change how long you spend at a stop and everything after it moves with it.',
-        src: '/steps/5-order.jpg',
-      w: 1280,
-      h: 539,
-        alt: 'A tour stop card showing eight minutes drive, arrive 10:08 AM, and an editable twenty minute time at stop, beside an Optimize route button.',
-      },
-      {
-        title: 'Hand over the day',
-        body: 'Tour book prints the run as a leave-behind. The share link shows the client the live map instead, so moving a site to LOI updates the link they already have.',
-        src: '/steps/6-handover.jpg',
-      w: 1280,
-      h: 144,
-        alt: 'The tour configuration header with a Tour book button.',
-      },
-    ],
+    title: 'What it is worth to the county',
+    body: 'Land, building and total value, the last recorded sale where the county publishes one, acreage and year built.',
+  },
+  {
+    title: 'What may be built',
+    body: 'Zoning and land use as the city or county writes them, with opportunity zones and other boundaries drawn over the lot.',
+  },
+  {
+    title: 'What is happening around it',
+    body: 'Building permits, submitted and approved plans and code cases, where the city publishes them, each on the map and on the lot it belongs to.',
+  },
+  {
+    title: 'What sits nearby',
+    body: 'National and regional chains with the nearest store of each, the tenant mix by sector, and the colleges, hospitals, stadiums and employers that sell a site.',
+  },
+  {
+    title: 'Who lives there',
+    body: 'Census population, income and growth shaded by tract, with the figures beside the map.',
   },
 ]
 
-const FEATURES = [
+/** One row of the example screen: a constraint, the acres it takes, and its share. */
+const SCREEN = [
+  { label: 'Slope over 15%', acres: '1.9', share: 15, color: '#b45309' },
+  { label: 'FEMA flood hazard', acres: '2.4', share: 19, color: '#1098ad' },
+  { label: 'Wetlands', acres: '0.6', share: 5, color: '#2f9e44' },
+  { label: 'Protected or public land', acres: '0.0', share: 0, color: '#7c3aed' },
+]
+
+/** The layers, in the colours the map draws them in. */
+const LAYERS = [
+  { name: 'Zoning', color: '#d6336c' },
+  { name: 'Building permits', color: '#e8590c' },
+  { name: 'Submitted and approved plans', color: '#0b7285' },
+  { name: 'Code cases', color: '#c92a2a' },
+  { name: 'FEMA flood zones', color: '#1098ad' },
+  { name: 'Opportunity zones', color: '#E64980' },
+  { name: 'Transmission lines and substations', color: '#d97706' },
+  { name: 'Fuel tanks and leaks', color: '#b45309' },
+  { name: 'Schools and districts', color: '#1c7ed6' },
+  { name: 'Traffic counts', color: '#5f3dc4' },
+]
+
+/** The work around the map, which is where the product started. */
+const DEAL_WORK = [
   {
-    title: 'Demographics that answer clients',
-    body: 'Census choropleths — population, income, growth — shade the map around every site, with the numbers in a side panel.',
-    icon: 'M3 3v18h18 M7 14v4 M12 9v9 M17 5v13',
+    title: 'Surveys and tours',
+    body: 'Put every candidate on one map, stage them, order the tour by drive time and print the tour book.',
   },
   {
-    title: 'Pipeline stages, your labels',
-    body: 'Group sites into stages with matching pin colors, toggle them from the legend, and draw non-compete radii right on the map.',
-    icon: 'M4 6h16 M4 12h10 M4 18h7',
+    title: 'Share links',
+    body: 'Send the client one link to the live map. Move a site to LOI and the link they already have shows it.',
   },
   {
-    title: 'Share links clients open',
-    body: 'One link shows the live survey map — with demographics and QR codes if you switch them on. No login, no attachment.',
-    icon: 'M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7 M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7',
+    title: 'Lists by client',
+    body: 'File parcels on a list for each client or search, and come back to them from the map or your assistant.',
+  },
+  {
+    title: 'CRM',
+    body: 'Deals, people, companies and places in the same workspace, so a lot and the conversation about it stay together.',
   },
 ]
 
 const INCLUDED = [
-  'Unlimited surveys and sites',
-  'Census demographic choropleths',
-  'AI flyer and listing extraction',
-  'Tour planning with drive times',
-  'Client share links and PDFs',
-  'Team members by invitation',
+  'The parcel map in every live market',
+  'Site search and feasibility screens',
+  'Zoning, permits, flood and other layers where published',
+  'The connector for Claude and other assistants',
+  'Surveys, tours and client share links',
+  'CRM, lists and teammates, no per seat charge',
 ]
+
+const check = (
+  <svg className="mt-0.5 shrink-0 text-brand" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden>
+    <path d="m5 13 4 4L19 7" />
+  </svg>
+)
 
 export default function Landing({
   selfServe,
@@ -131,6 +117,19 @@ export default function Landing({
   onGetStarted: () => void
 }) {
   const primaryCta = selfServe ? onGetStarted : onSignIn
+  const [markets, setMarkets] = useState<Market[] | null>(null)
+
+  useEffect(() => {
+    let live = true
+    fetchMarkets()
+      .then((list) => {
+        if (live) setMarkets(list)
+      })
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [])
 
   /*
    * A link like /#pricing from another page arrives before React has rendered
@@ -145,6 +144,9 @@ export default function Landing({
     if (target) target.scrollIntoView()
   }, [])
 
+  const sums = markets?.length ? totals(markets) : null
+  const states = markets?.length ? new Set(markets.map((m) => stateOf(m.slug)).filter(Boolean)).size : 0
+
   return (
     /*
      * No overflow container here. The app shell fixes html, body and #root at
@@ -155,172 +157,285 @@ export default function Landing({
      * the document scroll puts the header back on the viewport.
      */
     <div className="min-h-full bg-surface">
-      <MarketingHeader selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} current="/" />
+      <MarketingHeader selfServe={selfServe} onSignIn={onSignIn} onGetStarted={onGetStarted} current="/" wide />
 
       <main>
         {/*
-          The hero is the survey sheet the product is named for: a faint grid,
-          and the same concentric rings the map draws around a trade area. Both
-          are CSS gradients rather than an image or a canvas, so they cost
-          nothing to load and stay crisp at any width.
+          The hero is the coverage itself: the country, the states with a live
+          market filled in, a dot on each market. It is the one picture on the
+          page that only this product could draw, and it is drawn from the
+          list the map opens on.
         */}
         <section className="relative overflow-hidden bg-brand-night">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0"
-            style={{
-              backgroundImage:
-                'repeating-linear-gradient(0deg, rgba(122,170,225,.07) 0 1px, transparent 1px 46px),' +
-                'repeating-linear-gradient(90deg, rgba(122,170,225,.07) 0 1px, transparent 1px 46px)',
-            }}
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute inset-0"
-            style={{
-              backgroundImage:
-                'radial-gradient(circle at 86% 22%, transparent 0 150px, rgba(1,163,168,.28) 150px 151px,' +
-                ' transparent 151px 300px, rgba(1,163,168,.20) 300px 301px,' +
-                ' transparent 301px 470px, rgba(1,163,168,.13) 470px 471px, transparent 471px)',
-            }}
-          />
-
-          <div className="relative mx-auto max-w-5xl px-5 pt-16 sm:pt-24">
-            <p className="mb-5 inline-block rounded-full border border-brand-edge px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-brand-soft">
-              For tenant rep brokers
-            </p>
-            <h1 className="max-w-3xl text-4xl font-bold leading-[1.05] tracking-tight text-white sm:text-[3.4rem]">
-              Market surveys your clients actually open
-            </h1>
-            <p className="mt-5 max-w-xl text-[15px] leading-relaxed text-slate-300">
-              Map the sites, shade the demographics, plan the tour, and send one polished link — instead
-              of a folder of flyers and a spreadsheet.
-            </p>
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className="btn rounded-lg bg-brand px-5 py-2.5 text-white hover:bg-brand-soft hover:text-brand-night"
-                onClick={primaryCta}
-              >
-                {selfServe ? 'Create a free account' : 'Sign in'}
-              </button>
-              <a
-                className="btn rounded-lg border border-brand-edge px-4 py-2.5 text-slate-200 hover:border-brand-soft hover:text-brand-soft"
-                href="#how"
-              >
-                See what it does
-              </a>
+          <div className="mx-auto grid max-w-6xl items-center gap-10 px-5 pb-14 pt-14 sm:pt-20 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:pb-20">
+            <div>
+              <h1 className="text-[2.5rem] font-bold leading-[1.04] tracking-tight text-white sm:text-[3.5rem]">
+                Find the lot. Know what fits on it.
+              </h1>
+              <p className="mt-6 max-w-lg text-[17px] leading-relaxed text-slate-300">
+                Land Quotient is a parcel map built for site selection and brokerage. Every lot carries its county
+                record, the layers around it, and a screen of the acres you can actually build on.
+              </p>
+              <div className="mt-8 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="btn rounded-lg bg-brand px-5 py-3 text-[15px] text-white hover:bg-brand-soft hover:text-brand-night"
+                  onClick={primaryCta}
+                >
+                  {selfServe ? 'Create a free account' : 'Sign in'}
+                </button>
+                <a
+                  className="btn rounded-lg border border-brand-edge px-5 py-3 text-[15px] text-slate-200 hover:border-brand-soft hover:text-brand-soft"
+                  href="/markets"
+                >
+                  See the markets
+                </a>
+              </div>
+              <p className="mt-5 text-[13px] text-slate-400">Free with an account. No card, no trial clock.</p>
             </div>
 
-            {/* Bleeds off the bottom edge: the product continues past the fold. */}
-            <figure className="mt-14 overflow-hidden rounded-t-xl border border-brand-edge border-b-0 bg-white shadow-2xl shadow-black/40">
-              <img src={HERO_SHOT.src} alt={HERO_SHOT.alt} width={HERO_SHOT.w} height={HERO_SHOT.h} className="block w-full" />
-            </figure>
+            <div>
+              <CoverageMap markets={markets} />
+              {/* The totals read as a sentence about the map above them, not as a row of trophies. */}
+              <p className="mt-4 max-w-xl text-[14px] leading-relaxed text-slate-300" aria-live="polite">
+                {sums ? (
+                  <>
+                    <span className="font-semibold text-white">{sums.markets} markets</span> in{' '}
+                    <span className="font-semibold text-white">{states} states</span> are live today:{' '}
+                    <span className="font-semibold text-white">{compact(sums.parcels)} parcels</span> and{' '}
+                    <span className="font-semibold text-white">{money(sums.value)}</span> on the counties' rolls. Each
+                    dot opens its market.
+                  </>
+                ) : (
+                  'Each filled state has at least one live market, read from the counties’ own records.'
+                )}
+              </p>
+            </div>
           </div>
         </section>
 
         <section id="how" className="scroll-mt-20 border-b border-line bg-surface">
-          <div className="mx-auto max-w-5xl px-5 py-20">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">How it works</p>
-            <h2 className="mt-3 max-w-xl text-3xl font-bold tracking-tight text-ink">
-              The whole survey, one tool
+          <div className="mx-auto max-w-6xl px-5 py-20">
+            <h2 className="max-w-2xl text-3xl font-bold tracking-tight text-ink sm:text-4xl">
+              Click a lot and the county record is already there
             </h2>
-            <p className="mt-3 max-w-lg text-[15px] leading-relaxed text-muted">
-              From the first pin to the tour book the client takes home.
+            <p className="mt-4 max-w-2xl text-[16px] leading-relaxed text-muted">
+              No request to the assessor, no spreadsheet to join. Zoom from the country to a state, a county and then
+              the parcels themselves.
             </p>
 
-            <div className="mt-16 space-y-20">
-              {CHAPTERS.map((chapter) => (
-                <section key={chapter.label} aria-labelledby={`ch-${chapter.label}`}>
-                  <div className="flex items-baseline gap-4 border-t border-line pt-6">
-                    <span className="font-mono text-[13px] font-medium text-brand">{chapter.label}</span>
-                    <div className="min-w-0">
-                      <h3 id={`ch-${chapter.label}`} className="text-2xl font-bold tracking-tight text-ink">
-                        {chapter.title}
-                      </h3>
-                      <p className="mt-2 max-w-xl text-[14px] leading-relaxed text-muted">{chapter.intro}</p>
-                    </div>
-                  </div>
+            <figure className="mt-10 overflow-hidden rounded-xl border border-line shadow-2xl shadow-slate-900/10">
+              {/* On a phone the whole screen shrinks to a thumbnail, so the map itself is shown instead. */}
+              <img
+                src="/shots/gis-map.jpg"
+                width={680}
+                height={840}
+                loading="lazy"
+                alt="The parcel map of Austin, every lot coloured by land use."
+                className="block w-full sm:hidden"
+              />
+              <img
+                src="/shots/gis.jpg"
+                width={1440}
+                height={900}
+                loading="lazy"
+                alt="The parcel map of Austin: every lot coloured by land use, a panel of layers on the left with zoning, permits, opportunity zones and schools, and the legend on the right."
+                className="hidden w-full sm:block"
+              />
+            </figure>
 
-                  {/* The wide, thin crop runs the full width; it has nowhere to go
-                      in a column and everything to gain from the room. */}
-                  <div className="mt-8 rounded-xl border border-line bg-paper p-6 sm:p-8">
-                    <div className="max-w-2xl">
-                      <p className="text-[15px] font-semibold text-ink">{chapter.band.title}</p>
-                      <p className="mt-2 text-[13px] leading-relaxed text-muted">{chapter.band.body}</p>
-                    </div>
-                    <figure className="mt-6 max-w-3xl overflow-hidden rounded-lg border border-line bg-surface shadow-md shadow-slate-900/[0.06]">
-                      <img
-                        src={chapter.band.src}
-                        alt={chapter.band.alt}
-                        width={chapter.band.w}
-                        height={chapter.band.h}
-                        loading="lazy"
-                        className="block w-full"
-                      />
-                    </figure>
-                  </div>
-
-                  {/* Text above the image so two cards of different crop heights
-                      still start their sentences on the same line. */}
-                  <div className="mt-4 grid items-start gap-4 md:grid-cols-2">
-                    {chapter.cards.map((card) => (
-                      <div key={card.title} className="rounded-xl border border-line bg-paper p-6 sm:p-8">
-                        <p className="text-[15px] font-semibold text-ink">{card.title}</p>
-                        <p className="mt-2 text-[13px] leading-relaxed text-muted">{card.body}</p>
-                        <figure className="mt-6 overflow-hidden rounded-lg border border-line bg-surface shadow-md shadow-slate-900/[0.06]">
-                          <img
-                            src={card.src}
-                            alt={card.alt}
-                            width={card.w}
-                            height={card.h}
-                            loading="lazy"
-                            className="block w-full"
-                          />
-                        </figure>
-                      </div>
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="border-b border-line bg-paper">
-          <div className="mx-auto max-w-5xl px-5 py-20">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">Also included</p>
-            <h2 className="mt-3 max-w-xl text-3xl font-bold tracking-tight text-ink">
-              The parts that answer the client
-            </h2>
-            <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {FEATURES.map((feature) => (
-                <div
-                  key={feature.title}
-                  className="rounded-xl border border-line bg-surface p-6 transition hover:border-brand/40 hover:shadow-lg hover:shadow-slate-900/[0.06]"
-                >
-                  <span
-                    className="mb-4 grid h-10 w-10 place-items-center rounded-lg bg-brand-tint text-brand-deep ring-1 ring-brand/15"
-                    aria-hidden
-                  >
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
-                      <path d={feature.icon} />
-                    </svg>
-                  </span>
-                  <p className="text-[15px] font-semibold text-ink">{feature.title}</p>
-                  <p className="mt-2 text-[13px] leading-relaxed text-muted">{feature.body}</p>
+            <dl className="mt-12 grid gap-x-10 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+              {ON_A_LOT.map((item) => (
+                <div key={item.title} className="border-t-2 border-ink pt-4">
+                  <dt className="text-[16px] font-semibold text-ink">{item.title}</dt>
+                  <dd className="mt-2 text-[14px] leading-relaxed text-muted">{item.body}</dd>
                 </div>
               ))}
+            </dl>
+          </div>
+        </section>
+
+        <section id="feasibility" className="scroll-mt-20 border-b border-line bg-paper">
+          <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-20 lg:grid-cols-2">
+            <div>
+              <h2 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Screen a site before you drive it</h2>
+              <p className="mt-4 text-[16px] leading-relaxed text-muted">
+                Pick a lot, or five, and the screen takes out what cannot be built on: steep ground, FEMA flood hazard,
+                wetlands and protected land. What is left is the acres that pass.
+              </p>
+              <ul className="mt-6 space-y-3 text-[15px] text-body">
+                <li className="flex items-start gap-2.5">
+                  {check}
+                  Runs in every market, from federal elevation, flood and wetland data.
+                </li>
+                <li className="flex items-start gap-2.5">
+                  {check}
+                  Search and screen in one step: "ten acres or more, industrial, outside the floodplain", ranked by the
+                  acres that pass.
+                </li>
+                <li className="flex items-start gap-2.5">
+                  {check}
+                  A first look, not an engineering study, and it says so on every result.
+                </li>
+              </ul>
+            </div>
+
+            {/* An example drawn as the product draws it. The figures are made up and labelled as such. */}
+            <div className="rounded-xl border border-line bg-surface p-6 shadow-xl shadow-slate-900/[0.07] sm:p-8">
+              <div className="flex items-baseline justify-between gap-4">
+                <p className="text-[15px] font-semibold text-ink">Feasibility screen</p>
+                <p className="text-[12px] text-faint">Example, with illustrative figures</p>
+              </div>
+              <div className="mt-5 flex items-end justify-between gap-4 border-b border-line pb-5">
+                <div>
+                  <p className="text-[13px] text-muted">Passes the screen</p>
+                  <p className="mt-1 text-4xl font-bold tracking-tight text-ink">
+                    7.7 <span className="text-lg font-semibold text-muted">of 12.6 acres</span>
+                  </p>
+                </div>
+                <span className="rounded-full bg-brand-tint px-3 py-1 text-[13px] font-semibold text-brand-deep">61% buildable</span>
+              </div>
+              <div className="mt-5 flex h-3 overflow-hidden rounded-full bg-sunken" aria-hidden>
+                <span style={{ width: '61%' }} className="bg-brand" />
+                {SCREEN.filter((row) => row.share > 0).map((row) => (
+                  <span key={row.label} style={{ width: `${row.share}%`, background: row.color }} />
+                ))}
+              </div>
+              <table className="mt-5 w-full text-[14px]">
+                <tbody>
+                  {SCREEN.map((row) => (
+                    <tr key={row.label} className="border-b border-line last:border-0">
+                      <th scope="row" className="py-2.5 text-left font-normal text-body">
+                        <span className="mr-2.5 inline-block h-2.5 w-2.5 rounded-sm align-middle" style={{ background: row.color }} aria-hidden />
+                        {row.label}
+                      </th>
+                      <td className="py-2.5 text-right tabular-nums text-ink">{row.acres} ac</td>
+                      <td className="w-14 py-2.5 text-right tabular-nums text-muted">{row.share}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         </section>
 
-        <section id="pricing" className="scroll-mt-20 bg-surface">
-          <div className="mx-auto max-w-5xl px-5 py-20">
+        <section id="layers" className="scroll-mt-20 border-b border-line bg-surface">
+          <div className="mx-auto grid max-w-6xl gap-12 px-5 py-20 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+            <div>
+              <h2 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Layers you switch on, not files you find</h2>
+              <p className="mt-4 text-[16px] leading-relaxed text-muted">
+                Each market carries what its city, county and state publish, already clipped and drawn. A layer can
+                also be a search condition: within a mile of a transmission line, inside an opportunity zone, outside
+                the floodplain.
+              </p>
+              <p className="mt-4 text-[14px] leading-relaxed text-muted">
+                What is published differs by market, and the <a className="font-semibold text-brand-deep underline" href="/markets">Markets page</a>{' '}
+                lists it for each one.
+              </p>
+            </div>
+            {/* A legend, because that is what this list is. */}
+            <ul className="grid content-start gap-x-8 gap-y-3 text-[15px] text-ink sm:grid-cols-2">
+              {LAYERS.map((layer) => (
+                <li key={layer.name} className="flex items-center gap-3 border-b border-line pb-3">
+                  <span className="h-3.5 w-3.5 shrink-0 rounded-[3px]" style={{ background: layer.color }} aria-hidden />
+                  {layer.name}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        <section id="assistant" className="scroll-mt-20 bg-brand-night">
+          <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 py-20 lg:grid-cols-2">
+            <div>
+              <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Ask your assistant instead</h2>
+              <p className="mt-4 text-[16px] leading-relaxed text-slate-300">
+                Connect Land Quotient to Claude and the same records answer in a conversation. It searches parcels,
+                screens sites, lists the chains nearby, saves a map you can open, and files what you keep on a client
+                list. You sign in with your Land Quotient account. There is no key to copy.
+              </p>
+              <a
+                className="btn mt-7 inline-block rounded-lg border border-brand-edge px-5 py-3 text-[15px] text-slate-200 hover:border-brand-soft hover:text-brand-soft"
+                href="/connect"
+              >
+                How to connect it
+              </a>
+            </div>
+            <div className="rounded-xl border border-brand-edge bg-[#0a1a38] p-6 sm:p-8">
+              <p className="text-[13px] text-slate-400">You ask</p>
+              <p className="mt-2 text-[17px] leading-relaxed text-white">
+                Find industrial sites over ten acres in Travis County that stay out of the floodplain, and map the top
+                five.
+              </p>
+              <p className="mt-6 text-[13px] text-slate-400">It answers with</p>
+              <ul className="mt-2 space-y-2 text-[15px] text-slate-200">
+                <li>The matches, ranked by the acres that pass the screen</li>
+                <li>Each lot's owner, value and zoning from the county</li>
+                <li>A link that opens the map in Land Quotient</li>
+              </ul>
+              <p className="mt-6 break-all border-t border-brand-edge pt-4 font-mono text-[13px] text-brand-soft">
+                https://landquotient.com/mcp
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="pieces" className="scroll-mt-20 border-b border-line bg-surface">
+          <div className="mx-auto max-w-6xl px-5 py-20">
+            <div className="grid gap-12 lg:grid-cols-2">
+              <div>
+                <h2 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Pieces for your brief, under your brand</h2>
+                <p className="mt-4 text-[16px] leading-relaxed text-muted">
+                  We do not write the brief. Land Quotient hands you the parts of one: the feasibility map and table,
+                  the property record, demographics, the retail around a site. Copy a table or download a map and
+                  paste it into the deck that already carries your logo.
+                </p>
+                <ul className="mt-6 space-y-3 text-[15px] text-body">
+                  <li className="flex items-start gap-2.5">
+                    {check}
+                    Maps download as images, ready for a slide or a page.
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    {check}
+                    Tables copy into Word, PowerPoint, Excel and Google Docs with their columns intact.
+                  </li>
+                  <li className="flex items-start gap-2.5">
+                    {check}
+                    Parcels export with their real outlines for your own GIS.
+                  </li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="text-xl font-bold tracking-tight text-ink">And the deal work around the map</h3>
+                <dl className="mt-5 grid gap-x-8 gap-y-6 sm:grid-cols-2">
+                  {DEAL_WORK.map((item) => (
+                    <div key={item.title}>
+                      <dt className="text-[15px] font-semibold text-ink">{item.title}</dt>
+                      <dd className="mt-1.5 text-[14px] leading-relaxed text-muted">{item.body}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            </div>
+
+            <figure className="mt-12 overflow-hidden rounded-xl border border-line shadow-xl shadow-slate-900/[0.07]">
+              <img
+                src="/shots/map.jpg"
+                width={1440}
+                height={660}
+                loading="lazy"
+                alt="A survey map with a stage rail on the left listing sites under Unqualified, Qualified/Touring, LOI, Under Contract and Passed, and two pins inside a dashed half mile radius ring."
+                className="block w-full"
+              />
+            </figure>
+          </div>
+        </section>
+
+        <section id="pricing" className="scroll-mt-20 bg-paper">
+          <div className="mx-auto max-w-6xl px-5 py-20">
             <div className="text-center">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">Pricing</p>
-              <h2 className="mt-3 text-3xl font-bold tracking-tight text-ink">Free, everything included</h2>
-              <p className="mx-auto mt-3 max-w-md text-[15px] text-muted">
+              <h2 className="text-3xl font-bold tracking-tight text-ink sm:text-4xl">Free, everything included</h2>
+              <p className="mx-auto mt-3 max-w-md text-[16px] text-muted">
                 Make an account and confirm your email. No card, no trial clock.
               </p>
             </div>
@@ -329,10 +444,10 @@ export default function Landing({
           </div>
         </section>
 
-        <AlsoOn except="/" />
+        <AlsoOn except="/" wide />
       </main>
 
-      <MarketingFooter onSignIn={onSignIn} />
+      <MarketingFooter onSignIn={onSignIn} wide />
     </div>
   )
 }

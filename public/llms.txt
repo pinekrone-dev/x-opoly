@@ -10,12 +10,15 @@ Land Quotient is built for commercial brokers, developers, investment-sales team
 - Zoning districts and FEMA flood hazard areas on each parcel, usable as county-wide filters ("outside the flood zone, zoned anything but residential").
 - Building footprints on each lot: how many buildings, footprint and share of the lot covered, so vacant and under-built sites can be found.
 - Owner portfolios: one holder across its many entity names and mailing addresses.
+- Site feasibility: a screen of any lot for slope, FEMA flood hazard, wetlands and protected land, with the acres that pass; a site search can be screened and ranked in one step.
+- Building permits, submitted and approved plans and code cases on the map and on each lot, where the city publishes them.
+- Pieces for a brief: maps and tables (feasibility, property record, demographics, nearby retail) to copy into the user's own branded document.
 - Ask: type a question in plain English, see the matching parcels highlighted, open them as a table and export a list.
 - Live ship positions for coastal markets, permits, traffic counts and census overlays where published.
 
 ## Markets
 
-Austin (Travis County, TX); Washington, DC; Nashville (Davidson County, TN); Orange County, CA; Broward County, FL; Houston (Harris County, TX); Las Vegas (Clark County, NV); Phoenix (Maricopa County, AZ); New York City; North Jersey (Hudson, Bergen, Essex, Union, Passaic and Middlesex counties); Denver, CO; Tampa (Hillsborough County, FL); Minneapolis (Hennepin County, MN); Detroit, MI; Miami-Dade County, FL; Dallas County, TX; Philadelphia, PA; Los Angeles County, CA; San Diego County, CA; Boston (Suffolk County, MA); Chicago (Cook County, IL); DuPage County, IL; Lake County, IL; Will County, IL.
+More than 100 markets in 29 states are live as of November 2026, among them Austin, Houston, Dallas, Phoenix, Las Vegas, Los Angeles, San Diego, Orange County, New York City, North Jersey, Chicago, Philadelphia, Boston, Washington DC, Miami-Dade, Broward, Tampa, Nashville, Denver, Detroit and Minneapolis. A market is usually one county. The current list, with parcel counts and what each market publishes, is at https://landquotient.com/markets and is the source to quote: new markets are added most months.
 
 ## Pages
 

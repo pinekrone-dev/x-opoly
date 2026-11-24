@@ -24,16 +24,19 @@ export function MarketingHeader({
   /** '' on the landing itself, '/' from any other page. */
   homeHref = '',
   current = '/',
+  wide = false,
 }: {
   selfServe: boolean
   onSignIn: () => void
   onGetStarted: () => void
   homeHref?: string
   current?: string
+  /** The home page runs a wider measure than the others, and its chrome lines up with it. */
+  wide?: boolean
 }) {
   return (
     <header className="sticky top-0 z-30 border-b border-line bg-paper/90 backdrop-blur">
-      <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-3">
+      <div className={`mx-auto flex ${wide ? 'max-w-6xl' : 'max-w-5xl'} items-center gap-3 px-5 py-3`}>
         <a href={homeHref || '#top'} className="flex items-center gap-3">
           <BrandPin size={36} />
           {/* The mark spells the name itself, so the wordmark stands down on
@@ -107,11 +110,11 @@ export function MarketingHeader({
 }
 
 /** The cross-links at the foot of a public page, every page but the one shown. */
-export function AlsoOn({ except }: { except: string }) {
+export function AlsoOn({ except, wide = false }: { except: string; wide?: boolean }) {
   const links = ALSO_ON.filter((l) => l.href !== except)
   return (
     <section className="border-t border-line bg-paper">
-      <div className="mx-auto max-w-5xl px-5 py-16">
+      <div className={`mx-auto ${wide ? 'max-w-6xl' : 'max-w-5xl'} px-5 py-16`}>
         <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-brand">Built for the whole deal</p>
         <h2 className="mt-3 text-2xl font-bold tracking-tight text-ink">Also on Land Quotient</h2>
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -131,10 +134,10 @@ export function AlsoOn({ except }: { except: string }) {
   )
 }
 
-export function MarketingFooter({ onSignIn, homeHref = '' }: { onSignIn: () => void; homeHref?: string }) {
+export function MarketingFooter({ onSignIn, homeHref = '', wide = false }: { onSignIn: () => void; homeHref?: string; wide?: boolean }) {
   return (
     <footer className="bg-brand-night">
-      <div className="mx-auto max-w-5xl px-5 py-10 text-xs text-slate-400">
+      <div className={`mx-auto ${wide ? 'max-w-6xl' : 'max-w-5xl'} px-5 py-10 text-xs text-slate-400`}>
         <div className="flex flex-wrap items-center gap-4">
           <BrandMark size={32} tone="inverse" />
           <span>Real estate intelligence for commercial brokers, developers and investors.</span>

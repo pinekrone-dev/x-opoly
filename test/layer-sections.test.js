@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { SECTIONS, STARTING_POINTS, bySection, cardKey, cardsToSwitch, layerName, sectionOf, startingPoints } from '../src/lib/layerSections.ts'
+import { SECTIONS, STARTING_POINTS, bySection, cardKey, cardsToSwitch, layerColor, layerName, sectionOf, startingPoints } from '../src/lib/layerSections.ts'
 
 test('every layer a market publishes today has a section that is not More', () => {
   const published = ['opportunity-zones', 'transmission', 'substations', 'power-plants', 'schools', 'private-schools', 'flood-zones',
@@ -80,3 +80,12 @@ test('a development layer is named for what it is, never for the city that publi
   assert.deepEqual(SECTIONS.slice(0, 2).map((s) => s.label), ['My map', 'Property & ownership'])
 })
 
+
+test('opportunity zones do not draw in the violet the shading uses', () => {
+  // The catalogue published both zone layers in violet, the default ramp's hue.
+  assert.equal(layerColor('opportunity-zones', '#7048e8'), '#E64980')
+  assert.equal(layerColor('opportunity-zones-2027', '#ae3ec9'), '#A61E4D')
+  assert.notEqual(layerColor('opportunity-zones', '#7048e8'), layerColor('opportunity-zones-2027', '#ae3ec9'))
+  // Every other layer keeps the colour it was published in.
+  assert.equal(layerColor('flood-zones', '#1098ad'), '#1098ad')
+})
